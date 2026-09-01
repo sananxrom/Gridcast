@@ -1,0 +1,187 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gridcast Player</title><link rel="stylesheet" href="/assets/app.css">
+<style>
+body{background:#000;color:#fff;overflow:hidden}
+.pair{display:grid;place-items:center;min-height:100vh;background:var(--nav)}
+.pairbox{width:min(400px,92vw);background:var(--surface);color:var(--ink);border-radius:10px;padding:30px;box-shadow:0 20px 50px rgba(0,0,0,.4)}
+.pairbox h1{font-size:19px;margin:0 0 4px}
+#codein{font-family:'IBM Plex Mono',monospace;font-size:26px;letter-spacing:.3em;text-align:center;text-transform:uppercase;padding:14px}
+.err{color:var(--danger);font-size:12.5px;margin-top:9px;min-height:16px}
+
+.stage{position:fixed;inset:0;background:#000}
+#yt{position:absolute;inset:0;width:100%;height:100%;border:0;pointer-events:none}
+.veil{position:absolute;inset:0;z-index:2}
+.hud{position:fixed;left:14px;bottom:14px;z-index:5;display:flex;gap:8px;align-items:stretch;
+  font-family:'IBM Plex Mono',monospace;transition:opacity .4s}
+.hud.dim{opacity:0}
+.chip{background:rgba(14,13,17,.82);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.13);
+  border-radius:7px;padding:8px 12px;color:#EDEAF0}
+.chip .k{font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:#8E8899;font-weight:600}
+.chip .v{font-size:17px;font-weight:600;margin-top:1px;letter-spacing:-.01em}
+.chip.count .v{color:var(--live);font-size:24px}
+.chip.live{border-color:rgba(217,119,6,.5)}
+#cam{position:fixed;right:14px;bottom:14px;width:170px;border-radius:7px;z-index:5;
+  border:1px solid rgba(255,255,255,.16);transform:scaleX(-1);background:#111;transition:opacity .4s}
+#cam.dim{opacity:0}
+.ovl{position:fixed;right:14px;bottom:14px;width:170px;z-index:6;pointer-events:none;transition:opacity .4s}
+.ovl.dim{opacity:0}
+.nowplay{position:fixed;left:14px;top:14px;z-index:5;font-family:'IBM Plex Mono',monospace;font-size:11.5px;
+  color:#B9B3C2;background:rgba(14,13,17,.82);backdrop-filter:blur(8px);padding:7px 11px;border-radius:7px;
+  border:1px solid rgba(255,255,255,.12);transition:opacity .4s}
+.nowplay.dim{opacity:0}
+.nowplay b{color:#fff;font-weight:600}
+</style></head><body>
+
+<div class="pair" id="pairview">
+  <div class="pairbox">
+    <div style="display:flex;align-items:center;gap:9px;font-weight:700;margin-bottom:18px"><span class="dot"></span> Gridcast Player</div>
+    <h1>Enter screen code</h1>
+    <p class="sub" style="margin:0 0 16px">Find it on the screen's page in your dashboard.</p>
+    <input id="codein" maxlength="6" placeholder="A1B2C3" autocomplete="off" autocapitalize="characters">
+    <div class="err" id="err"></div>
+    <button class="btn" id="go" style="width:100%;justify-content:center;margin-top:12px">Pair &amp; start playing</button>
+    <p class="sub" style="margin-top:14px;font-size:12px">Camera is used only to count how many people are present. No video is stored or transmitted.</p>
+  </div>
+</div>
+
+<div class="stage" id="stage" hidden>
+  <div id="yt"></div><div class="veil"></div>
+  <div class="nowplay" id="nowplay"></div>
+  <video id="cam" autoplay muted playsinline></video>
+  <canvas class="ovl" id="ovl"></canvas>
+  <div class="hud" id="hud">
+    <div class="chip count"><div class="k">People now</div><div class="v" id="cnow">—</div></div>
+    <div class="chip"><div class="k">Avg this play</div><div class="v" id="cavg">—</div></div>
+    <div class="chip"><div class="k">Plays today</div><div class="v" id="cplays">0</div></div>
+    <div class="chip live" id="cstate"><div class="k">Status</div><div class="v" id="cstateval">starting</div></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+let screenObj = null, playlist = [], idx = 0, ytPlayer = null, ytReady = false;
+let model = null, camOK = false, samples = [], playsToday = 0, advanceTimer = null;
+
+// ---------- pairing
+$('#codein').addEventListener('keydown', e => { if (e.key === 'Enter') pair(); });
+$('#go').onclick = pair;
+async function pair() {
+  const code = $('#codein').value.trim().toUpperCase();
+  $('#err').textContent = '';
+  if (code.length < 4) { $('#err').textContent = 'Enter the 6-character code.'; return; }
+  try {
+    const r = await fetch('/api/pair', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ code }) });
+    if (!r.ok) throw new Error((await r.json()).error || 'Pairing failed');
+    const data = await r.json();
+    screenObj = data.screen;
+    localStorage.setItem('gc_screen', screenObj.id);
+    start();
+  } catch (e) { $('#err').textContent = e.message; }
+}
+const saved = localStorage.getItem('gc_screen');
+if (saved) { fetch('/api/playlist/' + saved).then(r => r.ok ? r.json() : null).then(d => {
+  if (d) { screenObj = d.screen; start(); } }); }
+
+// ---------- start
+async function start() {
+  $('#pairview').hidden = true; $('#stage').hidden = false;
+  await loadPlaylist();
+  initYT();
+  initCam();
+  setInterval(loadPlaylist, 60000);
+  let idle; const wake = () => { document.querySelectorAll('.hud,#cam,.ovl,.nowplay').forEach(x=>x.classList.remove('dim'));
+    clearTimeout(idle); idle = setTimeout(()=>document.querySelectorAll('.hud,#cam,.ovl,.nowplay').forEach(x=>x.classList.add('dim')), 6000); };
+  ['mousemove','touchstart','keydown'].forEach(e => addEventListener(e, wake)); wake();
+}
+async function loadPlaylist() {
+  const d = await (await fetch('/api/playlist/' + screenObj.id)).json();
+  playlist = d.items; screenObj = d.screen;
+  if (!playlist.length) $('#nowplay').innerHTML = `<b>${screenObj.name}</b> — no approved campaigns scheduled`;
+}
+
+// ---------- YouTube
+function initYT() {
+  const t = document.createElement('script'); t.src = 'https://www.youtube.com/iframe_api';
+  document.head.appendChild(t);
+}
+window.onYouTubeIframeAPIReady = () => {
+  ytPlayer = new YT.Player('yt', {
+    height:'100%', width:'100%', videoId: playlist[0]?.youtube_id || 'M7lc1UVf-VE',
+    playerVars:{ autoplay:1, controls:0, modestbranding:1, rel:0, disablekb:1, fs:0,
+      iv_load_policy:3, playsinline:1, mute:1, loop:0 },
+    events:{ onReady:(e)=>{ ytReady = true; e.target.mute(); playCurrent(); },
+             onStateChange:(e)=>{ if (e.data === YT.PlayerState.ENDED) next(); } }
+  });
+};
+function playCurrent() {
+  if (!ytReady || !playlist.length) { setTimeout(playCurrent, 1500); return; }
+  const item = playlist[idx % playlist.length];
+  samples = [];
+  ytPlayer.loadVideoById({ videoId: item.youtube_id, startSeconds: 0 });
+  ytPlayer.playVideo();
+  $('#nowplay').innerHTML = `<b>${screenObj.name}</b> &nbsp;·&nbsp; ${item.advertiser} — ${item.creative_name}
+    &nbsp;·&nbsp; slot ${(idx % playlist.length)+1}/${playlist.length}`;
+  $('#cstateval').textContent = 'on air';
+  clearTimeout(advanceTimer);
+  advanceTimer = setTimeout(next, (item.duration_s || 10) * 1000);
+}
+async function next() {
+  clearTimeout(advanceTimer);
+  const item = playlist[idx % playlist.length];
+  if (item) await reportPlay(item);
+  idx++; playCurrent();
+}
+async function reportPlay(item) {
+  const valid = samples.filter(s => s !== null);
+  const avg = valid.length ? valid.reduce((a,b)=>a+b,0)/valid.length : null;
+  playsToday++; $('#cplays').textContent = playsToday;
+  $('#cavg').textContent = avg === null ? '—' : avg.toFixed(1);
+  try {
+    await fetch('/api/play', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ screen_id: screenObj.id, campaign_id: item.campaign_id,
+        creative_id: item.creative_id, duration_ms: (item.duration_s||10)*1000,
+        avg_persons: avg, sample_count: valid.length, measured: camOK && valid.length > 0 }) });
+  } catch (e) {}
+}
+
+// ---------- camera + CV
+async function initCam() {
+  const v = $('#cam'), c = $('#ovl');
+  if (!screenObj.has_camera) { $('#cstateval').textContent = 'no camera'; v.style.display='none'; c.style.display='none'; return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width:640, height:480 }, audio:false });
+    v.srcObject = stream; camOK = true;
+    await new Promise(r => v.onloadedmetadata = r);
+    c.width = v.clientWidth; c.height = v.clientWidth * (v.videoHeight / v.videoWidth);
+    v.style.height = c.height + 'px';
+    $('#cstateval').textContent = 'loading model';
+    model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+    $('#cstateval').textContent = 'on air';
+    loop();
+  } catch (e) {
+    camOK = false;
+    $('#cstateval').textContent = 'camera off';
+    $('#cnow').textContent = '—';
+    v.style.display = 'none'; c.style.display = 'none';
+  }
+}
+async function loop() {
+  const v = $('#cam'), c = $('#ovl'), ctx = c.getContext('2d');
+  try {
+    const preds = (await model.detect(v)).filter(p => p.class === 'person' && p.score > 0.5);
+    const n = preds.length;
+    $('#cnow').textContent = n;
+    samples.push(n);
+    const sx = c.width / v.videoWidth, sy = c.height / v.videoHeight;
+    ctx.clearRect(0,0,c.width,c.height);
+    ctx.strokeStyle = '#D97706'; ctx.lineWidth = 2;
+    preds.forEach(p => { const [x,y,w,h] = p.bbox;
+      ctx.strokeRect(c.width - (x+w)*sx, y*sy, w*sx, h*sy); });
+  } catch (e) {}
+  setTimeout(loop, 2000);
+}
+</script></body></html>

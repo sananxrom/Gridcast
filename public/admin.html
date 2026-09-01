@@ -1,0 +1,133 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gridcast — Admin</title><link rel="stylesheet" href="/assets/app.css"></head>
+<body><main id="app"></main>
+<script type="module">
+import { api, requireUser, rail, mountRail, table, stat, pill, bar, inr, esc, $ } from '/assets/app.js';
+const u = requireUser(['platform_admin']);
+const d = await api('/bootstrap?user=' + u.id);
+mountRail(rail(location.hash || '#overview', [
+  { cat:'Platform' },
+  { id:'#overview', href:'#overview', label:'Overview' },
+  { id:'#orgs', href:'#orgs', label:'Organisations' },
+  { id:'#screens', href:'#screens', label:'All screens' },
+  { cat:'Demand' },
+  { id:'#campaigns', href:'#campaigns', label:'Campaigns' },
+  { id:'#approvals', href:'#approvals', label:'Approvals' },
+  { cat:'Fleet' },
+  { id:'#devices', href:'#devices', label:'Device health' }
+], u));
+
+const orgName = id => (d.orgs.find(o=>o.id===id)||{}).name || '—';
+const advName = id => (d.advertisers.find(a=>a.id===id)||{}).name || '—';
+const playsFor = id => d.plays.filter(p=>p.screen_id===id).length;
+const presFor = id => { const r = d.presence.filter(p=>p.screen_id===id && p.measured);
+  return r.length ? (r.reduce((s,x)=>s+x.avg_persons,0)/r.length) : null; };
+const liveScreens = d.devices.filter(x=>x.status==='online').map(x=>x.screen_id);
+
+const views = {
+  overview(){
+    const spend = d.campaigns.reduce((s,c)=>s+c.accrued_spend,0);
+    const committed = d.campaigns.reduce((s,c)=>s+c.committed_budget,0);
+    const measured = d.presence.filter(p=>p.measured);
+    const avg = measured.length ? (measured.reduce((s,x)=>s+x.avg_persons,0)/measured.length).toFixed(1) : '—';
+    return `<div class="phead"><div><h1>Platform overview</h1>
+      <p class="sub">All organisations · ${d.screens.length} screens · ${d.orgs.length-1} operators</p></div></div>
+    <div class="grid g4">
+      ${stat('Screens', d.screens.length, `${liveScreens.length} on air`)}
+      ${stat('Plays logged', d.plays.length.toLocaleString('en-IN'), 'across network')}
+      ${stat('Avg people / play', avg, measured.length ? `${measured.length} measured` : 'none measured yet')}
+      ${stat('Spend accrued', inr(spend), `of ${inr(committed)} committed`)}
+    </div>
+    <h2>Recent plays</h2>
+    ${table([
+      {label:'When', render:r=>`<span class="mono t-sub">${new Date(r.ended_at).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>`},
+      {label:'Screen', render:r=>`<span class="t-main">${esc((d.screens.find(s=>s.id===r.screen_id)||{}).name||'—')}</span>`},
+      {label:'Creative', render:r=>esc((d.creatives.find(c=>c.id===r.creative_id)||{}).name||'—')},
+      {label:'People', num:true, render:r=>{ const p=d.presence.find(x=>x.play_id===r.id);
+        return p&&p.measured ? `<strong>${p.avg_persons.toFixed(1)}</strong>` : '<span class="t-sub">not measured</span>'; }},
+      {label:'Org', render:r=>`<span class="t-sub">${esc(orgName(r.org_id))}</span>`}
+    ], d.plays.slice(-12).reverse(), 'No plays yet — open a player and pair a screen.')}`;
+  },
+  orgs(){
+    return `<div class="phead"><div><h1>Organisations</h1><p class="sub">Gridcast plus ${d.orgs.length-1} operators</p></div></div>
+    ${table([
+      {label:'Organisation', render:o=>`<span class="t-main">${esc(o.name)}</span><br><span class="t-sub mono">${o.id}</span>`},
+      {label:'Type', render:o=>pill(o.type==='gridcast'?'p-brand':'p-off', o.type)},
+      {label:'Screens', num:true, render:o=>d.screens.filter(s=>s.org_id===o.id).length},
+      {label:'Advertisers', num:true, render:o=>d.advertisers.filter(a=>a.org_id===o.id).length},
+      {label:'Platform fee', num:true, render:o=>o.type==='gridcast'?'<span class="t-sub">—</span>':`${o.platform_fee_pct}%`},
+      {label:'Own-inventory cut', render:o=>o.type==='gridcast'?'<span class="t-sub">—</span>':pill('p-ok','0% — free tier')}
+    ], d.orgs)}
+    <div class="note" style="margin-top:16px"><strong>Zero cut on operator-sold campaigns.</strong>
+    The platform fee above applies only to network campaigns — where Gridcast brings the advertiser onto an operator's released slots.</div>`;
+  },
+  screens(){
+    return `<div class="phead"><div><h1>All screens</h1><p class="sub">Every screen across every organisation</p></div></div>
+    ${table([
+      {label:'Screen', render:s=>`<span class="t-main">${esc(s.name)}</span><br><span class="t-sub">${esc(s.address)}</span>`},
+      {label:'Org', render:s=>`<span class="t-sub">${esc(orgName(s.org_id))}</span>`},
+      {label:'Type', render:s=>`${pill('p-off', s.venue_type)} <span class="t-sub">${s.size_in}"</span>`},
+      {label:'State', render:s=>liveScreens.includes(s.id)?pill('p-live','on air',true):pill('p-off','idle')},
+      {label:'Camera', render:s=>s.has_camera?pill('p-ok','yes'):pill('p-warn','none')},
+      {label:'Monthly', num:true, render:s=>inr(s.monthly_value)},
+      {label:'Per slot', num:true, render:s=>inr(s.slot_price_month)},
+      {label:'Avg people', num:true, render:s=>{const p=presFor(s.id); return p?p.toFixed(1):'<span class="t-sub">—</span>';}}
+    ], d.screens)}`;
+  },
+  campaigns(){
+    return `<div class="phead"><div><h1>Campaigns</h1><p class="sub">All organisations</p></div></div>
+    ${table([
+      {label:'Campaign', render:c=>`<span class="t-main">${esc(c.name)}</span><br><span class="t-sub">${esc(advName(c.advertiser_id))}</span>`},
+      {label:'Org', render:c=>`<span class="t-sub">${esc(orgName(c.org_id))}</span>`},
+      {label:'Type', render:c=>pill(c.campaign_type==='network'?'p-brand':'p-off', c.campaign_type)},
+      {label:'Dates', render:c=>`<span class="mono t-sub">${c.starts_at} → ${c.ends_at}</span>`},
+      {label:'Screens', num:true, render:c=>c.screen_ids.length},
+      {label:'Budget', num:true, render:c=>{const p=Math.round(c.accrued_spend/c.committed_budget*100);
+        return `${inr(c.accrued_spend)} / ${inr(c.committed_budget)}${bar(p, p>=80)}`;}},
+      {label:'Fee', num:true, render:c=>c.platform_fee_pct?`${c.platform_fee_pct}%`:'<span class="t-sub">0%</span>'},
+      {label:'Status', render:c=>pill(c.status==='active'?'p-ok':'p-off', c.status)}
+    ], d.campaigns)}`;
+  },
+  approvals(){
+    const pend = d.creatives.filter(c=>c.approval_status==='pending');
+    return `<div class="phead"><div><h1>Creative approvals</h1>
+      <p class="sub">${pend.length} awaiting review · platform policy gate</p></div></div>
+    ${table([
+      {label:'Creative', render:c=>`<span class="t-main">${esc(c.name)}</span><br><span class="t-sub">${esc(advName(c.advertiser_id))} · ${esc(orgName(c.org_id))}</span>`},
+      {label:'Category', render:c=>pill('p-off', c.category)},
+      {label:'Source', render:c=>`<span class="t-sub">${c.content_source}</span>`},
+      {label:'Status', render:c=>c.approval_status==='approved'?pill('p-ok','approved')
+        :c.approval_status==='rejected'?pill('p-bad','rejected'):pill('p-warn','pending')},
+      {label:'', render:c=>c.approval_status==='pending'
+        ?`<button class="btn sm" data-ap="${c.id}">Approve</button> <button class="btn sm ghost" data-rj="${c.id}">Reject</button>`
+        :'<span class="t-sub">—</span>'}
+    ], d.creatives)}`;
+  },
+  devices(){
+    return `<div class="phead"><div><h1>Device health</h1><p class="sub">Paired players across the fleet</p></div></div>
+    ${table([
+      {label:'Screen', render:v=>{const s=d.screens.find(x=>x.id===v.screen_id)||{};
+        return `<span class="t-main">${esc(s.name||'—')}</span><br><span class="t-sub mono">${v.id}</span>`;}},
+      {label:'Org', render:v=>`<span class="t-sub">${esc(orgName(v.org_id))}</span>`},
+      {label:'Status', render:v=>v.status==='online'?pill('p-live','on air',true):pill('p-off','offline')},
+      {label:'Last heartbeat', render:v=>`<span class="mono t-sub">${new Date(v.last_heartbeat_at).toLocaleString('en-IN')}</span>`},
+      {label:'Plays', num:true, render:v=>playsFor(v.screen_id)},
+      {label:'App', render:v=>`<span class="mono t-sub">v${v.app_ver}</span>`}
+    ], d.devices, 'No devices paired yet. Open /player.html and enter a screen code.')}`;
+  }
+};
+function render(){
+  const k = (location.hash || '#overview').slice(1);
+  $('#app').innerHTML = (views[k] || views.overview)();
+  document.querySelectorAll('.rail a').forEach(a=>a.classList.toggle('on', a.getAttribute('href')===('#'+k)));
+}
+document.addEventListener('click', async e=>{
+  const ap=e.target.closest('[data-ap]'), rj=e.target.closest('[data-rj]');
+  if(!ap&&!rj) return;
+  const id=(ap||rj).dataset.ap||(ap||rj).dataset.rj;
+  await api('/creative/'+id+'/approve',{status: ap?'approved':'rejected'});
+  const c=d.creatives.find(x=>x.id===id); c.approval_status= ap?'approved':'rejected'; render();
+});
+addEventListener('hashchange', render); render();
+</script></body></html>

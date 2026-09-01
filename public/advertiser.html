@@ -1,0 +1,76 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gridcast — Advertiser</title><link rel="stylesheet" href="/assets/app.css"></head>
+<body><main id="app"></main>
+<script type="module">
+import { api, requireUser, rail, mountRail, table, stat, pill, bar, inr, esc, $ } from '/assets/app.js';
+const u = requireUser(['advertiser_viewer']);
+const d = await api('/bootstrap?user=' + u.id);
+mountRail(rail('#overview', [
+  { cat:'My campaigns' },
+  { id:'#overview', href:'#overview', label:'Delivery' },
+  { id:'#screens', href:'#screens', label:'Where it ran' }
+], u));
+
+const mine = d.campaigns.filter(c => c.advertiser_id === u.advertiser_id);
+const myIds = mine.map(c=>c.id);
+const myPlays = d.plays.filter(p=>myIds.includes(p.campaign_id));
+const pres = myPlays.map(p=>d.presence.find(x=>x.play_id===p.id)).filter(Boolean);
+const measured = pres.filter(p=>p.measured);
+const totalPeople = measured.reduce((s,x)=>s+x.avg_persons,0);
+const screenName = id => (d.screens.find(s=>s.id===id)||{}).name || '—';
+
+const views = {
+  overview(){
+    return `<div class="phead"><div><h1>${esc(u.name)}</h1>
+      <p class="sub">Campaign delivery · read-only</p></div></div>
+    <div class="grid g4">
+      ${stat('Plays delivered', myPlays.length.toLocaleString('en-IN'), `${mine.length} campaign${mine.length===1?'':'s'}`)}
+      ${stat('Avg people / play', measured.length?(totalPeople/measured.length).toFixed(1):'—', 'while your ad was on screen')}
+      ${stat('Measured', `${measured.length}<span style="font-size:15px;color:var(--ink-3)"> / ${myPlays.length}</span>`, 'plays with a working camera')}
+      ${stat('Spend', inr(mine.reduce((s,c)=>s+c.accrued_spend,0)), `of ${inr(mine.reduce((s,c)=>s+c.committed_budget,0))} committed`)}
+    </div>
+    <div class="note" style="margin-top:16px"><strong>How we count.</strong>
+      A camera on each screen samples the scene while your ad plays and averages how many people were in front of it.
+      This is <em>average people present</em> — not impressions, and not unique reach.
+      ${myPlays.length-measured.length>0?`<br><strong>${myPlays.length-measured.length}</strong> play${myPlays.length-measured.length===1?'':'s'} ran on screens without a working camera and are shown as not measured. They are never counted as zero, and never estimated.`:''}</div>
+    <h2>Campaigns</h2>
+    ${table([
+      {label:'Campaign', render:c=>`<span class="t-main">${esc(c.name)}</span>`},
+      {label:'Dates', render:c=>`<span class="mono t-sub">${c.starts_at} → ${c.ends_at}</span>`},
+      {label:'Screens', num:true, render:c=>c.screen_ids.length},
+      {label:'Plays', num:true, render:c=>d.plays.filter(p=>p.campaign_id===c.id).length},
+      {label:'Budget used', num:true, render:c=>{const p=Math.round(c.accrued_spend/c.committed_budget*100);
+        return `${inr(c.accrued_spend)} / ${inr(c.committed_budget)}${bar(p,p>=80)}`;}},
+      {label:'Status', render:c=>pill(c.status==='active'?'p-ok':'p-off',c.status)}
+    ], mine, 'No campaigns yet')}
+    <h2>Recent plays</h2>
+    ${table([
+      {label:'When', render:r=>`<span class="mono t-sub">${new Date(r.ended_at).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</span>`},
+      {label:'Screen', render:r=>esc(screenName(r.screen_id))},
+      {label:'Creative', render:r=>esc((d.creatives.find(c=>c.id===r.creative_id)||{}).name||'—')},
+      {label:'People present', num:true, render:r=>{const p=d.presence.find(x=>x.play_id===r.id);
+        return p&&p.measured?`<strong>${p.avg_persons.toFixed(1)}</strong>`:'<span class="t-sub">not measured</span>';}}
+    ], myPlays.slice(-15).reverse(), 'No delivery recorded yet')}`;
+  },
+  screens(){
+    const ids=[...new Set(mine.flatMap(c=>c.screen_ids))];
+    return `<div class="phead"><div><h1>Where it ran</h1><p class="sub">${ids.length} screens</p></div></div>
+    ${table([
+      {label:'Screen', render:id=>{const s=d.screens.find(x=>x.id===id)||{};
+        return `<span class="t-main">${esc(s.name||'—')}</span><br><span class="t-sub">${esc(s.address||'')}</span>`;}},
+      {label:'Venue', render:id=>{const s=d.screens.find(x=>x.id===id)||{};return pill('p-off',s.venue_type||'—');}},
+      {label:'Plays', num:true, render:id=>myPlays.filter(p=>p.screen_id===id).length},
+      {label:'Avg people', num:true, render:id=>{
+        const r=myPlays.filter(p=>p.screen_id===id).map(p=>d.presence.find(x=>x.play_id===p.id)).filter(x=>x&&x.measured);
+        return r.length?(r.reduce((s,x)=>s+x.avg_persons,0)/r.length).toFixed(1):'<span class="t-sub">—</span>';}}
+    ], ids, 'No screens yet')}`;
+  }
+};
+function render(){
+  const k=(location.hash||'#overview').slice(1);
+  $('#app').innerHTML=(views[k]||views.overview)();
+  document.querySelectorAll('.rail a').forEach(a=>a.classList.toggle('on',a.getAttribute('href')===('#'+k)));
+}
+addEventListener('hashchange', render); render();
+</script></body></html>

@@ -1,0 +1,161 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gridcast — Operator</title><link rel="stylesheet" href="/assets/app.css"></head>
+<body><main id="app"></main>
+<script type="module">
+import { api, requireUser, rail, mountRail, table, stat, pill, bar, inr, esc, $ } from '/assets/app.js';
+const u = requireUser(['org_admin']);
+let d = await api('/bootstrap?user=' + u.id);
+mountRail(rail('#overview', [
+  { cat:'Network' },
+  { id:'#overview', href:'#overview', label:'Overview' },
+  { id:'#screens', href:'#screens', label:'My screens' },
+  { cat:'Sales' },
+  { id:'#advertisers', href:'#advertisers', label:'Advertisers' },
+  { id:'#campaigns', href:'#campaigns', label:'Campaigns' },
+  { id:'#creatives', href:'#creatives', label:'Creatives' },
+  { cat:'Money' },
+  { id:'#settlement', href:'#settlement', label:'Settlement' }
+], u));
+
+const advName = id => (d.advertisers.find(a=>a.id===id)||{}).name || '—';
+const code = sid => (d.pairings.find(p=>p.screen_id===sid)||{}).code || '——';
+const live = () => d.devices.filter(x=>x.status==='online').map(x=>x.screen_id);
+const presFor = id => { const r=d.presence.filter(p=>p.screen_id===id&&p.measured);
+  return r.length ? r.reduce((s,x)=>s+x.avg_persons,0)/r.length : null; };
+
+const views = {
+  overview(){
+    const spend=d.campaigns.reduce((s,c)=>s+c.accrued_spend,0);
+    const inv=d.screens.reduce((s,x)=>s+x.monthly_value,0);
+    const m=d.presence.filter(p=>p.measured);
+    return `<div class="phead"><div><h1>${esc(u.orgName)}</h1>
+      <p class="sub">${d.screens.length} screens · ${d.advertisers.length} advertisers · ${d.campaigns.filter(c=>c.status==='active').length} live campaigns</p></div></div>
+    <div class="grid g4">
+      ${stat('Monthly inventory', inr(inv), 'at full sell-through')}
+      ${stat('Accrued this period', inr(spend), 'across live campaigns')}
+      ${stat('Screens on air', `${live().filter(id=>d.screens.some(s=>s.id===id)).length}/${d.screens.length}`, 'paired and playing')}
+      ${stat('Avg people / play', m.length?(m.reduce((s,x)=>s+x.avg_persons,0)/m.length).toFixed(1):'—', m.length?`${m.length} measured plays`:'no camera data yet')}
+    </div>
+    <div class="note" style="margin-top:16px"><strong>You keep 100% of what you sell.</strong>
+      Gridcast takes no cut on campaigns you bring to your own screens. A fee applies only if you release slots to the network and Gridcast brings you a client.</div>
+    <h2>Your screens</h2>
+    ${table([
+      {label:'Screen', render:s=>`<span class="t-main">${esc(s.name)}</span><br><span class="t-sub">${esc(s.address)}</span>`},
+      {label:'State', render:s=>live().includes(s.id)?pill('p-live','on air',true):pill('p-off','idle')},
+      {label:'Code', render:s=>`<span class="mono">${code(s.id)}</span>`},
+      {label:'Per slot / mo', num:true, render:s=>inr(s.slot_price_month)},
+      {label:'Avg people', num:true, render:s=>{const p=presFor(s.id);return p?p.toFixed(1):'<span class="t-sub">—</span>';}}
+    ], d.screens)}`;
+  },
+  screens(){
+    return `<div class="phead"><div><h1>My screens</h1><p class="sub">Pricing, tags and pairing</p></div></div>
+    <div class="grid g2">${d.screens.map(s=>`
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+          <div><div class="t-main" style="font-size:15px">${esc(s.name)}</div>
+            <div class="t-sub">${esc(s.venue_name)} · ${esc(s.address)}</div></div>
+          ${live().includes(s.id)?pill('p-live','on air',true):pill('p-off','idle')}
+        </div>
+        <div style="margin:12px 0">
+          ${pill('p-off', s.venue_type)} <span class="tag">${s.size_in}"</span>
+          <span class="tag">${s.aspect}</span><span class="tag">${s.location_tier}</span>
+          ${Object.entries(s.tags||{}).map(([k,v])=>`<span class="tag">${esc(k)}:${esc(v)}</span>`).join('')}
+          ${s.has_camera?'':'<span class="tag" style="color:var(--warn)">no camera</span>'}
+        </div>
+        <div class="tw" style="box-shadow:none"><table style="min-width:0"><tbody>
+          <tr><td class="t-sub">venue base × size × location × exposure</td>
+              <td class="num mono">${s.venue_base} × ${s.size_factor} × ${s.location_factor} × ${s.exposure_factor}</td></tr>
+          <tr><td class="t-sub">Monthly screen value</td><td class="num"><strong>${inr(s.monthly_value)}</strong></td></tr>
+          <tr><td class="t-sub">÷ ${s.advertiser_slots} advertiser slots</td><td class="num"><strong>${inr(s.slot_price_month)}</strong> / slot / mo</td></tr>
+          <tr><td class="t-sub">Exposure source</td><td class="num">${s.exposure_source==='measured'?pill('p-ok','measured'):pill('p-warn','estimated')}</td></tr>
+        </tbody></table></div>
+        <div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+          <div><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);font-weight:600">Screen code</div>
+            <div class="code">${code(s.id)}</div></div>
+          <button class="btn ghost sm" data-regen="${s.id}">Regenerate</button>
+        </div>
+      </div>`).join('')}</div>`;
+  },
+  advertisers(){
+    return `<div class="phead"><div><h1>Advertisers</h1><p class="sub">Your clients — Gridcast never contacts them</p></div>
+      <button class="btn" id="newadv">+ Add advertiser</button></div>
+    <div id="advform"></div>
+    ${table([
+      {label:'Advertiser', render:a=>`<span class="t-main">${esc(a.name)}</span><br><span class="t-sub">${esc(a.contact||'')}</span>`},
+      {label:'Category', render:a=>pill('p-off', a.category||'—')},
+      {label:'Contact', render:a=>`<span class="t-sub mono">${esc(a.email||'')}<br>${esc(a.phone||'')}</span>`},
+      {label:'Campaigns', num:true, render:a=>d.campaigns.filter(c=>c.advertiser_id===a.id).length},
+      {label:'Committed', num:true, render:a=>inr(d.campaigns.filter(c=>c.advertiser_id===a.id).reduce((s,c)=>s+c.committed_budget,0))}
+    ], d.advertisers)}`;
+  },
+  campaigns(){
+    return `<div class="phead"><div><h1>Campaigns</h1><p class="sub">Budgets are entered manually — the platform is a ledger, not a processor</p></div></div>
+    ${table([
+      {label:'Campaign', render:c=>`<span class="t-main">${esc(c.name)}</span><br><span class="t-sub">${esc(advName(c.advertiser_id))}</span>`},
+      {label:'Dates', render:c=>`<span class="mono t-sub">${c.starts_at} → ${c.ends_at}</span>`},
+      {label:'Screens', num:true, render:c=>c.screen_ids.length},
+      {label:'Creatives', num:true, render:c=>c.creative_ids.length},
+      {label:'Rate', num:true, render:c=>`${inr(c.rate_value)} <span class="t-sub">/play</span>`},
+      {label:'Budget', num:true, render:c=>{const p=Math.round(c.accrued_spend/c.committed_budget*100);
+        return `${inr(c.accrued_spend)} / ${inr(c.committed_budget)}${bar(p,p>=80)}`;}},
+      {label:'Invoice', render:c=>pill(c.invoice_status==='paid'?'p-ok':c.invoice_status==='invoiced'?'p-warn':'p-off', c.invoice_status.replace(/_/g,' '))},
+      {label:'Status', render:c=>pill(c.status==='active'?'p-ok':'p-off', c.status)}
+    ], d.campaigns)}`;
+  },
+  creatives(){
+    return `<div class="phead"><div><h1>Creatives</h1><p class="sub">Ad variations — YouTube links for the prototype</p></div></div>
+    ${table([
+      {label:'Creative', render:c=>`<span class="t-main">${esc(c.name)}</span><br><span class="t-sub">${esc(advName(c.advertiser_id))}</span>`},
+      {label:'Source', render:c=>`<span class="mono t-sub">yt:${esc(c.youtube_id)}</span>`},
+      {label:'Length', num:true, render:c=>`${c.duration_s}s`},
+      {label:'Aspect', render:c=>`<span class="tag">${c.aspect}</span>`},
+      {label:'Approval', render:c=>c.approval_status==='approved'?pill('p-ok','approved')
+        :c.approval_status==='rejected'?pill('p-bad','rejected'):pill('p-warn','pending')}
+    ], d.creatives)}`;
+  },
+  settlement(){
+    const rows = d.campaigns.map(c=>{
+      const gross=c.accrued_spend, fee=Math.round(gross*(c.platform_fee_pct/100));
+      const opGross=gross-fee; const ownerPct=25; const owner=Math.round(opGross*ownerPct/100);
+      return {c, gross, fee, opGross, owner, net:opGross-owner};
+    });
+    return `<div class="phead"><div><h1>Settlement</h1>
+      <p class="sub">Full decomposition — nothing netted, nothing hidden</p></div></div>
+    ${table([
+      {label:'Campaign', render:r=>`<span class="t-main">${esc(r.c.name)}</span><br><span class="t-sub">${esc(advName(r.c.advertiser_id))}</span>`},
+      {label:'Gross', num:true, render:r=>inr(r.gross)},
+      {label:'Platform fee', num:true, render:r=>r.fee?`−${inr(r.fee)} <span class="t-sub">(${r.c.platform_fee_pct}%)</span>`:'<span class="t-sub">0%</span>'},
+      {label:'Operator share', num:true, render:r=>inr(r.opGross)},
+      {label:'Screen owner 25%', num:true, render:r=>`−${inr(r.owner)}`},
+      {label:'Your net', num:true, render:r=>`<strong>${inr(r.net)}</strong>`}
+    ], rows)}
+    <div class="note" style="margin-top:16px">Every line is shown gross → fee → share → net.
+      You see exactly what the advertiser paid and exactly what was taken.</div>`;
+  }
+};
+function render(){
+  const k=(location.hash||'#overview').slice(1);
+  $('#app').innerHTML=(views[k]||views.overview)();
+  document.querySelectorAll('.rail a').forEach(a=>a.classList.toggle('on',a.getAttribute('href')===('#'+k)));
+  const nb=$('#newadv'); if(nb) nb.onclick=()=>{
+    $('#advform').innerHTML=`<div class="card" style="margin-bottom:14px"><div class="row">
+      <div class="field"><label>Name</label><input id="an" placeholder="Acme Motors"></div>
+      <div class="field"><label>Contact</label><input id="ac" placeholder="Rahul"></div>
+      <div class="field"><label>Category</label><input id="ag" placeholder="automotive"></div>
+      <div class="field"><label>Phone</label><input id="ap" placeholder="+91 …"></div>
+    </div><button class="btn" id="asave">Save advertiser</button></div>`;
+    $('#asave').onclick=async()=>{
+      await api('/advertiser',{org_id:u.org_id,name:$('#an').value||'Untitled',contact:$('#ac').value,
+        category:$('#ag').value||'general',phone:$('#ap').value,email:''});
+      d=await api('/bootstrap?user='+u.id); render();
+    };
+  };
+}
+document.addEventListener('click', async e=>{
+  const b=e.target.closest('[data-regen]'); if(!b) return;
+  await api('/pairing/'+b.dataset.regen+'/regen',{});
+  d=await api('/bootstrap?user='+u.id); render();
+});
+addEventListener('hashchange', render); render();
+</script></body></html>
