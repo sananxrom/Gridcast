@@ -32,7 +32,8 @@ function seed() {
       slot_price_month: Math.round(monthly / 10),
       loop_length_s: 600, slot_duration_s: 10, operating_hours: 12,
       owner_share_pct: 25, has_camera: cam, network_available: false, network_slots: 0,
-      geo_lat: lat, geo_lng: lng, tags, status: 'active', created_at: now() };
+      geo_lat: lat, geo_lng: lng, tags, code: code6(),
+      status: 'active', created_at: now() };
   };
   const screens = [
     mk('org_sec17','Cafe Delzo — Main Wall','Cafe Delzo','cafe','43',1.0,'Sector 17-C, Chandigarh',1.5,1.25,30.7411,76.7822,{floor:'ground',daypart:'evening_heavy'}),
@@ -75,9 +76,15 @@ function seed() {
       rate_type:'per_play', rate_value:0.80, status:'active', invoice_status:'not_invoiced',
       creative_ids:['cr_mob_a'], screen_ids:[s[4].id], created_at:now() }
   ];
-  const pairings = screens.map(sc => ({ id: uid('pr'), org_id: sc.org_id, screen_id: sc.id,
-    code: code6(), status: 'unused', created_at: now(), used_at: null, device_id: null }));
-  return { orgs, users, screens, advertisers, creatives, campaigns, pairings, devices: [], plays: [], presence: [] };
+  const groups = [
+    { id:'grp_s17', org_id:'org_sec17', name:'Sector 17 cluster', group_type:'static',
+      rule_json:null, screen_ids:[s[0].id], created_at:now() },
+    { id:'grp_hi', org_id:'org_sec17', name:'High-footfall (43\" and up)', group_type:'dynamic',
+      rule_json:{ min_size:43 }, screen_ids:[], created_at:now() },
+    { id:'grp_food', org_id:'org_sec17', name:'Food & drink venues', group_type:'dynamic',
+      rule_json:{ venue_types:['cafe'] }, screen_ids:[], created_at:now() }
+  ];
+  return { orgs, users, screens, advertisers, creatives, campaigns, groups, devices: [], plays: [], presence: [] };
 }
 
 let db = null;
@@ -103,7 +110,7 @@ app.get('/api/bootstrap', async (req, res) => {
     advertisers: scope(db.advertisers, u.org_id, isAdmin),
     creatives: scope(db.creatives, u.org_id, isAdmin),
     campaigns: scope(db.campaigns, u.org_id, isAdmin),
-    pairings: scope(db.pairings, u.org_id, isAdmin),
+    groups: scope(db.groups || [], u.org_id, isAdmin),
     devices: scope(db.devices, u.org_id, isAdmin),
     plays: scope(db.plays, u.org_id, isAdmin).slice(-400),
     presence: db.presence.slice(-400)
@@ -115,16 +122,15 @@ app.get('/api/users', async (req, res) => res.json(db.users.map(u => ({ ...u, or
 // ---- player pairing + playlist
 app.post('/api/pair', async (req, res) => {
   const code = String(req.body.code || '').trim().toUpperCase();
-  const p = db.pairings.find(x => x.code === code);
-  if (!p) return res.status(404).json({ error: 'Invalid screen code' });
-  const screen = db.screens.find(s => s.id === p.screen_id);
+  const screen = db.screens.find(s => s.code === code);
+  if (!screen) return res.status(404).json({ error: 'Invalid screen code' });
   let device = db.devices.find(d => d.screen_id === screen.id);
   if (!device) {
     device = { id: uid('dev'), org_id: screen.org_id, screen_id: screen.id, app_ver: '0.1.0',
       last_heartbeat_at: now(), status: 'online', created_at: now() };
     db.devices.push(device);
   }
-  p.status = 'used'; p.used_at = now(); p.device_id = device.id;
+  device.last_heartbeat_at = now(); device.status = 'online';
   await save();
   res.json({ device, screen, token: device.id });
 });
@@ -162,7 +168,14 @@ app.post('/api/play', async (req, res) => {
     measured: !!measured, avg_persons: measured ? avg_persons : null,
     sample_count: sample_count || 0, model_ver: 'coco-ssd@2.2.3', at: now() });
   const c = db.campaigns.find(x => x.id === campaign_id);
-  if (c) c.accrued_spend = Math.round((c.accrued_spend + (c.rate_value || 0)) * 100) / 100;
+  if (c && c.rate_type === 'per_play') {
+    c.accrued_spend = Math.round((c.accrued_spend + (c.rate_value || 0)) * 100) / 100;
+  } else if (c && c.rate_type === 'flat') {
+    const st = new Date(c.starts_at), en = new Date(c.ends_at);
+    const total = Math.max(1, (en - st) / 86400000);
+    const gone = Math.min(total, Math.max(0, (Date.now() - st) / 86400000));
+    c.accrued_spend = Math.round(c.committed_budget * (gone / total));
+  }
   const d = db.devices.find(x => x.screen_id === screen_id);
   if (d) { d.last_heartbeat_at = now(); d.status = 'online'; }
   await save();
@@ -197,14 +210,58 @@ app.post('/api/creative', async (req, res) => {
   const c = { id: uid('cr'), created_at: now(), approval_status: 'pending', content_source: 'advertiser', ...req.body };
   db.creatives.push(c); await save(); res.json(c);
 });
-app.post('/api/pairing/:screenId/regen', async (req, res) => {
-  const s = db.screens.find(x => x.id === req.params.screenId);
-  const p = db.pairings.find(x => x.screen_id === req.params.screenId);
-  if (p) { p.code = code6(); p.status = 'unused'; p.used_at = null; await save(); return res.json(p); }
-  const np = { id: uid('pr'), org_id: s.org_id, screen_id: s.id, code: code6(), status: 'unused', created_at: now() };
-  db.pairings.push(np); await save(); res.json(np);
-});
 app.post('/api/reset', async (req, res) => { db = seed(); await save(); res.json({ ok: true }); });
+
+app.get('/api/campaign/:id', async (req, res) => {
+  const c = db.campaigns.find(x => x.id === req.params.id);
+  if (!c) return res.sendStatus(404);
+  const plays = db.plays.filter(p => p.campaign_id === c.id);
+  const presByPlay = Object.fromEntries(db.presence.map(p => [p.play_id, p]));
+  const screens = c.screen_ids.map(id => db.screens.find(s => s.id === id)).filter(Boolean);
+  const creatives = c.creative_ids.map(id => db.creatives.find(x => x.id === id)).filter(Boolean);
+  const agg = (rows) => {
+    const m = rows.map(p => presByPlay[p.id]).filter(x => x && x.measured);
+    return { plays: rows.length, measured: m.length,
+      avg: m.length ? m.reduce((a, b) => a + b.avg_persons, 0) / m.length : null };
+  };
+  res.json({
+    campaign: c,
+    advertiser: db.advertisers.find(a => a.id === c.advertiser_id) || null,
+    org: db.orgs.find(o => o.id === c.org_id) || null,
+    totals: agg(plays),
+    byScreen: screens.map(s => ({ screen: s, ...agg(plays.filter(p => p.screen_id === s.id)) })),
+    byCreative: creatives.map(cr => ({ creative: cr, ...agg(plays.filter(p => p.creative_id === cr.id)) })),
+    plays: plays.slice(-300).reverse().map(p => ({ ...p, presence: presByPlay[p.id] || null }))
+  });
+});
+
+app.post('/api/campaign/:id', async (req, res) => {
+  const c = db.campaigns.find(x => x.id === req.params.id);
+  if (!c) return res.sendStatus(404);
+  const allow = ['name','starts_at','ends_at','committed_budget','rate_type','rate_value',
+                 'status','invoice_status','screen_ids','creative_ids'];
+  for (const k of allow) if (k in req.body) c[k] = req.body[k];
+  await save(); res.json(c);
+});
+
+app.post('/api/group', async (req, res) => {
+  const g = { id: uid('grp'), created_at: now(), screen_ids: [], ...req.body };
+  db.groups = db.groups || []; db.groups.push(g); await save(); res.json(g);
+});
+
+app.post('/api/group/resolve', async (req, res) => {
+  const { org_id, group_id } = req.body;
+  const g = (db.groups || []).find(x => x.id === group_id);
+  if (!g) return res.json({ screen_ids: [] });
+  if (g.group_type === 'static') return res.json({ screen_ids: g.screen_ids });
+  const r = g.rule_json || {};
+  const ids = db.screens.filter(s => s.org_id === (org_id || g.org_id)
+    && (!r.venue_types || r.venue_types.includes(s.venue_type))
+    && (!r.min_size || Number(s.size_in) >= r.min_size)
+    && (!r.location_tier || s.location_tier === r.location_tier)
+  ).map(s => s.id);
+  res.json({ screen_ids: ids });
+});
 
 app.get('/api/_health', async (req, res) => res.json({ ok: true, store: store.mode, plays: db.plays.length }));
 

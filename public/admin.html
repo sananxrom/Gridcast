@@ -4,8 +4,9 @@
 <body><main id="app"></main>
 <script type="module">
 import { api, requireUser, rail, mountRail, table, stat, pill, bar, inr, esc, $ } from '/assets/app.js';
+import { renderDetail, builderHTML, wireBuilder } from '/assets/campaign.js';
 const u = requireUser(['platform_admin']);
-const d = await api('/bootstrap?user=' + u.id);
+let d = await api('/bootstrap?user=' + u.id);
 mountRail(rail(location.hash || '#overview', [
   { cat:'Platform' },
   { id:'#overview', href:'#overview', label:'Overview' },
@@ -66,6 +67,7 @@ const views = {
     return `<div class="phead"><div><h1>All screens</h1><p class="sub">Every screen across every organisation</p></div></div>
     ${table([
       {label:'Screen', render:s=>`<span class="t-main">${esc(s.name)}</span><br><span class="t-sub">${esc(s.address)}</span>`},
+      {label:'Code', render:s=>`<span class="mono">${esc(s.code||'——')}</span>`},
       {label:'Org', render:s=>`<span class="t-sub">${esc(orgName(s.org_id))}</span>`},
       {label:'Type', render:s=>`${pill('p-off', s.venue_type)} <span class="t-sub">${s.size_in}"</span>`},
       {label:'State', render:s=>liveScreens.includes(s.id)?pill('p-live','on air',true):pill('p-off','idle')},
@@ -76,9 +78,10 @@ const views = {
     ], d.screens)}`;
   },
   campaigns(){
-    return `<div class="phead"><div><h1>Campaigns</h1><p class="sub">All organisations</p></div></div>
+    return `<div class="phead"><div><h1>Campaigns</h1><p class="sub">All organisations</p></div>
+      <button class="btn" onclick="location.hash='#new'">+ New campaign</button></div>
     ${table([
-      {label:'Campaign', render:c=>`<span class="t-main">${esc(c.name)}</span><br><span class="t-sub">${esc(advName(c.advertiser_id))}</span>`},
+      {label:'Campaign', render:c=>`<a href="#c/${c.id}"><span class="t-main">${esc(c.name)}</span></a><br><span class="t-sub">${esc(advName(c.advertiser_id))}</span>`},
       {label:'Org', render:c=>`<span class="t-sub">${esc(orgName(c.org_id))}</span>`},
       {label:'Type', render:c=>pill(c.campaign_type==='network'?'p-brand':'p-off', c.campaign_type)},
       {label:'Dates', render:c=>`<span class="mono t-sub">${c.starts_at} → ${c.ends_at}</span>`},
@@ -117,12 +120,28 @@ const views = {
     ], d.devices, 'No devices paired yet. Open /player.html and enter a screen code.')}`;
   }
 };
-function render(){
-  const k = (location.hash || '#overview').slice(1);
+async function render(){
+  const h = (location.hash || '#overview').slice(1);
+  if(h.startsWith('c/')){
+    $('#app').innerHTML='<div class="empty">Loading…</div>';
+    $('#app').innerHTML=await renderDetail(h.slice(2), true);
+    document.querySelectorAll('.rail a').forEach(a=>a.classList.remove('on'));
+    return;
+  }
+  if(h==='new'){
+    $('#app').innerHTML=builderHTML(d);
+    wireBuilder(d,u,async(c)=>{ Object.assign(d, await api('/bootstrap?user='+u.id)); location.hash='#c/'+c.id; });
+    document.querySelectorAll('.rail a').forEach(a=>a.classList.remove('on'));
+    return;
+  }
+  const k = h;
   $('#app').innerHTML = (views[k] || views.overview)();
   document.querySelectorAll('.rail a').forEach(a=>a.classList.toggle('on', a.getAttribute('href')===('#'+k)));
 }
 document.addEventListener('click', async e=>{
+  const tg=e.target.closest('[data-toggle]');
+  if(tg){ await api('/campaign/'+tg.dataset.toggle,{status:tg.dataset.to});
+    Object.assign(d, await api('/bootstrap?user='+u.id)); render(); return; }
   const ap=e.target.closest('[data-ap]'), rj=e.target.closest('[data-rj]');
   if(!ap&&!rj) return;
   const id=(ap||rj).dataset.ap||(ap||rj).dataset.rj;

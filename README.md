@@ -24,6 +24,7 @@ Data persists to `data/db.json`. Delete it (or POST `/api/reset`) to reseed.
 ## Trying it end to end
 
 1. Sign in as **Ravi Mehta** → *My screens* → copy a screen code (e.g. `A1B2C3`).
+   Codes are **permanent and locked to the screen** — replacing the box reuses the same code.
 2. Open `/player.html` in another tab or on a phone → enter the code → allow the camera.
 3. It plays the approved creatives on a loop and counts people in frame every 2 seconds.
 4. Back in **Admin → Overview** or **Advertiser**, plays and people-counts appear.
@@ -51,6 +52,28 @@ Serverless has no writable filesystem, so add a KV store or the data resets on e
 2. It sets `KV_REST_API_URL` and `KV_REST_API_TOKEN` automatically. Redeploy.
 
 `GET /api/_health` reports which store is active (`redis` / `file` / `memory`).
+
+## Campaigns
+
+Click any campaign row to open its detail page: per-screen delivery with share of total,
+per-creative performance, and the full play log with people counts and sample counts.
+Pause / resume from the header.
+
+**+ New campaign** builds one in four steps — client and dates, rate and budget,
+screens, creatives. Rate is **per play** (accrues as plays log) or **flat fee**
+(accrues evenly across the flight). Screens can be ticked individually or selected
+by group: static lists, or dynamic rules over venue type / size / location tier.
+Creatives can be pasted in as YouTube URLs or picked from the advertiser's existing set;
+new ones start `pending` and must be approved before they play.
+
+## After redeploying over an existing KV store
+
+The seed only runs when the store is empty. If you deployed an earlier build, the saved
+data has no screen codes and no groups. Reset it once:
+
+```bash
+curl -X POST https://YOUR-APP.vercel.app/api/reset
+```
 
 ## Not built
 

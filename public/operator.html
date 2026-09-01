@@ -4,6 +4,7 @@
 <body><main id="app"></main>
 <script type="module">
 import { api, requireUser, rail, mountRail, table, stat, pill, bar, inr, esc, $ } from '/assets/app.js';
+import { renderDetail, builderHTML, wireBuilder } from '/assets/campaign.js';
 const u = requireUser(['org_admin']);
 let d = await api('/bootstrap?user=' + u.id);
 mountRail(rail('#overview', [
@@ -19,7 +20,7 @@ mountRail(rail('#overview', [
 ], u));
 
 const advName = id => (d.advertisers.find(a=>a.id===id)||{}).name || '—';
-const code = sid => (d.pairings.find(p=>p.screen_id===sid)||{}).code || '——';
+const code = sid => (d.screens.find(s=>s.id===sid)||{}).code || '——';
 const live = () => d.devices.filter(x=>x.status==='online').map(x=>x.screen_id);
 const presFor = id => { const r=d.presence.filter(p=>p.screen_id===id&&p.measured);
   return r.length ? r.reduce((s,x)=>s+x.avg_persons,0)/r.length : null; };
@@ -70,10 +71,10 @@ const views = {
           <tr><td class="t-sub">÷ ${s.advertiser_slots} advertiser slots</td><td class="num"><strong>${inr(s.slot_price_month)}</strong> / slot / mo</td></tr>
           <tr><td class="t-sub">Exposure source</td><td class="num">${s.exposure_source==='measured'?pill('p-ok','measured'):pill('p-warn','estimated')}</td></tr>
         </tbody></table></div>
-        <div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-          <div><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);font-weight:600">Screen code</div>
-            <div class="code">${code(s.id)}</div></div>
-          <button class="btn ghost sm" data-regen="${s.id}">Regenerate</button>
+        <div style="margin-top:12px">
+          <div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);font-weight:600">Screen code</div>
+          <div class="code">${code(s.id)}</div>
+          <div class="t-sub" style="font-size:11.5px;margin-top:2px">Permanent — enter this in the player. Replacing the box reuses the same code.</div>
         </div>
       </div>`).join('')}</div>`;
   },
@@ -90,13 +91,14 @@ const views = {
     ], d.advertisers)}`;
   },
   campaigns(){
-    return `<div class="phead"><div><h1>Campaigns</h1><p class="sub">Budgets are entered manually — the platform is a ledger, not a processor</p></div></div>
+    return `<div class="phead"><div><h1>Campaigns</h1><p class="sub">Budgets are entered manually — the platform is a ledger, not a processor</p></div>
+      <button class="btn" onclick="location.hash='#new'">+ New campaign</button></div>
     ${table([
-      {label:'Campaign', render:c=>`<span class="t-main">${esc(c.name)}</span><br><span class="t-sub">${esc(advName(c.advertiser_id))}</span>`},
+      {label:'Campaign', render:c=>`<a href="#c/${c.id}"><span class="t-main">${esc(c.name)}</span></a><br><span class="t-sub">${esc(advName(c.advertiser_id))}</span>`},
       {label:'Dates', render:c=>`<span class="mono t-sub">${c.starts_at} → ${c.ends_at}</span>`},
       {label:'Screens', num:true, render:c=>c.screen_ids.length},
       {label:'Creatives', num:true, render:c=>c.creative_ids.length},
-      {label:'Rate', num:true, render:c=>`${inr(c.rate_value)} <span class="t-sub">/play</span>`},
+      {label:'Rate', num:true, render:c=>c.rate_type==='flat'?`${inr(c.committed_budget)} <span class="t-sub">flat</span>`:`${inr(c.rate_value)} <span class="t-sub">/play</span>`},
       {label:'Budget', num:true, render:c=>{const p=Math.round(c.accrued_spend/c.committed_budget*100);
         return `${inr(c.accrued_spend)} / ${inr(c.committed_budget)}${bar(p,p>=80)}`;}},
       {label:'Invoice', render:c=>pill(c.invoice_status==='paid'?'p-ok':c.invoice_status==='invoiced'?'p-warn':'p-off', c.invoice_status.replace(/_/g,' '))},
@@ -134,8 +136,21 @@ const views = {
       You see exactly what the advertiser paid and exactly what was taken.</div>`;
   }
 };
-function render(){
-  const k=(location.hash||'#overview').slice(1);
+async function render(){
+  const h=(location.hash||'#overview').slice(1);
+  if(h.startsWith('c/')){
+    $('#app').innerHTML='<div class="empty">Loading…</div>';
+    $('#app').innerHTML=await renderDetail(h.slice(2), true);
+    document.querySelectorAll('.rail a').forEach(a=>a.classList.remove('on'));
+    return;
+  }
+  if(h==='new'){
+    $('#app').innerHTML=builderHTML(d);
+    wireBuilder(d,u,async(c)=>{ d=await api('/bootstrap?user='+u.id); location.hash='#c/'+c.id; });
+    document.querySelectorAll('.rail a').forEach(a=>a.classList.remove('on'));
+    return;
+  }
+  const k=h;
   $('#app').innerHTML=(views[k]||views.overview)();
   document.querySelectorAll('.rail a').forEach(a=>a.classList.toggle('on',a.getAttribute('href')===('#'+k)));
   const nb=$('#newadv'); if(nb) nb.onclick=()=>{
@@ -153,8 +168,8 @@ function render(){
   };
 }
 document.addEventListener('click', async e=>{
-  const b=e.target.closest('[data-regen]'); if(!b) return;
-  await api('/pairing/'+b.dataset.regen+'/regen',{});
+  const t=e.target.closest('[data-toggle]'); if(!t) return;
+  await api('/campaign/'+t.dataset.toggle,{status:t.dataset.to});
   d=await api('/bootstrap?user='+u.id); render();
 });
 addEventListener('hashchange', render); render();
