@@ -4,7 +4,7 @@
 <body><main id="app"></main>
 <script type="module">
 import { api, requireUser, rail, mountRail, table, stat, pill, bar, inr, esc, $ } from '/assets/app.js';
-import { renderDetail, builderHTML, wireBuilder } from '/assets/campaign.js';
+import { renderDetail, wireDetail, builderHTML, wireBuilder } from '/assets/campaign.js';
 const u = requireUser(['org_admin']);
 let d = await api('/bootstrap?user=' + u.id);
 mountRail(rail('#overview', [
@@ -22,6 +22,11 @@ mountRail(rail('#overview', [
 const advName = id => (d.advertisers.find(a=>a.id===id)||{}).name || '—';
 const code = sid => (d.screens.find(s=>s.id===sid)||{}).code || '——';
 const live = () => d.devices.filter(x=>x.status==='online').map(x=>x.screen_id);
+const today = () => new Date().toISOString().slice(0,10);
+const liveOn = id => d.campaigns.filter(c=>c.screen_ids.includes(id) && c.status==='active'
+  && c.starts_at<=today() && c.ends_at>=today());
+const bookedOn = id => d.campaigns.filter(c=>c.screen_ids.includes(id) && c.status!=='complete');
+const playsOn = (sid,cid) => d.plays.filter(p=>p.screen_id===sid && p.campaign_id===cid).length;
 const presFor = id => { const r=d.presence.filter(p=>p.screen_id===id&&p.measured);
   return r.length ? r.reduce((s,x)=>s+x.avg_persons,0)/r.length : null; };
 
@@ -45,6 +50,8 @@ const views = {
       {label:'Screen', render:s=>`<span class="t-main">${esc(s.name)}</span><br><span class="t-sub">${esc(s.address)}</span>`},
       {label:'State', render:s=>live().includes(s.id)?pill('p-live','on air',true):pill('p-off','idle')},
       {label:'Code', render:s=>`<span class="mono">${code(s.id)}</span>`},
+      {label:'Running', num:true, render:s=>{const n=liveOn(s.id).length;
+        return n?`<strong>${n}</strong> <span class="t-sub">of ${s.advertiser_slots}</span>`:'<span class="t-sub">idle</span>';}},
       {label:'Per slot / mo', num:true, render:s=>inr(s.slot_price_month)},
       {label:'Avg people', num:true, render:s=>{const p=presFor(s.id);return p?p.toFixed(1):'<span class="t-sub">—</span>';}}
     ], d.screens)}`;
@@ -71,7 +78,24 @@ const views = {
           <tr><td class="t-sub">÷ ${s.advertiser_slots} advertiser slots</td><td class="num"><strong>${inr(s.slot_price_month)}</strong> / slot / mo</td></tr>
           <tr><td class="t-sub">Exposure source</td><td class="num">${s.exposure_source==='measured'?pill('p-ok','measured'):pill('p-warn','estimated')}</td></tr>
         </tbody></table></div>
-        <div style="margin-top:12px">
+        <div style="margin-top:14px">
+          <div style="display:flex;justify-content:space-between;align-items:baseline">
+            <div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);font-weight:600">Running now</div>
+            <div class="t-sub" style="font-size:11.5px">${bookedOn(s.id).length} of ${s.advertiser_slots} slots sold</div>
+          </div>
+          ${bar(Math.round(bookedOn(s.id).length / s.advertiser_slots * 100), bookedOn(s.id).length >= s.advertiser_slots)}
+          <div style="margin-top:8px">
+          ${liveOn(s.id).length ? liveOn(s.id).map(c=>`
+            <a href="#c/${c.id}" style="display:flex;justify-content:space-between;gap:10px;align-items:center;
+               padding:6px 9px;border:1px solid var(--rule);border-radius:var(--r);margin-bottom:5px;background:var(--surface-2)">
+              <span><span class="t-main" style="font-size:13px">${esc(c.name)}</span><br>
+                <span class="t-sub" style="font-size:11.5px">${esc(advName(c.advertiser_id))} · ends ${c.ends_at}</span></span>
+              <span class="mono t-sub" style="font-size:11.5px;white-space:nowrap">${playsOn(s.id,c.id)} plays</span>
+            </a>`).join('')
+            : '<p class="t-sub" style="margin:0;font-size:12.5px">Nothing scheduled on this screen right now.</p>'}
+          </div>
+        </div>
+        <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--rule)">
           <div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);font-weight:600">Screen code</div>
           <div class="code">${code(s.id)}</div>
           <div class="t-sub" style="font-size:11.5px;margin-top:2px">Permanent — enter this in the player. Replacing the box reuses the same code.</div>
@@ -140,7 +164,8 @@ async function render(){
   const h=(location.hash||'#overview').slice(1);
   if(h.startsWith('c/')){
     $('#app').innerHTML='<div class="empty">Loading…</div>';
-    $('#app').innerHTML=await renderDetail(h.slice(2), true);
+    $('#app').innerHTML=await renderDetail(h.slice(2), true, d);
+    wireDetail(h.slice(2), async()=>{ d=await api('/bootstrap?user='+u.id); render(); });
     document.querySelectorAll('.rail a').forEach(a=>a.classList.remove('on'));
     return;
   }

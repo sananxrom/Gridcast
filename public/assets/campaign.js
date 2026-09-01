@@ -8,7 +8,7 @@ export const ytId = (u) => {
 const days = (a, b) => Math.max(1, Math.round((new Date(b) - new Date(a)) / 86400000));
 
 /* ---------------- detail ---------------- */
-export async function renderDetail(id, canEdit) {
+export async function renderDetail(id, canEdit, boot) {
   const d = await api('/campaign/' + id);
   const c = d.campaign;
   const pct = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
@@ -26,10 +26,12 @@ export async function renderDetail(id, canEdit) {
     </div>
     <div style="display:flex;gap:8px;align-items:center">
       ${pill(c.status === 'active' ? 'p-ok' : 'p-off', c.status)}
-      ${canEdit ? `<button class="btn ghost sm" data-toggle="${c.id}" data-to="${c.status === 'active' ? 'paused' : 'active'}">
+      ${canEdit ? `<button class="btn ghost sm" id="editbtn">Edit</button>
+        <button class="btn ghost sm" data-toggle="${c.id}" data-to="${c.status === 'active' ? 'paused' : 'active'}">
         ${c.status === 'active' ? 'Pause' : 'Resume'}</button>` : ''}
     </div>
   </div>
+  ${canEdit && boot ? editPanel(c, boot) : ''}
 
   <div class="grid g4">
     ${stat('Plays delivered', d.totals.plays.toLocaleString('en-IN'), `across ${d.byScreen.length} screen${d.byScreen.length === 1 ? '' : 's'}`)}
@@ -69,6 +71,85 @@ export async function renderDetail(id, canEdit) {
         ? `<strong>${p.presence.avg_persons.toFixed(1)}</strong> <span class="t-sub">(${p.presence.sample_count} samples)</span>`
         : '<span class="t-sub">not measured</span>' }
   ], d.plays, 'No plays recorded yet — pair a player to one of these screens')}`;
+}
+
+/* ---------------- edit panel ---------------- */
+function editPanel(c, d) {
+  const mine = d.creatives.filter(x => x.advertiser_id === c.advertiser_id);
+  return `
+  <div class="card" id="editpanel" hidden style="margin-bottom:18px;border-color:var(--brand)">
+    <h3 style="margin:0 0 12px;font-size:14px">Edit campaign</h3>
+    <div class="row">
+      <div class="field"><label>Name</label><input id="e_name" value="${esc(c.name)}"></div>
+      <div class="field"><label>Starts</label><input type="date" id="e_start" value="${c.starts_at}"></div>
+      <div class="field"><label>Ends</label><input type="date" id="e_end" value="${c.ends_at}"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Rate type</label>
+        <select id="e_rtype">
+          <option value="per_play"${c.rate_type === 'per_play' ? ' selected' : ''}>Per play</option>
+          <option value="flat"${c.rate_type === 'flat' ? ' selected' : ''}>Flat fee</option>
+        </select></div>
+      <div class="field" id="e_wrval"><label>Rate per play (₹)</label>
+        <input type="number" step="0.01" id="e_rval" value="${c.rate_value}"></div>
+      <div class="field"><label>Committed budget (₹)</label>
+        <input type="number" id="e_budget" value="${c.committed_budget}"></div>
+      <div class="field"><label>Invoice status</label>
+        <select id="e_inv">${['not_invoiced','invoiced','part_paid','paid','written_off']
+          .map(v => `<option value="${v}"${c.invoice_status === v ? ' selected' : ''}>${v.replace(/_/g,' ')}</option>`).join('')}</select></div>
+    </div>
+
+    <label style="margin-top:6px">Screens</label>
+    <div class="tw" style="box-shadow:none;max-height:230px;overflow:auto"><table><tbody>
+      ${d.screens.map(s => `<tr>
+        <td style="width:36px"><input type="checkbox" class="e_scr" value="${s.id}" style="width:auto"
+          ${c.screen_ids.includes(s.id) ? 'checked' : ''}></td>
+        <td><span class="t-main">${esc(s.name)}</span> <span class="t-sub">${esc(s.address)}</span></td>
+        <td class="num t-sub">${inr(s.slot_price_month)}/slot/mo</td></tr>`).join('')}
+    </tbody></table></div>
+
+    <label style="margin-top:12px">Creatives</label>
+    ${mine.length ? mine.map(cr => `<label style="display:flex;gap:9px;align-items:center;text-transform:none;
+      letter-spacing:0;font-size:13.5px;color:var(--ink);font-weight:400;padding:4px 0">
+      <input type="checkbox" class="e_cr" value="${cr.id}" style="width:auto"
+        ${c.creative_ids.includes(cr.id) ? 'checked' : ''}>
+      <span>${esc(cr.name)} <span class="t-sub mono">yt:${esc(cr.youtube_id)} · ${cr.duration_s}s</span>
+      ${cr.approval_status !== 'approved' ? pill('p-warn', cr.approval_status) : ''}</span></label>`).join('')
+      : '<p class="t-sub" style="margin:0">No creatives for this advertiser.</p>'}
+
+    <div class="note" style="margin:14px 0 0">Changing screens or creatives on a running campaign changes
+      delivery from the next schedule pull. Plays already recorded and spend already accrued are not altered.</div>
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center">
+      <button class="btn" id="e_save">Save changes</button>
+      <button class="btn ghost" id="e_cancel">Cancel</button>
+      <span class="t-sub" id="e_err"></span>
+    </div>
+  </div>`;
+}
+
+export function wireDetail(id, onSaved) {
+  const btn = $('#editbtn'), panel = $('#editpanel');
+  if (!btn || !panel) return;
+  const rt = $('#e_rtype');
+  const syncRate = () => { $('#e_wrval').style.display = rt.value === 'flat' ? 'none' : ''; };
+  rt.onchange = syncRate; syncRate();
+  btn.onclick = () => { panel.hidden = !panel.hidden; if (!panel.hidden) panel.scrollIntoView({ behavior:'smooth', block:'nearest' }); };
+  $('#e_cancel').onclick = () => { panel.hidden = true; };
+  $('#e_save').onclick = async () => {
+    const err = $('#e_err'); err.textContent = '';
+    const screen_ids = [...document.querySelectorAll('.e_scr:checked')].map(x => x.value);
+    const creative_ids = [...document.querySelectorAll('.e_cr:checked')].map(x => x.value);
+    if (!screen_ids.length) { err.textContent = 'Pick at least one screen.'; return; }
+    if (!creative_ids.length) { err.textContent = 'Pick at least one creative.'; return; }
+    const rate_type = rt.value;
+    await api('/campaign/' + id, {
+      name: $('#e_name').value, starts_at: $('#e_start').value, ends_at: $('#e_end').value,
+      committed_budget: Number($('#e_budget').value) || 0, rate_type,
+      rate_value: rate_type === 'per_play' ? Number($('#e_rval').value) || 0 : 0,
+      invoice_status: $('#e_inv').value, screen_ids, creative_ids
+    });
+    onSaved();
+  };
 }
 
 /* ---------------- builder ---------------- */

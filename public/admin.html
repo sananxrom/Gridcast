@@ -4,7 +4,7 @@
 <body><main id="app"></main>
 <script type="module">
 import { api, requireUser, rail, mountRail, table, stat, pill, bar, inr, esc, $ } from '/assets/app.js';
-import { renderDetail, builderHTML, wireBuilder } from '/assets/campaign.js';
+import { renderDetail, wireDetail, builderHTML, wireBuilder } from '/assets/campaign.js';
 const u = requireUser(['platform_admin']);
 let d = await api('/bootstrap?user=' + u.id);
 mountRail(rail(location.hash || '#overview', [
@@ -25,6 +25,9 @@ const playsFor = id => d.plays.filter(p=>p.screen_id===id).length;
 const presFor = id => { const r = d.presence.filter(p=>p.screen_id===id && p.measured);
   return r.length ? (r.reduce((s,x)=>s+x.avg_persons,0)/r.length) : null; };
 const liveScreens = d.devices.filter(x=>x.status==='online').map(x=>x.screen_id);
+const today = () => new Date().toISOString().slice(0,10);
+const liveOn = id => d.campaigns.filter(c=>c.screen_ids.includes(id) && c.status==='active'
+  && c.starts_at<=today() && c.ends_at>=today());
 
 const views = {
   overview(){
@@ -72,6 +75,8 @@ const views = {
       {label:'Type', render:s=>`${pill('p-off', s.venue_type)} <span class="t-sub">${s.size_in}"</span>`},
       {label:'State', render:s=>liveScreens.includes(s.id)?pill('p-live','on air',true):pill('p-off','idle')},
       {label:'Camera', render:s=>s.has_camera?pill('p-ok','yes'):pill('p-warn','none')},
+      {label:'Running', num:true, render:s=>{const n=liveOn(s.id).length;
+        return n?`<strong>${n}</strong> <span class="t-sub">of ${s.advertiser_slots}</span>`:'<span class="t-sub">idle</span>';}},
       {label:'Monthly', num:true, render:s=>inr(s.monthly_value)},
       {label:'Per slot', num:true, render:s=>inr(s.slot_price_month)},
       {label:'Avg people', num:true, render:s=>{const p=presFor(s.id); return p?p.toFixed(1):'<span class="t-sub">—</span>';}}
@@ -124,7 +129,8 @@ async function render(){
   const h = (location.hash || '#overview').slice(1);
   if(h.startsWith('c/')){
     $('#app').innerHTML='<div class="empty">Loading…</div>';
-    $('#app').innerHTML=await renderDetail(h.slice(2), true);
+    $('#app').innerHTML=await renderDetail(h.slice(2), true, d);
+    wireDetail(h.slice(2), async()=>{ Object.assign(d, await api('/bootstrap?user='+u.id)); render(); });
     document.querySelectorAll('.rail a').forEach(a=>a.classList.remove('on'));
     return;
   }
