@@ -18,7 +18,7 @@ export const statusPill = (st) => {
 let timer = null;
 export function stopScreenPoll() { if (timer) { clearInterval(timer); timer = null; } }
 
-export async function renderScreen(id) {
+export async function renderScreen(id, canEdit) {
   const d = await api('/screen/' + id);
   const s = d.screen, st = d.status;
   const live = d.campaigns.filter(c => c.live);
@@ -48,8 +48,10 @@ export async function renderScreen(id) {
       <h1 style="margin-top:4px">${esc(s.name)}</h1>
       <p class="sub">${esc(s.venue_name)} · ${esc(s.address)} ·
         <span class="mono">${esc(s.code)}</span></p></div>
-    <div style="display:flex;gap:8px;align-items:center">${statusPill(st)}</div>
+    <div style="display:flex;gap:8px;align-items:center">${statusPill(st)}
+      ${canEdit ? '<button class="btn ghost sm" id="scredit">Edit screen</button>' : ''}</div>
   </div>
+  ${canEdit ? editScreenPanel(s) : ''}
 
   <div class="card" id="npcard" style="margin-bottom:16px">${npBlock}</div>
 
@@ -94,6 +96,81 @@ export async function renderScreen(id) {
     { label:'People present', num:true, render:p => p.presence && p.presence.measured
         ? `<strong>${p.presence.avg_persons.toFixed(1)}</strong>` : '<span class="t-sub">not measured</span>' }
   ], d.recent, 'No plays on this screen yet')}`;
+}
+
+function editScreenPanel(s) {
+  const tags = Object.entries(s.tags || {}).map(([k, v]) => `${k}:${v}`).join(', ');
+  const ex = s.exclusions || { categories: [], advertisers: [] };
+  return `<div class="card" id="scrpanel" hidden style="margin-bottom:16px;border-color:var(--brand)">
+    <h3 style="margin:0 0 12px;font-size:14px">Edit screen</h3>
+    <div class="row">
+      <div class="field"><label>Name</label><input id="s_name" value="${esc(s.name)}"></div>
+      <div class="field"><label>Venue</label><input id="s_venue" value="${esc(s.venue_name)}"></div>
+      <div class="field"><label>Address</label><input id="s_addr" value="${esc(s.address)}"></div>
+    </div>
+    <h4 style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);margin:14px 0 8px">
+      Rate factors — value = base × size × location × exposure</h4>
+    <div class="row">
+      <div class="field"><label>Venue base ₹</label><input type="number" id="s_base" value="${s.venue_base}"></div>
+      <div class="field"><label>Size factor</label><input type="number" step="0.1" id="s_size" value="${s.size_factor}"></div>
+      <div class="field"><label>Location factor</label><input type="number" step="0.1" id="s_loc" value="${s.location_factor}"></div>
+      <div class="field"><label>Exposure factor</label><input type="number" step="0.05" id="s_exp" value="${s.exposure_factor}"></div>
+      <div class="field"><label>Advertiser slots</label><input type="number" id="s_slots" value="${s.advertiser_slots}"></div>
+    </div>
+    <p class="t-sub mono" id="s_preview" style="margin:0 0 4px"></p>
+    <h4 style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);margin:14px 0 8px">Loop &amp; share</h4>
+    <div class="row">
+      <div class="field"><label>Loop length (s)</label><input type="number" id="s_loop" value="${Math.round(s.loop_length_s)}"></div>
+      <div class="field"><label>Slot duration (s)</label><input type="number" id="s_slotdur" value="${s.slot_duration_s}"></div>
+      <div class="field"><label>Operating hours</label><input type="number" id="s_hours" value="${s.operating_hours}"></div>
+      <div class="field"><label>Owner share %</label><input type="number" id="s_owner" value="${s.owner_share_pct}"></div>
+      <div class="field"><label>Slots released to network</label><input type="number" id="s_net" value="${s.network_slots || 0}"></div>
+    </div>
+    <h4 style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);margin:14px 0 8px">Tags &amp; exclusions</h4>
+    <div class="row">
+      <div class="field"><label>Tags (key:value, comma separated)</label><input id="s_tags" value="${esc(tags)}"></div>
+      <div class="field"><label>Blocked categories (comma separated)</label><input id="s_exc" value="${esc((ex.categories || []).join(', '))}"></div>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center">
+      <button class="btn" id="s_save">Save screen</button>
+      <button class="btn ghost" id="s_cancel">Cancel</button>
+      <span class="t-sub" id="s_err"></span>
+    </div>
+  </div>`;
+}
+
+export function wireScreenEdit(id, onSaved) {
+  const btn = $('#scredit'), panel = $('#scrpanel');
+  if (!btn || !panel) return;
+  const preview = () => {
+    const v = Math.round(Number($('#s_base').value) * Number($('#s_size').value)
+      * Number($('#s_loc').value) * Number($('#s_exp').value));
+    const n = Math.max(1, Number($('#s_slots').value) || 1);
+    $('#s_preview').textContent = `→ ${inr(v)} / month  ·  ${inr(Math.round(v / n))} per slot per month`;
+  };
+  ['s_base','s_size','s_loc','s_exp','s_slots'].forEach(k => { const el = $('#' + k); if (el) el.oninput = preview; });
+  preview();
+  btn.onclick = () => { panel.hidden = !panel.hidden; if (!panel.hidden) panel.scrollIntoView({ behavior:'smooth', block:'nearest' }); };
+  $('#s_cancel').onclick = () => { panel.hidden = true; };
+  $('#s_save').onclick = async () => {
+    const tags = {};
+    $('#s_tags').value.split(',').map(x => x.trim()).filter(Boolean).forEach(pair => {
+      const i = pair.indexOf(':'); if (i > 0) tags[pair.slice(0, i).trim()] = pair.slice(i + 1).trim();
+    });
+    await api('/screen/' + id, {
+      name: $('#s_name').value, venue_name: $('#s_venue').value, address: $('#s_addr').value,
+      venue_base: Number($('#s_base').value), size_factor: Number($('#s_size').value),
+      location_factor: Number($('#s_loc').value), exposure_factor: Number($('#s_exp').value),
+      advertiser_slots: Number($('#s_slots').value) || 10,
+      loop_length_s: Number($('#s_loop').value), slot_duration_s: Number($('#s_slotdur').value),
+      operating_hours: Number($('#s_hours').value), owner_share_pct: Number($('#s_owner').value),
+      network_slots: Number($('#s_net').value) || 0,
+      network_available: (Number($('#s_net').value) || 0) > 0, tags
+    });
+    await api('/screen/' + id + '/exclusions', { exclusions: {
+      categories: $('#s_exc').value.split(',').map(x => x.trim()).filter(Boolean), advertisers: [] } });
+    onSaved();
+  };
 }
 
 /* live ticker — repaints the now-playing card and status without a full re-render */

@@ -48,7 +48,8 @@ function seed() {
     { id:'adv_fitline', org_id:'org_sec17', name:'Fitline Gym', contact:'Ankit Sharma', email:'billing@fitline.in', phone:'+91 98765 43210', category:'fitness', created_at:now() },
     { id:'adv_dental',  org_id:'org_sec17', name:'Smile Dental Clinic', contact:'Dr Neha', email:'front@smiledental.in', phone:'+91 98110 22331', category:'healthcare', created_at:now() },
     { id:'adv_coach',   org_id:'org_sec17', name:'Apex Coaching', contact:'Vikram', email:'info@apexcoaching.in', phone:'+91 99887 66554', category:'education', created_at:now() },
-    { id:'adv_mobile',  org_id:'org_tricity', name:'MobileHub', contact:'Sunny', email:'sales@mobilehub.in', phone:'+91 90000 12345', category:'electronics', created_at:now() }
+    { id:'adv_mobile',  org_id:'org_tricity', name:'MobileHub', contact:'Sunny', email:'sales@mobilehub.in', phone:'+91 90000 12345', category:'electronics', created_at:now() },
+    { id:'adv_zept', org_id:'org_gridcast', name:'Zephyr Beverages', contact:'Meera Iyer', email:'brand@zephyr.in', phone:'+91 98200 55443', category:'fmcg', created_at:now() }
   ];
   const yt = ['M7lc1UVf-VE','aqz-KE-bpKQ','ScMzIvxBSi4','jNQXAC9IVRw'];
   const creatives = [
@@ -56,7 +57,8 @@ function seed() {
     { id:'cr_fit_b', org_id:'org_sec17', advertiser_id:'adv_fitline', name:'Fitline — Personal Training', category:'fitness', youtube_id:yt[1], duration_s:10, aspect:'16:9', approval_status:'approved', content_source:'advertiser', created_at:now() },
     { id:'cr_den_a', org_id:'org_sec17', advertiser_id:'adv_dental', name:'Smile Dental — Checkup', category:'healthcare', youtube_id:yt[2], duration_s:10, aspect:'16:9', approval_status:'approved', content_source:'advertiser', created_at:now() },
     { id:'cr_coach_a',org_id:'org_sec17', advertiser_id:'adv_coach', name:'Apex — Admissions Open', category:'education', youtube_id:yt[3], duration_s:10, aspect:'16:9', approval_status:'pending', content_source:'advertiser', created_at:now() },
-    { id:'cr_mob_a', org_id:'org_tricity', advertiser_id:'adv_mobile', name:'MobileHub — Exchange Mela', category:'electronics', youtube_id:yt[1], duration_s:10, aspect:'16:9', approval_status:'approved', content_source:'advertiser', created_at:now() }
+    { id:'cr_mob_a', org_id:'org_tricity', advertiser_id:'adv_mobile', name:'MobileHub — Exchange Mela', category:'electronics', youtube_id:yt[1], duration_s:10, aspect:'16:9', approval_status:'approved', content_source:'advertiser', created_at:now() },
+    { id:'cr_zep_a', org_id:'org_gridcast', advertiser_id:'adv_zept', name:'Zephyr — Summer Cooler', category:'fmcg', youtube_id:yt[2], duration_s:10, aspect:'16:9', approval_status:'approved', content_source:'advertiser', created_at:now() }
   ];
   const s = screens;
   const campaigns = [
@@ -74,8 +76,22 @@ function seed() {
       campaign_type:'operator', platform_fee_pct:0, fee_basis:'gross',
       starts_at:'2026-09-01', ends_at:'2026-09-21', committed_budget:15000, accrued_spend:1200,
       rate_type:'per_play', rate_value:0.80, status:'active', invoice_status:'not_invoiced',
-      creative_ids:['cr_mob_a'], screen_ids:[s[4].id], created_at:now() }
+      creative_ids:['cr_mob_a'], screen_ids:[s[4].id], created_at:now() },
+    // network campaign: Gridcast sold it, runs on the operator's released slots
+    { id:'cmp_net1', org_id:'org_sec17', origin_org_id:'org_gridcast', advertiser_id:'adv_zept',
+      name:'Zephyr — Tricity Summer', campaign_type:'network', platform_fee_pct:10, fee_basis:'gross',
+      starts_at:'2026-08-10', ends_at:'2026-10-10', committed_budget:40000, accrued_spend:14200,
+      rate_type:'per_play', rate_value:1.10, status:'active', invoice_status:'invoiced',
+      creative_ids:['cr_zep_a'], screen_ids:[s[0].id, s[3].id], created_at:now() },
+    // a finished one, so "past" has content
+    { id:'cmp_past1', org_id:'org_sec17', origin_org_id:'org_sec17', advertiser_id:'adv_coach',
+      name:'Apex — Summer Admissions', campaign_type:'operator', platform_fee_pct:0, fee_basis:'gross',
+      starts_at:'2026-05-01', ends_at:'2026-06-30', committed_budget:8000, accrued_spend:8000,
+      rate_type:'flat', rate_value:0, status:'complete', invoice_status:'paid',
+      creative_ids:['cr_coach_a'], screen_ids:[s[2].id], created_at:now() }
   ];
+  s[0].network_available = true; s[0].network_slots = 3;
+  s[3].network_available = true; s[3].network_slots = 4;
   const groups = [
     { id:'grp_s17', org_id:'org_sec17', name:'Sector 17 cluster', group_type:'static',
       rule_json:null, screen_ids:[s[0].id], created_at:now() },
@@ -117,8 +133,20 @@ app.get('/api/bootstrap', async (req, res) => {
     user: u, org, isAdmin,
     orgs: db.orgs,
     screens: scope(db.screens, u.org_id, isAdmin).map(s => ({ ...s, _status: screenStatus(s) })),
-    advertisers: scope(db.advertisers, u.org_id, isAdmin),
-    creatives: scope(db.creatives, u.org_id, isAdmin),
+    advertisers: (() => {
+      const own = scope(db.advertisers, u.org_id, isAdmin);
+      if (isAdmin) return own;
+      const refd = new Set(scope(db.campaigns, u.org_id, false).map(c => c.advertiser_id));
+      const extra = db.advertisers.filter(a => refd.has(a.id) && !own.some(o => o.id === a.id));
+      return [...own, ...extra];
+    })(),
+    creatives: (() => {
+      const own = scope(db.creatives, u.org_id, isAdmin);
+      if (isAdmin) return own;
+      const refd = new Set(scope(db.campaigns, u.org_id, false).flatMap(c => c.creative_ids));
+      const extra = db.creatives.filter(c => refd.has(c.id) && !own.some(o => o.id === c.id));
+      return [...own, ...extra];
+    })(),
     campaigns: scope(db.campaigns, u.org_id, isAdmin),
     groups: scope(db.groups || [], u.org_id, isAdmin),
     devices: scope(db.devices, u.org_id, isAdmin),
@@ -327,6 +355,21 @@ app.get('/api/screen/:id', async (req, res) => {
     recent: plays.slice(-40).reverse().map(p => ({ ...p,
       creative: cName(p.creative_id), presence: presByPlay[p.id] || null }))
   });
+});
+
+app.post('/api/screen/:id/exclusions', async (req, res) => {
+  const s = db.screens.find(x => x.id === req.params.id);
+  if (!s) return res.sendStatus(404);
+  s.exclusions = req.body.exclusions || { categories: [], advertisers: [] };
+  await save(); res.json(s);
+});
+
+app.post('/api/org', async (req, res) => {
+  const o = { id: uid('org'), type: 'operator', platform_fee_pct: 10, status: 'active', created_at: now(), ...req.body };
+  db.orgs.push(o);
+  db.users.push({ id: uid('u'), org_id: o.id, name: req.body.admin_name || (o.name + ' admin'),
+    email: req.body.admin_email || '', role: 'org_admin' });
+  await save(); res.json(o);
 });
 
 app.get('/api/_health', async (req, res) => res.json({ ok: true, store: store.mode, plays: db.plays.length }));

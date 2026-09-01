@@ -5,7 +5,7 @@
 <script type="module">
 import { api, requireUser, rail, mountRail, table, stat, pill, bar, inr, esc, $ } from '/assets/app.js';
 import { renderDetail, wireDetail, builderHTML, wireBuilder } from '/assets/campaign.js';
-import { renderScreen, startScreenPoll, stopScreenPoll, statusPill } from '/assets/screen.js';
+import { renderScreen, wireScreenEdit, startScreenPoll, stopScreenPoll, statusPill } from '/assets/screen.js';
 const u = requireUser(['platform_admin']);
 let d = await api('/bootstrap?user=' + u.id);
 mountRail(rail(location.hash || '#overview', [
@@ -132,7 +132,8 @@ async function render(){
   if(h.startsWith('s/')){
     const sid=h.slice(2);
     $('#app').innerHTML='<div class="empty">Loading…</div>';
-    $('#app').innerHTML=await renderScreen(sid);
+    $('#app').innerHTML=await renderScreen(sid, true);
+    wireScreenEdit(sid, ()=>{ render(); });
     startScreenPoll(sid);
     document.querySelectorAll('.rail a').forEach(a=>a.classList.remove('on'));
     return;
