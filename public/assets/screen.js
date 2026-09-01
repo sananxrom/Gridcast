@@ -3,10 +3,12 @@ import { api, table, stat, pill, bar, inr, esc, $ } from '/assets/app.js';
 export const thumb = (yt) => `https://i.ytimg.com/vi/${yt}/hqdefault.jpg`;
 
 // thumbnail that degrades to a clean grey block if the image cannot load
+const BLANK = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
 export const thumbImg = (yt, w, extra = '') =>
-  `<img src="${thumb(yt)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'"
+  `<img src="${thumb(yt)}" alt="" loading="lazy"
+    onerror="this.onerror=null;this.src='${BLANK}';this.style.borderStyle='dashed'"
     style="width:${w};aspect-ratio:16/9;object-fit:cover;border-radius:${w === '210px' ? 'var(--r)' : '4px'};
-    border:1px solid var(--rule);background:var(--surface-2);display:block;${extra}">`;
+    border:1px solid var(--rule);background:var(--surface-2);display:block;flex:none;${extra}">`;
 
 export const statusPill = (st) => {
   const m = { live:['p-live','on air',true], stalled:['p-warn','not responding',false],
@@ -63,28 +65,17 @@ export async function renderScreen(id, canEdit) {
   </div>
 
   <h2>Campaigns on this screen <span class="t-sub" style="font-weight:400">· ${d.campaigns.length} total, ${live.length} live</span></h2>
-  <div class="grid g2" id="camps">
-    ${d.campaigns.length ? d.campaigns.map(c => `
-      <div class="card" ${c.live ? 'style="border-color:var(--brand)"' : ''}>
-        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
-          <div><a href="#c/${c.id}" class="t-main" style="font-size:15px">${esc(c.name)}</a>
-            <div class="t-sub">${esc(c.advertiser)} · <span class="mono">${c.starts_at} → ${c.ends_at}</span></div></div>
-          ${c.live ? pill('p-live','live',true) : pill('p-off', c.status)}
-        </div>
-        <div style="display:flex;gap:8px;margin:12px 0 10px;overflow-x:auto">
-          ${c.creatives.map(cr => `<div style="flex:0 0 110px" title="${esc(cr.name)}">
-            ${thumbImg(cr.youtube_id, '110px')}
-            <div class="t-sub" style="font-size:11px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-              ${esc(cr.name)}</div></div>`).join('')}
-        </div>
-        <div class="tw" style="box-shadow:none"><table style="min-width:0"><tbody>
-          <tr><td class="t-sub">Plays on this screen</td><td class="num"><strong>${c.plays}</strong></td></tr>
-          <tr><td class="t-sub">Avg people / play</td><td class="num">${c.avg === null ? '<span class="t-sub">—</span>' : '<strong>'+c.avg.toFixed(1)+'</strong>'}</td></tr>
-          <tr><td class="t-sub">Budget used</td><td class="num">${inr(c.accrued_spend)} / ${inr(c.committed_budget)}</td></tr>
-        </tbody></table></div>
-      </div>`).join('')
-      : '<div class="tw"><div class="empty">No campaigns booked on this screen yet.</div></div>'}
-  </div>
+  ${table([
+    { label:'Campaign', render:c => `<a href="#c/${c.id}" class="t-main">${esc(c.name)}</a><br><span class="t-sub">${esc(c.advertiser)}</span>` },
+    { label:'Creatives', render:c => `<span style="display:flex;gap:5px">${c.creatives.map(cr =>
+        `<span title="${esc(cr.name)} · ${cr.duration_s}s">${thumbImg(cr.youtube_id, '58px')}</span>`).join('')}</span>` },
+    { label:'Dates', render:c => `<span class="mono t-sub">${c.starts_at}<br>→ ${c.ends_at}</span>` },
+    { label:'Status', render:c => c.live ? pill('p-live','live',true) : pill('p-off', c.status) },
+    { label:'Plays here', num:true, render:c => `<strong>${c.plays}</strong>` },
+    { label:'Avg people', num:true, render:c => c.avg === null ? '<span class="t-sub">—</span>' : `<strong>${c.avg.toFixed(1)}</strong>` },
+    { label:'Budget', num:true, render:c => { const p = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
+      return `${inr(c.accrued_spend)} / ${inr(c.committed_budget)}${bar(p, p >= 80)}`; } }
+  ], d.campaigns, 'No campaigns booked on this screen yet')}
 
   <h2>Recent plays</h2>
   ${table([
