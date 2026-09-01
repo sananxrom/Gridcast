@@ -4,3 +4,4 @@ data/db.json
 .env.local
 .vercel
 .DS_Store
+_scratch/
