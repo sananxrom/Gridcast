@@ -5,6 +5,7 @@
 <script type="module">
 import { api, requireUser, rail, mountRail, table, stat, pill, bar, inr, esc, $ } from '/assets/app.js';
 import { renderDetail, wireDetail, builderHTML, wireBuilder } from '/assets/campaign.js';
+import { renderScreen, startScreenPoll, stopScreenPoll, statusPill } from '/assets/screen.js';
 const u = requireUser(['platform_admin']);
 let d = await api('/bootstrap?user=' + u.id);
 mountRail(rail(location.hash || '#overview', [
@@ -69,11 +70,11 @@ const views = {
   screens(){
     return `<div class="phead"><div><h1>All screens</h1><p class="sub">Every screen across every organisation</p></div></div>
     ${table([
-      {label:'Screen', render:s=>`<span class="t-main">${esc(s.name)}</span><br><span class="t-sub">${esc(s.address)}</span>`},
+      {label:'Screen', render:s=>`<a href="#s/${s.id}" class="t-main">${esc(s.name)}</a><br><span class="t-sub">${esc(s.address)}</span>`},
       {label:'Code', render:s=>`<span class="mono">${esc(s.code||'——')}</span>`},
       {label:'Org', render:s=>`<span class="t-sub">${esc(orgName(s.org_id))}</span>`},
       {label:'Type', render:s=>`${pill('p-off', s.venue_type)} <span class="t-sub">${s.size_in}"</span>`},
-      {label:'State', render:s=>liveScreens.includes(s.id)?pill('p-live','on air',true):pill('p-off','idle')},
+      {label:'State', render:s=>statusPill(s._status)},
       {label:'Camera', render:s=>s.has_camera?pill('p-ok','yes'):pill('p-warn','none')},
       {label:'Running', num:true, render:s=>{const n=liveOn(s.id).length;
         return n?`<strong>${n}</strong> <span class="t-sub">of ${s.advertiser_slots}</span>`:'<span class="t-sub">idle</span>';}},
@@ -127,6 +128,15 @@ const views = {
 };
 async function render(){
   const h = (location.hash || '#overview').slice(1);
+  stopScreenPoll();
+  if(h.startsWith('s/')){
+    const sid=h.slice(2);
+    $('#app').innerHTML='<div class="empty">Loading…</div>';
+    $('#app').innerHTML=await renderScreen(sid);
+    startScreenPoll(sid);
+    document.querySelectorAll('.rail a').forEach(a=>a.classList.remove('on'));
+    return;
+  }
   if(h.startsWith('c/')){
     $('#app').innerHTML='<div class="empty">Loading…</div>';
     $('#app').innerHTML=await renderDetail(h.slice(2), true, d);

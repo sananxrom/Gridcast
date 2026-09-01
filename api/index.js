@@ -99,6 +99,16 @@ app.use(async (req, res, next) => { try { await load(); next(); } catch (e) { ne
 
 const scope = (rows, orgId, isAdmin) => isAdmin ? rows : rows.filter(r => r.org_id === orgId);
 
+// screen status from heartbeat age
+function screenStatus(screen) {
+  const dev = db.devices.find(d => d.screen_id === screen.id);
+  if (!dev) return { state: 'unpaired', label: 'not paired', device: null, age_s: null };
+  const age = (Date.now() - new Date(dev.last_heartbeat_at).getTime()) / 1000;
+  const state = age < 90 ? 'live' : age < 900 ? 'stalled' : 'offline';
+  return { state, label: state === 'live' ? 'on air' : state === 'stalled' ? 'not responding' : 'offline',
+    device: dev, age_s: Math.round(age) };
+}
+
 app.get('/api/bootstrap', async (req, res) => {
   const u = db.users.find(x => x.id === req.query.user) || db.users[0];
   const isAdmin = u.role === 'platform_admin';
@@ -106,7 +116,7 @@ app.get('/api/bootstrap', async (req, res) => {
   res.json({
     user: u, org, isAdmin,
     orgs: db.orgs,
-    screens: scope(db.screens, u.org_id, isAdmin),
+    screens: scope(db.screens, u.org_id, isAdmin).map(s => ({ ...s, _status: screenStatus(s) })),
     advertisers: scope(db.advertisers, u.org_id, isAdmin),
     creatives: scope(db.creatives, u.org_id, isAdmin),
     campaigns: scope(db.campaigns, u.org_id, isAdmin),
@@ -261,6 +271,62 @@ app.post('/api/group/resolve', async (req, res) => {
     && (!r.location_tier || s.location_tier === r.location_tier)
   ).map(s => s.id);
   res.json({ screen_ids: ids });
+});
+
+app.post('/api/nowplaying', async (req, res) => {
+  const { screen_id, campaign_id, creative_id, duration_s } = req.body;
+  const dev = db.devices.find(d => d.screen_id === screen_id);
+  if (!dev) return res.sendStatus(404);
+  dev.now_playing = { campaign_id, creative_id, duration_s, started_at: now() };
+  dev.last_heartbeat_at = now(); dev.status = 'online';
+  res.json({ ok: true });
+});
+
+app.get('/api/screen/:id', async (req, res) => {
+  const screen = db.screens.find(s => s.id === req.params.id);
+  if (!screen) return res.sendStatus(404);
+  const st = screenStatus(screen);
+  const plays = db.plays.filter(p => p.screen_id === screen.id);
+  const presByPlay = Object.fromEntries(db.presence.map(p => [p.play_id, p]));
+  const today = new Date().toISOString().slice(0, 10);
+  const measured = plays.map(p => presByPlay[p.id]).filter(x => x && x.measured);
+  const cName = id => db.creatives.find(c => c.id === id) || null;
+  const aName = id => db.advertisers.find(a => a.id === id) || null;
+
+  const camps = db.campaigns.filter(c => c.screen_ids.includes(screen.id)).map(c => {
+    const cp = plays.filter(p => p.campaign_id === c.id);
+    const cm = cp.map(p => presByPlay[p.id]).filter(x => x && x.measured);
+    const live = c.status === 'active' && c.starts_at <= today && c.ends_at >= today;
+    return { id: c.id, name: c.name, status: c.status, live,
+      advertiser: aName(c.advertiser_id)?.name || '—',
+      starts_at: c.starts_at, ends_at: c.ends_at,
+      committed_budget: c.committed_budget, accrued_spend: c.accrued_spend,
+      creatives: c.creative_ids.map(cid => { const cr = cName(cid); return cr && {
+        id: cr.id, name: cr.name, youtube_id: cr.youtube_id, duration_s: cr.duration_s,
+        approval_status: cr.approval_status }; }).filter(Boolean),
+      plays: cp.length, avg: cm.length ? cm.reduce((a, b) => a + b.avg_persons, 0) / cm.length : null };
+  });
+
+  let np = null;
+  if (st.device?.now_playing && st.state === 'live') {
+    const n = st.device.now_playing;
+    const cr = cName(n.creative_id), c = db.campaigns.find(x => x.id === n.campaign_id);
+    np = { creative: cr, campaign: c ? { id: c.id, name: c.name } : null,
+      advertiser: c ? (aName(c.advertiser_id)?.name || '—') : '—',
+      started_at: n.started_at, duration_s: n.duration_s,
+      elapsed_s: (Date.now() - new Date(n.started_at).getTime()) / 1000 };
+  }
+
+  res.json({
+    screen, status: st, nowPlaying: np, campaigns: camps,
+    stats: { plays: plays.length,
+      playsToday: plays.filter(p => (p.ended_at || '').slice(0, 10) === today).length,
+      measured: measured.length,
+      avg: measured.length ? measured.reduce((a, b) => a + b.avg_persons, 0) / measured.length : null,
+      liveCampaigns: camps.filter(c => c.live).length },
+    recent: plays.slice(-40).reverse().map(p => ({ ...p,
+      creative: cName(p.creative_id), presence: presByPlay[p.id] || null }))
+  });
 });
 
 app.get('/api/_health', async (req, res) => res.json({ ok: true, store: store.mode, plays: db.plays.length }));

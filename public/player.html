@@ -126,6 +126,9 @@ function playCurrent() {
   $('#nowplay').innerHTML = `<b>${screenObj.name}</b> &nbsp;·&nbsp; ${item.advertiser} — ${item.creative_name}
     &nbsp;·&nbsp; slot ${(idx % playlist.length)+1}/${playlist.length}`;
   $('#cstateval').textContent = 'on air';
+  fetch('/api/nowplaying', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ screen_id: screenObj.id, campaign_id: item.campaign_id,
+      creative_id: item.creative_id, duration_s: item.duration_s || 10 }) }).catch(()=>{});
   clearTimeout(advanceTimer);
   advanceTimer = setTimeout(next, (item.duration_s || 10) * 1000);
 }
