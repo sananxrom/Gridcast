@@ -1,7 +1,11 @@
 node_modules
+/.next/
+/out/
+next-env.d.ts
 data/db.json
 .env
 .env.local
 .vercel
 .DS_Store
 _scratch/
+*.tsbuildinfo

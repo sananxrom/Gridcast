@@ -1,0 +1,79 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* cool-biased neutrals */
+    --background: 210 20% 98%;
+    --foreground: 215 25% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 215 25% 12%;
+    --muted: 210 16% 95%;
+    --muted-foreground: 215 12% 46%;
+    --accent: 210 16% 94%;
+    --accent-foreground: 215 25% 12%;
+    --border: 214 16% 89%;
+    --input: 214 16% 86%;
+    --ring: 175 77% 26%;
+
+    /* #0F766E teal — settled / verified */
+    --primary: 175 77% 26%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 16% 95%;
+    --secondary-foreground: 215 25% 20%;
+
+    /* #A16207 ochre — open / pending / undecided */
+    --warn: 38 92% 33%;
+    --warn-foreground: 0 0% 100%;
+
+    /* amber, reserved for ON AIR only */
+    --onair: 32 95% 44%;
+    --onair-foreground: 0 0% 100%;
+
+    --ok: 142 69% 29%;
+    --ok-foreground: 0 0% 100%;
+    --destructive: 0 72% 42%;
+    --destructive-foreground: 0 0% 100%;
+
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 215 28% 8%;
+    --foreground: 210 20% 92%;
+    --card: 215 25% 11%;
+    --card-foreground: 210 20% 92%;
+    --muted: 215 20% 16%;
+    --muted-foreground: 215 12% 62%;
+    --accent: 215 20% 18%;
+    --accent-foreground: 210 20% 92%;
+    --border: 215 18% 20%;
+    --input: 215 18% 24%;
+    --ring: 174 60% 45%;
+
+    --primary: 174 62% 42%;
+    --primary-foreground: 215 28% 8%;
+    --secondary: 215 20% 18%;
+    --secondary-foreground: 210 20% 92%;
+
+    --warn: 38 80% 52%;
+    --onair: 32 92% 55%;
+    --ok: 142 55% 45%;
+    --destructive: 0 65% 55%;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground font-sans antialiased; }
+  .tnum { font-variant-numeric: tabular-nums; }
+}
+
+/* hide scrollbars in nav rails */
+.no-sb::-webkit-scrollbar { display: none; }
+.no-sb { -ms-overflow-style: none; scrollbar-width: none; }
+
+@keyframes blip { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+.animate-blip { animation: blip 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .animate-blip { animation: none } }
