@@ -133,13 +133,13 @@ export default function Operator() {
         const cur = cs.filter(isLive), past = cs.filter((c: any) => !isLive(c));
         const tbl = (rows: any[], empty: string) => (
           <DataTable cols={[
-            { label: 'Campaign', render: (c: any) => <button onClick={() => go('c/' + c.id)} className="font-medium text-primary hover:underline">{c.name}</button> },
-            { label: 'Dates', render: (c: any) => <span className="font-mono text-[12px] text-muted-foreground">{c.starts_at} → {c.ends_at}</span> },
+            { label: 'Campaign', render: (c: any) => <button onClick={() => go('c/' + c.id)} className="text-left font-medium text-primary hover:underline">{c.name}</button> },
+            { label: 'Dates', render: (c: any) => <span className="block whitespace-nowrap font-mono text-[12px] leading-snug text-muted-foreground">{c.starts_at}<br />→ {c.ends_at}</span> },
             { label: 'Type', render: (c: any) => <Badge variant={c.campaign_type === 'network' ? 'default' : 'muted'}>{c.campaign_type === 'network' ? 'network' : 'yours'}</Badge> },
             { label: 'Screens', num: true, render: (c: any) => c.screen_ids.length },
             { label: 'Plays', num: true, render: (c: any) => d.plays.filter((p: any) => p.campaign_id === c.id).length },
             { label: 'Budget', num: true, render: (c: any) => { const p = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
-              return <div className="flex flex-col items-end gap-1">{inr(c.accrued_spend)} / {inr(c.committed_budget)}<Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
+              return <div className="flex flex-col items-end gap-1 whitespace-nowrap"><span>{inr(c.accrued_spend)}</span><span className="text-[11.5px] text-muted-foreground">of {inr(c.committed_budget)}</span><Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
             { label: 'Status', render: (c: any) => isLive(c) ? <Badge variant="onair" blip>current</Badge> : <Badge variant="muted">{c.status}</Badge> },
           ]} rows={rows} empty={empty} rowId={(c: any) => c.id} exportName="campaigns" />
         );
@@ -171,7 +171,7 @@ export default function Operator() {
         </Card>
         <SectionHead>Your screens</SectionHead>
         <DataTable cols={[
-          { label: 'Screen', sort: (s: any) => s.name, render: (s: any) => <><button onClick={() => go('s/' + s.id)} className="font-medium text-primary hover:underline">{s.name}</button><div className="text-[12px] text-muted-foreground">{s.address}</div></> },
+          { className: 'min-w-[168px]', label: 'Screen', sort: (s: any) => s.name, render: (s: any) => <><button onClick={() => go('s/' + s.id)} className="text-left font-medium text-primary hover:underline">{s.name}</button><div className="text-[12px] text-muted-foreground">{s.address}</div></> },
           { label: 'State', sort: (s: any) => s._status.state, render: (s: any) => <StatusBadge st={s._status} /> },
           { label: 'People / play', sort: (s: any) => trendScreen(s.id).filter(Boolean).slice(-1)[0] ?? -1, render: (s: any) => <Spark data={trendScreen(s.id)} /> },
           { label: 'Running', num: true, sort: (s: any) => liveOn(s.id).length, render: (s: any) => liveOn(s.id).length ? <><b>{liveOn(s.id).length}</b> <span className="text-muted-foreground">of {s.advertiser_slots}</span></> : <span className="text-muted-foreground">idle</span> },
@@ -248,7 +248,7 @@ export default function Operator() {
           return { a, cs, live: cs.filter(isLive), spend: cs.reduce((s: number, c: any) => s + c.accrued_spend, 0),
             fee: cs.reduce((s: number, c: any) => s + c.accrued_spend * (c.platform_fee_pct / 100), 0) }; };
         const cols = (showFee: boolean) => [
-          { label: 'Advertiser', render: (r: any) => <><button onClick={() => go('a/' + r.a.id)} className="font-medium text-primary hover:underline">{r.a.name}</button><div className="text-[12px] text-muted-foreground">{r.a.contact}</div></> },
+          { className: 'min-w-[168px]', label: 'Advertiser', render: (r: any) => <><button onClick={() => go('a/' + r.a.id)} className="text-left font-medium text-primary hover:underline">{r.a.name}</button><div className="text-[12px] text-muted-foreground">{r.a.contact}</div></> },
           { label: 'Status', render: (r: any) => r.live.length ? <Badge variant="onair" blip>current</Badge> : <Badge variant="muted">{r.cs.length ? 'past' : 'no campaigns'}</Badge> },
           { label: 'Category', render: (r: any) => <Badge variant="muted">{r.a.category}</Badge> },
           { label: 'Campaigns', num: true, render: (r: any) => <>{r.live.length} <span className="text-muted-foreground">live / {r.cs.length} total</span></> },
@@ -276,14 +276,14 @@ export default function Operator() {
         <PageHead title="Campaigns" sub="Budgets are entered manually — the platform is a ledger, not a processor"
           actions={<Button onClick={() => go('new')}>+ New campaign</Button>} />
         <DataTable cols={[
-          { label: 'Campaign', sort: (c: any) => c.name, render: (c: any) => <><button onClick={() => go('c/' + c.id)} className="font-medium text-primary hover:underline">{c.name}</button><div className="text-[12px] text-muted-foreground">{advName(c.advertiser_id)}</div></> },
-          { label: 'Dates', sort: (c: any) => c.ends_at, render: (c: any) => <span className="font-mono text-[12px] text-muted-foreground">{c.starts_at} → {c.ends_at}</span> },
+          { className: 'min-w-[168px]', label: 'Campaign', sort: (c: any) => c.name, render: (c: any) => <><button onClick={() => go('c/' + c.id)} className="text-left font-medium text-primary hover:underline">{c.name}</button><div className="text-[12px] text-muted-foreground">{advName(c.advertiser_id)}</div></> },
+          { label: 'Dates', sort: (c: any) => c.ends_at, render: (c: any) => <span className="block whitespace-nowrap font-mono text-[12px] leading-snug text-muted-foreground">{c.starts_at}<br />→ {c.ends_at}</span> },
           { label: 'Type', sort: (c: any) => c.campaign_type, render: (c: any) => <Badge variant={c.campaign_type === 'network' ? 'default' : 'muted'}>{c.campaign_type}</Badge> },
           { label: 'Screens', num: true, sort: (c: any) => c.screen_ids.length, render: (c: any) => c.screen_ids.length },
           { label: 'People / play', sort: (c: any) => trendCampaign(c.id).filter(Boolean).slice(-1)[0] ?? -1, render: (c: any) => <Spark data={trendCampaign(c.id)} /> },
-          { label: 'Rate', num: true, render: (c: any) => c.rate_type === 'flat' ? <>{inr(c.committed_budget)} <span className="text-muted-foreground">flat</span></> : <>{inr(c.rate_value)} <span className="text-muted-foreground">/play</span></> },
+          { label: 'Rate', num: true, render: (c: any) => <span className="whitespace-nowrap">{c.rate_type === 'flat' ? <>{inr(c.committed_budget)} <span className="text-muted-foreground">flat</span></> : <>{inr(c.rate_value)} <span className="text-muted-foreground">/play</span></>}</span> },
           { label: 'Budget', num: true, sort: (c: any) => (c.committed_budget ? c.accrued_spend / c.committed_budget : 0), render: (c: any) => { const p = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
-            return <div className="flex flex-col items-end gap-1">{inr(c.accrued_spend)} / {inr(c.committed_budget)}<Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
+            return <div className="flex flex-col items-end gap-1 whitespace-nowrap"><span>{inr(c.accrued_spend)}</span><span className="text-[11.5px] text-muted-foreground">of {inr(c.committed_budget)}</span><Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
           { label: 'Invoice', sort: (c: any) => c.invoice_status, render: (c: any) => (
             <InlineSelect value={c.invoice_status} choices={INVOICE_CHOICES} onChange={v => setCampaign(c, { invoice_status: v })}>
               <Badge variant={c.invoice_status === 'paid' ? 'ok' : c.invoice_status === 'invoiced' ? 'warn' : 'muted'}>{c.invoice_status.replace(/_/g, ' ')}</Badge>
@@ -355,7 +355,7 @@ export default function Operator() {
         </div>
         <SectionHead>By screen</SectionHead>
         <DataTable cols={[
-          { label: 'Screen', render: (s: any) => <button onClick={() => go('s/' + s.id)} className="font-medium text-primary hover:underline">{s.name}</button> },
+          { label: 'Screen', render: (s: any) => <button onClick={() => go('s/' + s.id)} className="text-left font-medium text-primary hover:underline">{s.name}</button> },
           { label: 'Venue', render: (s: any) => <Badge variant="muted">{s.venue_type}</Badge> },
           { label: 'Plays', num: true, render: (s: any) => d.plays.filter((p: any) => p.screen_id === s.id).length },
           { label: 'Avg people', num: true, sort: (s: any) => { const r = presFor(s.id); return r.length ? r.reduce((a: number, b: any) => a + b.avg_persons, 0) / r.length : -1; },

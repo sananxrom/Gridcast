@@ -67,11 +67,11 @@ export default function Advertiser() {
         <SectionHead>Campaigns</SectionHead>
         <DataTable cols={[
           { label: 'Campaign', render: (c: any) => <span className="font-medium">{c.name}</span> },
-          { label: 'Dates', render: (c: any) => <span className="font-mono text-[12px] text-muted-foreground">{c.starts_at} → {c.ends_at}</span> },
+          { label: 'Dates', render: (c: any) => <span className="block whitespace-nowrap font-mono text-[12px] leading-snug text-muted-foreground">{c.starts_at}<br />→ {c.ends_at}</span> },
           { label: 'Screens', num: true, render: (c: any) => c.screen_ids.length },
           { label: 'Plays', num: true, render: (c: any) => d.plays.filter((p: any) => p.campaign_id === c.id).length },
           { label: 'Budget used', num: true, render: (c: any) => { const p = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
-            return <div className="flex flex-col items-end gap-1">{inr(c.accrued_spend)} / {inr(c.committed_budget)}<Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
+            return <div className="flex flex-col items-end gap-1"><span className="whitespace-nowrap">{inr(c.accrued_spend)} / {inr(c.committed_budget)}</span><Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
           { label: 'Status', render: (c: any) => isLive(c) ? <Badge variant="onair" blip>live</Badge> : <Badge variant="muted">{c.status}</Badge> },
         ]} rows={mine} rowId={(c: any) => c.id} exportName="my-campaigns" empty="No campaigns yet" />
         <SectionHead>Recent plays</SectionHead>

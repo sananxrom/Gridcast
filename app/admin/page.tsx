@@ -142,7 +142,7 @@ export default function Admin() {
       {view === 'screens' && (<>
         <PageHead title="All screens" sub={orgFilter === 'all' ? 'Every screen across every organisation' : `Filtered to ${currentOrg.name}`} />
         <DataTable cols={[
-          { label: 'Screen', sort: (s: any) => s.name, render: (s: any) => <><button onClick={() => go('s/' + s.id)} className="font-medium text-primary hover:underline">{s.name}</button><div className="text-[12px] text-muted-foreground">{s.address}</div></> },
+          { className: 'min-w-[168px]', label: 'Screen', sort: (s: any) => s.name, render: (s: any) => <><button onClick={() => go('s/' + s.id)} className="text-left font-medium text-primary hover:underline">{s.name}</button><div className="text-[12px] text-muted-foreground">{s.address}</div></> },
           { label: 'Code', render: (s: any) => <span className="font-mono">{s.code}</span> },
           { label: 'Org', render: (s: any) => <span className="text-muted-foreground">{orgName(s.org_id)}</span> },
           { label: 'Type', render: (s: any) => <><Badge variant="muted">{s.venue_type}</Badge> <span className="text-[12px] text-muted-foreground">{s.size_in}&quot;</span></> },
@@ -162,13 +162,13 @@ export default function Admin() {
         <PageHead title="Campaigns" sub={orgFilter === 'all' ? 'All organisations' : currentOrg.name}
           actions={<Button onClick={() => go('new')}>+ New campaign</Button>} />
         <DataTable cols={[
-          { label: 'Campaign', render: (c: any) => <><button onClick={() => go('c/' + c.id)} className="font-medium text-primary hover:underline">{c.name}</button><div className="text-[12px] text-muted-foreground">{advName(c.advertiser_id)}</div></> },
+          { className: 'min-w-[168px]', label: 'Campaign', render: (c: any) => <><button onClick={() => go('c/' + c.id)} className="text-left font-medium text-primary hover:underline">{c.name}</button><div className="text-[12px] text-muted-foreground">{advName(c.advertiser_id)}</div></> },
           { label: 'Org', render: (c: any) => <span className="text-muted-foreground">{orgName(c.org_id)}</span> },
           { label: 'Type', render: (c: any) => <Badge variant={c.campaign_type === 'network' ? 'default' : 'muted'}>{c.campaign_type}</Badge> },
-          { label: 'Dates', render: (c: any) => <span className="font-mono text-[12px] text-muted-foreground">{c.starts_at} → {c.ends_at}</span> },
+          { label: 'Dates', render: (c: any) => <span className="block whitespace-nowrap font-mono text-[12px] leading-snug text-muted-foreground">{c.starts_at}<br />→ {c.ends_at}</span> },
           { label: 'Screens', num: true, render: (c: any) => c.screen_ids.length },
           { label: 'Budget', num: true, render: (c: any) => { const p = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
-            return <div className="flex flex-col items-end gap-1">{inr(c.accrued_spend)} / {inr(c.committed_budget)}<Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
+            return <div className="flex flex-col items-end gap-1 whitespace-nowrap"><span>{inr(c.accrued_spend)}</span><span className="text-[11.5px] text-muted-foreground">of {inr(c.committed_budget)}</span><Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
           { label: 'Fee', num: true, render: (c: any) => c.platform_fee_pct ? `${c.platform_fee_pct}%` : <span className="text-muted-foreground">0%</span> },
           { label: 'Status', sort: (c: any) => c.status, render: (c: any) => (
             <InlineSelect value={c.status} choices={STATUS_CHOICES} onChange={v => setCampaign(c, { status: v })}>
@@ -205,7 +205,7 @@ export default function Admin() {
         <PageHead title="Device health" sub="Paired players across the fleet" />
         <DataTable cols={[
           { label: 'Screen', render: (v: any) => { const s = d.screens.find((x: any) => x.id === v.screen_id);
-            return <><button onClick={() => go('s/' + v.screen_id)} className="font-medium text-primary hover:underline">{s?.name ?? '—'}</button><div className="font-mono text-[11.5px] text-muted-foreground">{v.id}</div></>; } },
+            return <><button onClick={() => go('s/' + v.screen_id)} className="text-left font-medium text-primary hover:underline">{s?.name ?? '—'}</button><div className="font-mono text-[11.5px] text-muted-foreground">{v.id}</div></>; } },
           { label: 'Org', render: (v: any) => <span className="text-muted-foreground">{orgName(v.org_id)}</span> },
           { label: 'Status', render: (v: any) => { const s = d.screens.find((x: any) => x.id === v.screen_id); return <StatusBadge st={s?._status} />; } },
           { label: 'Last heartbeat', render: (v: any) => <span className="font-mono text-[12px] text-muted-foreground">{fmtDate(v.last_heartbeat_at)}</span> },

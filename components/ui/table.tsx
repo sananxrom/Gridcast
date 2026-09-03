@@ -188,7 +188,7 @@ export function DataTable<T>({
           {view.length === 0 ? (
             <div className="py-12 text-center text-[13px] text-muted-foreground">{filtered ? 'Nothing matches those filters.' : empty}</div>
           ) : (
-            <table className="w-full min-w-[560px] text-[13px]">
+            <table className="w-full min-w-[680px] text-[13px]">
               <thead className="sticky top-0 z-10">
                 <tr className="bg-muted">
                   {selectable && (
@@ -199,7 +199,7 @@ export function DataTable<T>({
                   {cols.map((c, i) => {
                     const on = sort?.i === i;
                     return (
-                      <th key={i} className={cn('whitespace-nowrap border-b border-border px-4 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70', c.num && 'text-right', c.className)}>
+                      <th key={i} className={cn('whitespace-nowrap border-b border-border px-3.5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70', c.num && 'text-right', c.className)}>
                         {c.sort ? (
                           <button onClick={() => setSort(s => (s?.i === i ? (s.dir === 1 ? { i, dir: -1 } : null) : { i, dir: 1 }))}
                             className={cn('inline-flex items-center gap-1 uppercase tracking-wider transition-colors hover:text-foreground', on && 'text-foreground', c.num && 'flex-row-reverse')}>
@@ -226,7 +226,7 @@ export function DataTable<T>({
                         </td>
                       )}
                       {cols.map((c, j) => (
-                        <td key={j} className={cn('px-4 py-3 align-middle', c.num && 'tnum text-right font-mono')}>{c.render(r)}</td>
+                        <td key={j} className={cn('px-3.5 py-3 align-middle', c.num && 'tnum text-right font-mono', c.className)}>{c.render(r)}</td>
                       ))}
                     </tr>
                   );

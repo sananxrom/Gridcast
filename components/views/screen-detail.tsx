@@ -143,14 +143,14 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
       <SectionHead hint={`· ${d.campaigns.length} total, ${d.campaigns.filter((c: any) => c.live).length} live`}>Campaigns on this screen</SectionHead>
       <DataTable
         cols={[
-          { label: 'Campaign', render: (c: any) => <><button onClick={() => onGo('c/' + c.id)} className="font-medium text-primary hover:underline">{c.name}</button><div className="text-[12px] text-muted-foreground">{c.advertiser}</div></> },
+          { label: 'Campaign', render: (c: any) => <><button onClick={() => onGo('c/' + c.id)} className="text-left font-medium text-primary hover:underline">{c.name}</button><div className="text-[12px] text-muted-foreground">{c.advertiser}</div></> },
           { label: 'Creatives', render: (c: any) => <div className="flex gap-1.5">{c.creatives.map((cr: any) => <Thumb key={cr.id} id={cr.youtube_id} w={58} />)}</div> },
           { label: 'Dates', render: (c: any) => <span className="font-mono text-[12px] text-muted-foreground">{c.starts_at}<br />→ {c.ends_at}</span> },
           { label: 'Status', render: (c: any) => c.live ? <Badge variant="onair" blip>live</Badge> : <Badge variant="muted">{c.status}</Badge> },
           { label: 'Plays here', num: true, render: (c: any) => <b>{c.plays}</b> },
           { label: 'Avg people', num: true, render: (c: any) => c.avg === null ? <span className="text-muted-foreground">—</span> : <b>{c.avg.toFixed(1)}</b> },
           { label: 'Budget', num: true, render: (c: any) => { const p = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
-            return <div className="flex flex-col items-end gap-1">{inr(c.accrued_spend)} / {inr(c.committed_budget)}<Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
+            return <div className="flex flex-col items-end gap-1"><span className="whitespace-nowrap">{inr(c.accrued_spend)} / {inr(c.committed_budget)}</span><Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
         ]}
         rows={d.campaigns} rowId={(c: any) => c.id} exportName="screen-campaigns" empty="No campaigns booked on this screen yet" />
 
