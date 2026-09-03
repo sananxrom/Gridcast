@@ -297,6 +297,28 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
     db.configs = db.configs.filter((x: any) => x.id !== seg[1]);
     await save(); return { body: { ok: true } };
   }
+  /** Set or clear keys on a screen's own override config, creating it on demand. */
+  if (method === 'POST' && seg[0] === 'screen' && seg[1] && seg[2] === 'config') {
+    const screen = db.screens.find((x: any) => x.id === seg[1]);
+    if (!screen) return { status: 404, body: { error: 'not found' } };
+    const bad = Object.keys(body.values || {}).filter((k: string) => cfg.LOCKED_KEYS.includes(k));
+    if (bad.length) return { status: 403, body: { error: `Locked settings cannot be set on a screen: ${bad.join(', ')}` } };
+
+    let own = db.configs.find((x: any) => x.layer === 'screen' && x.target_id === screen.id);
+    if (!own) {
+      own = { id: uid('cfg'), org_id: screen.org_id, layer: 'screen', target_id: screen.id, priority: 0,
+        name: `${screen.name} — override`, description: 'Set on this screen only', tags: [],
+        target_platform: ['android'], status: 'active', values: {}, created_at: nowISO() };
+      db.configs.push(own);
+    }
+    own.values = { ...own.values, ...(body.values || {}) };
+    for (const k of body.unset || []) delete own.values[k];
+    own.updated_at = nowISO();
+    if (!Object.keys(own.values).length) db.configs = db.configs.filter((x: any) => x.id !== own.id);
+    await save();
+    return { body: { config: resolveFor(screen), stack: cfg.applicable(screen, db.groups || [], db.configs || []).map((c: any) => ({ id: c.id, name: c.name, layer: c.layer })) } };
+  }
+
   if (method === 'POST' && seg[0] === 'screen' && seg[1] && seg[2] === 'reprice') {
     const screen = db.screens.find((x: any) => x.id === seg[1]);
     if (!screen) return { status: 404, body: { error: 'not found' } };

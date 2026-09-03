@@ -47,12 +47,13 @@ function opt(o: string | [string, string]) {
  * where its value came from, and how to give it back.
  */
 export function SettingRow({
-  s, value, source, onChange, onReset, editable = true, isSet,
+  s, value, source, onChange, onReset, editable = true, isSet, setLabel = 'set by this config',
 }: {
   s: Setting; value: any; source?: { name: string; layer: string } | null;
   onChange?: (v: any) => void; onReset?: () => void; editable?: boolean;
   /** In an editor: does THIS config carry the key, or is it inherited? */
   isSet?: boolean;
+  setLabel?: string;
 }) {
   const locked = !!s.locked;
   const ro = locked || !editable || s.ctl === 'derived' || s.soon;
@@ -122,7 +123,7 @@ export function SettingRow({
           {s.platforms && <span className="font-mono text-[10.5px] text-muted-foreground/70">[{s.platforms.join(' · ')}]</span>}
         </div>
         {locked && s.lockReason && <div className="mt-0.5 text-[11.5px] text-muted-foreground">{s.lockReason}</div>}
-        {isSet === true && <div className="mt-0.5 text-[11.5px] font-medium text-primary">set by this config</div>}
+        {isSet === true && <div className="mt-0.5 text-[11.5px] font-medium text-primary">{setLabel}</div>}
         {source && <div className="mt-0.5 text-[11.5px] text-muted-foreground">⤷ {source.name}</div>}
       </div>
       <div className="flex shrink-0 items-center gap-2">
@@ -145,6 +146,7 @@ export function ConfigList({ user, onOpen, onChanged }: {
 }) {
   const [rows, setRows] = useState<any[] | null>(null);
   const [adding, setAdding] = useState(false);
+  const [assign, setAssign] = useState<any>(null);
   const load = () => api(`/config?user=${user.id}`).then(setRows);
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [user.id]);
 
@@ -162,6 +164,7 @@ export function ConfigList({ user, onOpen, onChanged }: {
     </Card>
 
     {adding && <NewConfig user={user} onDone={() => { setAdding(false); load(); onChanged(); }} />}
+    {assign && <AssignConfig config={assign} user={user} onDone={() => { setAssign(null); load(); onChanged(); }} />}
 
     <DataTable
       cols={[
@@ -175,6 +178,9 @@ export function ConfigList({ user, onOpen, onChanged }: {
           render: (c: any) => <>{Object.keys(c.values || {}).length} <span className="text-muted-foreground">of 116</span></> },
         { label: 'Platforms', render: (c: any) => <span className="font-mono text-[11.5px] text-muted-foreground">{(c.target_platform || []).join(' · ')}</span> },
         { label: 'Priority', num: true, sort: (c: any) => c.priority ?? 0, render: (c: any) => c.priority ?? 0 },
+        { label: '', render: (c: any) => Object.keys(c.values || {}).length
+          ? <button onClick={() => setAssign(c)} className="whitespace-nowrap text-[12px] font-medium text-primary hover:underline">Copy to screens</button>
+          : <span className="text-[12px] text-muted-foreground">empty</span> },
         { label: 'Tags', render: (c: any) => (c.tags || []).length
           ? <div className="flex flex-wrap gap-1">{c.tags.map((t: string) => <span key={t} className="rounded border border-border/70 bg-muted px-1.5 py-0.5 font-mono text-[10.5px] text-muted-foreground">{t}</span>)}</div>
           : <span className="text-muted-foreground">—</span> },
@@ -319,5 +325,169 @@ export function ConfigEditor({ id, user, onGo, onChanged }: {
     <SaveBar dirty={dirty} saving={saving} saved={saved} err={err}
       note={`${count} setting${count === 1 ? '' : 's'} carried by this config.`}
       onSave={save} onDiscard={() => setValues({ ...(conf.values || {}) })} />
+  </>);
+}
+
+/* ------------------------------------------------------- assign to screens */
+
+export function AssignConfig({ config, user, onDone }: {
+  config: any; user: SessionUser; onDone: () => void;
+}) {
+  const [screens, setScreens] = useState<any[]>([]);
+  const [pick, setPick] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(0);
+
+  useEffect(() => { api(`/bootstrap?user=${user.id}`).then(d => setScreens(d.screens || [])); }, [user.id]);
+
+  const toggle = (id: string) => setPick(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const keys = Object.keys(config.values || {});
+
+  const run = async () => {
+    setBusy(true);
+    try { await api('/config/assign', { config_id: config.id, screen_ids: [...pick] }); setDone(pick.size); onDone(); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Card className="mb-4 border-primary/40 p-5">
+      <h3 className="text-[14px] font-semibold">Copy “{config.name}” onto screens</h3>
+      <p className="mb-3 mt-1 text-[12.5px] text-muted-foreground">
+        This writes {keys.length} setting{keys.length === 1 ? '' : 's'} into each screen’s own override, so they
+        keep the values even if this config changes later. To keep them following this config, put the screens in
+        its group instead.
+      </p>
+      <div className="mb-3 flex flex-wrap gap-1.5">
+        {keys.map(k => <span key={k} className="rounded border border-border/70 bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">{k}</span>)}
+      </div>
+      <div className="max-h-64 overflow-y-auto rounded-lg border border-border/60">
+        {screens.map((s: any) => (
+          <label key={s.id} className="flex cursor-pointer items-center gap-3 border-b border-border/50 px-3 py-2 text-[13px] last:border-0 hover:bg-muted/50">
+            <input type="checkbox" checked={pick.has(s.id)} onChange={() => toggle(s.id)}
+              className="size-[15px] rounded border-border accent-[hsl(var(--primary))]" />
+            <span className="flex-1"><span className="font-medium">{s.name}</span>
+              <span className="ml-2 text-muted-foreground">{s.venue_name}</span></span>
+            <Badge variant="muted">{s.venue_type}</Badge>
+          </label>
+        ))}
+      </div>
+      <div className="mt-3 flex items-center gap-2">
+        <Button disabled={!pick.size || busy} onClick={run}>{busy ? 'Copying…' : `Copy to ${pick.size} screen${pick.size === 1 ? '' : 's'}`}</Button>
+        <Button variant="outline" onClick={onDone}>Close</Button>
+        {done > 0 && <span className="text-[12.5px] text-ok">Copied onto {done} screen{done === 1 ? '' : 's'}.</span>}
+      </div>
+    </Card>
+  );
+}
+
+/* --------------------------------------------- resolved config on a screen */
+
+export function ScreenConfig({ screenId, d, onChanged }: {
+  screenId: string; d: any; onChanged: () => void;
+}) {
+  const [schema, setSchema] = useState<Schema | null>(null);
+  const [q, setQ] = useState('');
+  const [onlySet, setOnlySet] = useState(false);
+  const [busy, setBusy] = useState('');
+  useEffect(() => { api('/config/schema').then(setSchema); }, []);
+
+  if (!schema || !d.config) return <Empty>Loading…</Empty>;
+  const resolved = d.config as Record<string, { value: any; source: any }>;
+  const stack = d.configStack || [];
+  const drift = d.pricingDrift || [];
+
+  const write = async (payload: any) => {
+    setBusy('1');
+    try { await api(`/screen/${screenId}/config`, payload); onChanged(); } finally { setBusy(''); }
+  };
+
+  const needle = q.trim().toLowerCase();
+  const shown = schema.settings.filter(s => {
+    if (onlySet && resolved[s.key]?.source == null) return false;
+    return !needle || s.label.toLowerCase().includes(needle) || s.key.includes(needle);
+  });
+
+  const fmt = (v: any) => typeof v === 'object' && v !== null
+    ? (v.from ? `${v.from}–${v.to}` : JSON.stringify(v)) : String(v);
+
+  return (<>
+    {drift.length > 0 && (
+      <Card className="mb-4 border-warn/40 bg-warn/[0.06] p-4">
+        <div className="text-[13px] font-semibold text-warn">Pricing inputs changed since this rate was set</div>
+        <div className="mt-2 space-y-1 text-[12.5px]">
+          {drift.map((x: any) => (
+            <div key={x.key} className="font-mono">
+              {x.label}: <span className="text-muted-foreground">{fmt(x.was)}</span> → <b>{fmt(x.now)}</b>
+            </div>
+          ))}
+        </div>
+        <p className="mt-2 max-w-2xl text-[12.5px] text-muted-foreground">
+          These feed the rate card. Re-pricing accepts the new values as the basis for this screen’s rate;
+          keeping the rate leaves the price where it is and records that it no longer matches.
+        </p>
+        <div className="mt-3 flex gap-2">
+          <Button size="sm" disabled={!!busy}
+            onClick={async () => { setBusy('1'); await api(`/screen/${screenId}/reprice`, {}); onChanged(); setBusy(''); }}>
+            Re-price against current values
+          </Button>
+          <Button size="sm" variant="outline" onClick={onChanged}>Keep the rate</Button>
+        </div>
+      </Card>
+    )}
+
+    <SectionHead hint="· most specific wins">Where this screen’s settings come from</SectionHead>
+    <Card className="mb-4 overflow-hidden p-0">
+      {stack.map((c: any, i: number) => (
+        <div key={c.id} className="flex items-center gap-3 border-b border-border/50 px-4 py-2.5 text-[13px] last:border-0">
+          <span className="font-mono text-[11px] text-muted-foreground/60">{i + 1}</span>
+          <Badge variant={c.layer === 'platform' ? 'default' : 'muted'}>{LAYERS[c.layer]?.label ?? c.layer}</Badge>
+          <span className="flex-1 font-medium">{c.name}</span>
+          <span className="text-[12px] text-muted-foreground">{c.keys ?? 0} setting{c.keys === 1 ? '' : 's'}</span>
+        </div>
+      ))}
+      {!stack.length && <div className="px-4 py-6 text-center text-[13px] text-muted-foreground">Running entirely on defaults.</div>}
+    </Card>
+
+    {(d.configConflicts || []).length > 0 && (
+      <Card className="mb-4 border-warn/40 bg-warn/[0.06] p-3.5 text-[12.5px]">
+        <b className="text-warn">Two configs in the same layer set the same value.</b> Priority decides, but this is
+        worth tidying: {d.configConflicts.map((c: any) => `${c.key} (${c.configs.map((x: any) => x.name).join(', ')})`).join(' · ')}
+      </Card>
+    )}
+
+    <Card className="mb-4 p-3.5">
+      <div className="flex flex-wrap items-center gap-3">
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search settings…"
+          className="h-8 w-64 rounded-md border border-input bg-background px-2.5 text-[12.5px] outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+        <label className="flex cursor-pointer items-center gap-2 text-[12.5px]">
+          <input type="checkbox" checked={onlySet} onChange={e => setOnlySet(e.target.checked)}
+            className="size-[15px] rounded border-border accent-[hsl(var(--primary))]" />
+          Only settings that come from a config
+        </label>
+      </div>
+    </Card>
+
+    {schema.groups.map(g => {
+      const items = shown.filter(s => s.group === g.id);
+      if (!items.length) return null;
+      return (
+        <div key={g.id} className="mb-5">
+          <SectionHead hint={`· ${g.hint}`}>{g.title}</SectionHead>
+          <Card className="overflow-hidden p-0">
+            {items.map(s => {
+              const r = resolved[s.key];
+              const ownHere = r?.source?.layer === 'screen';
+              return (
+                <SettingRow key={s.key} s={s} value={r?.value} isSet={ownHere ? true : undefined} setLabel="set on this screen"
+                  source={r?.source && !ownHere ? { name: r.source.name, layer: r.source.layer } : null}
+                  editable={!s.locked}
+                  onChange={v => write({ values: { [s.key]: v } })}
+                  onReset={ownHere ? () => write({ unset: [s.key] }) : undefined} />
+              );
+            })}
+          </Card>
+        </div>
+      );
+    })}
   </>);
 }

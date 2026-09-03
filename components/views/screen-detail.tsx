@@ -1,7 +1,7 @@
 'use client';
 import React, { useEffect, useState } from 'react';
 import { api } from '@/lib/client';
-import { inr, fmtDate } from '@/lib/utils';
+import { inr, fmtDate, cn } from '@/lib/utils';
 import { PageHead, SectionHead } from '@/components/ui/app-shell';
 import { DataTable } from '@/components/ui/table';
 import { Stat, Progress } from '@/components/ui/stat';
@@ -10,11 +10,13 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input, Field, Label } from '@/components/ui/input';
 import { StatusBadge, Thumb, Empty, ScreenPhoto } from './bits';
+import { ScreenConfig } from './config-views';
 import { Skeleton } from '@/components/ui/loader';
 
 export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: string) => void; onChanged: () => void }) {
   const [d, setD] = useState<any>(null);
   const [edit, setEdit] = useState(false);
+  const [tab, setTab] = useState<'live' | 'config'>('live');
   const [f, setF] = useState<any>(null);
 
   const load = () => api(`/screen/${id}`).then(x => {
@@ -65,6 +67,19 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
         sub={<>{s.venue_name} · {s.address}</>}
         back={{ label: 'My screens', go: 'screens', onGo }}
         actions={<><StatusBadge st={st} /><Button variant="outline" size="sm" onClick={() => setEdit(!edit)}>Edit screen</Button></>} />
+
+      <div className="mb-4 inline-flex rounded-lg border border-border bg-card p-0.5">
+        {([['live', 'Live & performance'], ['config', 'Config']] as const).map(([k, label]) => (
+          <button key={k} onClick={() => setTab(k)}
+            className={cn('rounded-md px-3 py-1.5 text-[12.5px] font-medium transition-colors',
+              tab === k ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground')}>
+            {label}{k === 'config' && (d.pricingDrift || []).length > 0 && <span className="ml-1.5 text-warn">•</span>}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'config' && <ScreenConfig screenId={id} d={d} onChanged={load} />}
+      {tab === 'live' && (<>
 
       {edit && (
         <Card className="mb-5 border-primary/40 p-5">
@@ -163,6 +178,7 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
           { label: 'People present', num: true, render: (p: any) => p.presence?.measured ? <b>{p.presence.avg_persons.toFixed(1)}</b> : <span className="text-muted-foreground">not measured</span> },
         ]}
         rows={d.recent} rowId={(p: any) => p.id} exportName="screen-plays" empty="No plays on this screen yet" />
+      </>)}
     </>
   );
 }
