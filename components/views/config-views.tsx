@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Input, Select, Field, Label } from '@/components/ui/input';
 import { useDirtyForm, SaveBar } from '@/components/ui/form';
 import { Empty } from './bits';
+import { ScreenPreview, DayBar, LoopBar, ZoneEditor } from '@/components/ui/config-visuals';
 import { cn } from '@/lib/utils';
 
 type Setting = {
@@ -137,6 +138,40 @@ export function SettingRow({
       </div>
     </div>
   );
+}
+
+
+/**
+ * The panel that heads a group, drawn from whatever the group's own settings
+ * currently resolve to. `get` reads a key; `set` is absent in read-only views.
+ */
+function GroupVisual({ group, get, set, extra }: {
+  group: string;
+  get: (k: string) => any;
+  set?: (k: string, v: any) => void;
+  extra?: { slotsSold?: number; slotsTotal?: number; frameUrl?: string | null };
+}) {
+  if (group === 'screen') {
+    const res = get('resolution') || { w: 1920, h: 1080 };
+    return <ScreenPreview sizeIn={Number(get('size_in')) || 0} res={res} orientation={String(get('orientation') || 'landscape')} />;
+  }
+  if (group === 'playback') {
+    const hrs = (() => { const t = get('operating_hours'); if (!t?.from || !t?.to) return 12;
+      const [a, b] = [t.from, t.to].map((x: string) => { const [h, m] = x.split(':').map(Number); return h + m / 60; });
+      return Math.round(((b - a + 24) % 24) * 10) / 10 || 24; })();
+    return (<>
+      <LoopBar loopS={Number(get('loop_length_s')) || 0} slotS={Number(get('slot_duration_s')) || 0}
+        slotsSold={extra?.slotsSold ?? 0} slotsTotal={extra?.slotsTotal ?? 10} hours={hrs} />
+    </>);
+  }
+  if (group === 'reliability') {
+    return <DayBar trading={get('operating_hours')} syncWindow={get('sync_window')} restartAt={get('restart_times')} />;
+  }
+  if (group === 'measurement') {
+    return <ZoneEditor value={get('detection_zone') || { x: 0, y: 0, w: 100, h: 100 }} frameUrl={extra?.frameUrl}
+      disabled={!set} onChange={v => set?.('detection_zone', v)} />;
+  }
+  return null;
 }
 
 /* ------------------------------------------------------------------ list -- */
@@ -307,6 +342,9 @@ export function ConfigEditor({ id, user, onGo, onChanged }: {
         <div key={g.id} className="mb-5">
           <SectionHead hint={`· ${g.hint}`}>{g.title}</SectionHead>
           <Card className="overflow-hidden p-0">
+            {!needle && <GroupVisual group={g.id}
+              get={k => (k in values ? values[k] : schema.settings.find(x => x.key === k)?.def)}
+              set={(k, v) => setKey(k, v)} />}
             {items.map(s => {
               const isSet = s.key in values;
               return (
@@ -474,6 +512,10 @@ export function ScreenConfig({ screenId, d, onChanged }: {
         <div key={g.id} className="mb-5">
           <SectionHead hint={`· ${g.hint}`}>{g.title}</SectionHead>
           <Card className="overflow-hidden p-0">
+            {!needle && !onlySet && <GroupVisual group={g.id}
+              get={k => resolved[k]?.value}
+              set={(k, v) => write({ values: { [k]: v } })}
+              extra={{ slotsSold: d.stats?.liveCampaigns ?? 0, slotsTotal: d.screen?.advertiser_slots ?? 10, frameUrl: d.frameUrl }} />}
             {items.map(s => {
               const r = resolved[s.key];
               const ownHere = r?.source?.layer === 'screen';
