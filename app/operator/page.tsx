@@ -14,6 +14,7 @@ import { Card } from '@/components/ui/card';
 import { Input, Select, Field, Label } from '@/components/ui/input';
 import { StatusBadge, Thumb, Empty, SoonPage, ScreenPhoto } from '@/components/views/bits';
 import { BootLoader } from '@/components/ui/loader';
+import { ConfigList, ConfigEditor } from '@/components/views/config-views';
 import { useDirtyForm, SaveBar } from '@/components/ui/form';
 import { ScreenDetail } from '@/components/views/screen-detail';
 import { CampaignDetail } from '@/components/views/campaign-detail';
@@ -69,7 +70,7 @@ export default function Operator() {
 
   const nav = operatorNav({ inbox: alerts.length });
   const orgs = [{ id: user.org_id, name: user.orgName, type: 'operator' }];
-  const titleOf: Record<string, string> = { overview: 'Overview', screens: 'My screens', groups: 'Screen groups', advertisers: 'Advertisers', campaigns: 'Campaigns', creatives: 'Creatives', settlement: 'Settlement', inbox: 'Inbox', analytics: 'Analytics', reports: 'Reports', profile: 'Profile', settings: 'Organisation', 'set-org': 'Organisation', 'set-billing': 'Billing & payouts', 'set-team': 'Team & users', 'set-api': 'API keys', 'set-hooks': 'Webhooks' };
+  const titleOf: Record<string, string> = { overview: 'Overview', screens: 'My screens', groups: 'Screen groups', advertisers: 'Advertisers', campaigns: 'Campaigns', creatives: 'Creatives', settlement: 'Settlement', inbox: 'Inbox', analytics: 'Analytics', reports: 'Reports', profile: 'Profile', configs: 'Device configs', settings: 'Organisation', 'set-org': 'Organisation', 'set-billing': 'Billing & payouts', 'set-team': 'Team & users', 'set-api': 'API keys', 'set-hooks': 'Webhooks' };
   const presFor = (sid: string) => d.presence.filter((x: any) => x.screen_id === sid && x.measured);
   const trendScreen = (sid: string) => daySeries(presFor(sid).map((x: any) => ({ at: x.at, value: x.avg_persons })));
   const trendCampaign = (cid: string) => {
@@ -111,6 +112,7 @@ export default function Operator() {
     if (view.startsWith('s/')) return [root, { label: 'My screens', go: 'screens' }, nameOf(d.screens, view.slice(2), 'Screen')];
     if (view.startsWith('c/')) return [root, { label: 'Campaigns', go: 'campaigns' }, nameOf(d.campaigns, view.slice(2), 'Campaign')];
     if (view.startsWith('a/')) return [root, { label: 'Advertisers', go: 'advertisers' }, nameOf(d.advertisers, view.slice(2), 'Advertiser')];
+    if (view.startsWith('cfg/')) return [root, { label: 'Device configs', go: 'configs' }, 'Config'];
     if (view === 'new') return [root, { label: 'Campaigns', go: 'campaigns' }, 'New campaign'];
     if (view.startsWith('set-') || view === 'settings') return [root, 'Settings', titleOf[view] ?? 'Settings'];
     if (view === 'overview') return [root];
@@ -121,6 +123,9 @@ export default function Operator() {
     <AppShell groups={nav.groups} bottom={nav.bottom} activeId={view} onSelect={go}
       orgs={orgs} currentOrg={orgs[0]} onOrgSelect={() => {}} breadcrumb={trail}
       cmdItems={cmdItems} onGo={go} user={{ name: user.name, role: user.role }}>
+
+      {view === 'configs' && <ConfigList user={user} onOpen={id => go('cfg/' + id)} onChanged={() => reload()} />}
+      {view.startsWith('cfg/') && <ConfigEditor id={view.slice(4)} user={user} onGo={go} onChanged={() => reload()} />}
 
       {view.startsWith('s/') && <ScreenDetail id={view.slice(2)} onGo={go} onChanged={() => reload()} />}
       {view.startsWith('c/') && <CampaignDetail id={view.slice(2)} boot={d} onGo={go} onChanged={() => reload()} />}

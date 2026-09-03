@@ -18,6 +18,7 @@ import { CampaignDetail } from '@/components/views/campaign-detail';
 import { CampaignBuilder } from '@/components/views/campaign-builder';
 import type { CmdItem } from '@/components/ui/command-palette';
 import { BootLoader } from '@/components/ui/loader';
+import { ConfigList, ConfigEditor } from '@/components/views/config-views';
 import { useDirtyForm, SaveBar } from '@/components/ui/form';
 
 export default function Admin() {
@@ -58,7 +59,7 @@ export default function Admin() {
   const nav = adminNav({ inbox: alerts.length, approvals: pending.length });
   const orgs = [{ id: 'all', name: 'All organisations', type: 'gridcast' }, ...d.orgs.map((o: any) => ({ id: o.id, name: o.name, type: o.type }))];
   const currentOrg = orgs.find(o => o.id === orgFilter) ?? orgs[0];
-  const titleOf: Record<string, string> = { overview: 'Overview', orgs: 'Organisations', screens: 'All screens', devices: 'Device health', campaigns: 'Campaigns', approvals: 'Approvals', inbox: 'Inbox', analytics: 'Analytics', profile: 'Profile', settings: 'Organisation', 'set-org': 'Organisation', 'set-api': 'API keys', 'set-hooks': 'Webhooks', 'set-billing': 'Billing & payouts', 'set-team': 'Team & users' };
+  const titleOf: Record<string, string> = { overview: 'Overview', orgs: 'Organisations', screens: 'All screens', devices: 'Device health', campaigns: 'Campaigns', approvals: 'Approvals', inbox: 'Inbox', analytics: 'Analytics', profile: 'Profile', configs: 'Device configs', settings: 'Organisation', 'set-org': 'Organisation', 'set-api': 'API keys', 'set-hooks': 'Webhooks', 'set-billing': 'Billing & payouts', 'set-team': 'Team & users' };
   const trendScreen = (sid: string) => daySeries(
     d.presence.filter((x: any) => x.screen_id === sid && x.measured).map((x: any) => ({ at: x.at, value: x.avg_persons })));
   const setCampaign = async (c: any, patch: any) => { await api(`/campaign/${c.id}`, patch); reload(); };
@@ -85,6 +86,7 @@ export default function Admin() {
     if (view.startsWith('s/')) return [root, { label: 'All screens', go: 'screens' }, nameOf(d.screens, view.slice(2), 'Screen')];
     if (view.startsWith('c/')) return [root, { label: 'Campaigns', go: 'campaigns' }, nameOf(d.campaigns, view.slice(2), 'Campaign')];
     if (view.startsWith('a/')) return [root, { label: 'Organisations', go: 'orgs' }, nameOf(d.advertisers, view.slice(2), 'Advertiser')];
+    if (view.startsWith('cfg/')) return [root, { label: 'Device configs', go: 'configs' }, 'Config'];
     if (view.startsWith('set-') || view === 'settings') return [root, 'Settings', titleOf[view] ?? 'Settings'];
     if (view === 'overview') return [root];
     return [root, titleOf[view] ?? 'Overview'];
@@ -95,6 +97,9 @@ export default function Admin() {
       orgs={orgs} currentOrg={currentOrg} onOrgSelect={setOrgFilter}
       breadcrumb={trail} cmdItems={cmdItems} onGo={go}
       user={{ name: user.name, role: user.role }}>
+
+      {view === 'configs' && <ConfigList user={user} onOpen={id => go('cfg/' + id)} onChanged={() => reload()} />}
+      {view.startsWith('cfg/') && <ConfigEditor id={view.slice(4)} user={user} onGo={go} onChanged={() => reload()} />}
 
       {view.startsWith('s/') && <ScreenDetail id={view.slice(2)} onGo={go} onChanged={reload} />}
       {view.startsWith('c/') && <CampaignDetail id={view.slice(2)} boot={d} onGo={go} onChanged={reload} />}

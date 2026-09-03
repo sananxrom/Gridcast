@@ -1,7 +1,7 @@
 import {
   Search, LayoutDashboard, Inbox, Activity, Monitor, Layers, Users, Megaphone, Film,
   Wallet, Settings, Building2, CreditCard, UserCog, Terminal, Blocks, LogOut, User,
-  ShieldCheck, HardDrive, FileBarChart,
+  ShieldCheck, HardDrive, FileBarChart, SlidersHorizontal,
 } from 'lucide-react';
 import type { NavGroupData, NavItemData } from '@/components/ui/sidebar-nav';
 
@@ -33,6 +33,7 @@ export function operatorNav(badges: { inbox: number }): { groups: NavGroupData[]
       { heading: 'Network', items: [
         { id: 'screens', title: 'My screens', icon: Monitor },
         { id: 'groups', title: 'Screen groups', icon: Layers },
+        { id: 'configs', title: 'Device configs', icon: SlidersHorizontal },
       ] },
       { heading: 'Sales', items: [
         { id: 'advertisers', title: 'Advertisers', icon: Users },
@@ -61,6 +62,7 @@ export function adminNav(badges: { inbox: number; approvals: number }): { groups
         { id: 'orgs', title: 'Organisations', icon: Building2 },
         { id: 'screens', title: 'All screens', icon: Monitor },
         { id: 'devices', title: 'Device health', icon: HardDrive },
+        { id: 'configs', title: 'Device configs', icon: SlidersHorizontal },
       ] },
       { heading: 'Demand', items: [
         { id: 'campaigns', title: 'Campaigns', icon: Megaphone },
