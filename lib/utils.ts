@@ -21,3 +21,20 @@ export const isLive = (c: { status: string; starts_at: string; ends_at: string }
 
 export const fmtDate = (d: string | number | Date, opts?: Intl.DateTimeFormatOptions) =>
   new Date(d).toLocaleString('en-IN', opts ?? { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+/** Daily averages for the last `days` days — null on days with no measurement. */
+export function daySeries(
+  records: { at?: string; ended_at?: string; value: number }[],
+  days = 7,
+): (number | null)[] {
+  const buckets: number[][] = Array.from({ length: days }, () => []);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  for (const r of records) {
+    const t = new Date(r.at || r.ended_at || 0).getTime();
+    if (!t) continue;
+    const diff = Math.floor((t - today.getTime()) / 864e5); // 0 = today, -1 = yesterday
+    const i = days - 1 + diff;
+    if (i >= 0 && i < days) buckets[i].push(r.value);
+  }
+  return buckets.map(b => (b.length ? Math.round((b.reduce((a, c) => a + c, 0) / b.length) * 10) / 10 : null));
+}

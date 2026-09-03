@@ -1,14 +1,28 @@
 'use client';
 import * as React from 'react';
+import { ArrowUpDown, ArrowUp, ArrowDown, Undo2, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from './button';
+
+export type Col<T> = {
+  label: string;
+  num?: boolean;
+  className?: string;
+  render: (r: T) => React.ReactNode;
+  /** Supplying this makes the column sortable. */
+  sort?: (r: T) => string | number;
+};
 
 export type BulkAction<T> = {
   label: string;
   run: (rows: T[]) => Promise<void> | void;
+  /** Called with the pre-action rows, so the change can be put back. */
+  undo?: (rows: T[]) => Promise<void> | void;
   variant?: 'default' | 'outline' | 'destructive' | 'ghost' | 'subtle';
   confirm?: string;
 };
+
+export type Facet<T> = { label: string; get: (r: T) => string | null | undefined };
 
 function Check({ checked, mixed, onToggle, label }: {
   checked: boolean; mixed?: boolean; onToggle: (shift: boolean) => void; label: string;
@@ -21,10 +35,8 @@ function Check({ checked, mixed, onToggle, label }: {
   );
 }
 
-/** Flattens the primitive fields of the selected rows into CSV. */
 function toCSV(input: any[]): string {
   if (input.length && typeof input[0] !== 'object') return ['value', ...input.map(v => String(v))].join('\n');
-  // one level of nesting is flattened, so wrapper rows like { screen, plays } still export
   const rows = input.map(r => {
     const out: any = {};
     for (const [k, v] of Object.entries(r ?? {})) {
@@ -49,26 +61,49 @@ function download(name: string, text: string) {
 
 export function DataTable<T>({
   cols, rows, empty = 'Nothing here yet', className,
-  rowId, bulk, exportName, onDone,
+  rowId, bulk, exportName, onDone, search, facets, toolbar,
 }: {
-  cols: { label: string; num?: boolean; className?: string; render: (r: T) => React.ReactNode }[];
+  cols: Col<T>[];
   rows: T[]; empty?: string; className?: string;
-  /** Supplying this turns on multi-select. */
   rowId?: (r: T) => string;
-  /** Extra actions offered when rows are selected. CSV export is always offered. */
   bulk?: BulkAction<T>[];
   exportName?: string;
-  /** Called after a bulk action finishes, so the page can refetch. */
   onDone?: () => void;
+  /** Text pulled from a row for the search box. Supplying it shows the box. */
+  search?: (r: T) => string;
+  /** Dropdown filters built from the data itself. */
+  facets?: Facet<T>[];
+  toolbar?: React.ReactNode;
 }) {
   const [sel, setSel] = React.useState<Set<string>>(new Set());
   const [busy, setBusy] = React.useState('');
+  const [undo, setUndo] = React.useState<{ label: string; rows: T[]; fn: (r: T[]) => any } | null>(null);
+  const [sort, setSort] = React.useState<{ i: number; dir: 1 | -1 } | null>(null);
+  const [q, setQ] = React.useState('');
+  const [picked, setPicked] = React.useState<Record<string, string>>({});
   const lastIdx = React.useRef<number | null>(null);
   const selectable = !!rowId;
 
-  const ids = React.useMemo(() => (rowId ? rows.map(rowId) : []), [rows, rowId]);
+  // filter, then sort — selection and actions always run on what is on screen
+  const view = React.useMemo(() => {
+    let out = rows;
+    if (q && search) { const n = q.toLowerCase(); out = out.filter(r => search(r).toLowerCase().includes(n)); }
+    for (const f of facets ?? []) {
+      const want = picked[f.label];
+      if (want) out = out.filter(r => String(f.get(r) ?? '') === want);
+    }
+    if (sort) {
+      const get = cols[sort.i]?.sort;
+      if (get) out = [...out].sort((a, b) => {
+        const x = get(a), y = get(b);
+        return (typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y))) * sort.dir;
+      });
+    }
+    return out;
+  }, [rows, q, search, facets, picked, sort, cols]);
 
-  // drop selections whose rows are gone
+  const ids = React.useMemo(() => (rowId ? view.map(rowId) : []), [view, rowId]);
+
   React.useEffect(() => {
     setSel(prev => {
       const live = new Set(ids);
@@ -79,7 +114,7 @@ export function DataTable<T>({
 
   const allOn = ids.length > 0 && ids.every(id => sel.has(id));
   const someOn = sel.size > 0;
-  const chosen = rows.filter((r, i) => sel.has(ids[i]));
+  const chosen = view.filter((r, i) => sel.has(ids[i]));
 
   const toggleAll = () => setSel(allOn ? new Set() : new Set(ids));
   const toggleRow = (i: number, shift: boolean) => {
@@ -97,73 +132,139 @@ export function DataTable<T>({
 
   const run = async (a: BulkAction<T>) => {
     if (a.confirm && !window.confirm(a.confirm.replace('{n}', String(chosen.length)))) return;
+    const before = chosen;
     setBusy(a.label);
-    try { await a.run(chosen); setSel(new Set()); onDone?.(); }
-    finally { setBusy(''); }
+    try {
+      await a.run(before);
+      setSel(new Set());
+      onDone?.();
+      if (a.undo) {
+        setUndo({ label: `${a.label} · ${before.length} row${before.length === 1 ? "" : "s"}`, rows: before, fn: a.undo });
+        setTimeout(() => setUndo(u => (u && u.rows === before ? null : u)), 9000);
+      }
+    } finally { setBusy(''); }
   };
 
+  const doUndo = async () => {
+    if (!undo) return;
+    setBusy('undo');
+    try { await undo.fn(undo.rows); setUndo(null); onDone?.(); } finally { setBusy(''); }
+  };
+
+  const filtered = view.length !== rows.length;
+  const showTools = !!search || !!(facets ?? []).length || !!toolbar;
+
   return (
-    <div className={cn('rounded-xl border border-border/60 bg-card shadow-sm', className)}>
-      {selectable && someOn && (
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-primary/[0.05] px-4 py-2.5">
-          <div className="text-[12.5px] font-medium">
-            {sel.size} selected
-            <button onClick={() => setSel(new Set())} className="ml-3 font-normal text-muted-foreground hover:text-foreground hover:underline">Clear</button>
+    <>
+      <div className={cn('rounded-xl border border-border/60 bg-card shadow-sm', className)}>
+        {showTools && (
+          <div className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2.5">
+            {search && (
+              <input value={q} onChange={e => setQ(e.target.value)} placeholder="Filter…"
+                className="h-8 w-48 rounded-md border border-input bg-background px-2.5 text-[12.5px] outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+            )}
+            {(facets ?? []).map(f => {
+              const opts = Array.from(new Set(rows.map(r => f.get(r)).filter(Boolean) as string[])).sort();
+              if (opts.length < 2) return null;
+              return (
+                <select key={f.label} value={picked[f.label] ?? ''}
+                  onChange={e => setPicked(p => ({ ...p, [f.label]: e.target.value }))}
+                  className="h-8 rounded-md border border-input bg-background px-2 text-[12.5px] outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <option value="">{f.label}: all</option>
+                  {opts.map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+              );
+            })}
+            {filtered && (
+              <button onClick={() => { setQ(''); setPicked({}); }}
+                className="inline-flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground">
+                <X className="size-3" />{view.length} of {rows.length}
+              </button>
+            )}
+            <div className="ml-auto flex items-center gap-2">{toolbar}</div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {(bulk ?? []).map(a => (
-              <Button key={a.label} size="sm" variant={a.variant ?? 'outline'} disabled={!!busy} onClick={() => run(a)}>
-                {busy === a.label ? 'Working…' : a.label}
+        )}
+        <div className="overflow-x-auto">
+          {view.length === 0 ? (
+            <div className="py-12 text-center text-[13px] text-muted-foreground">{filtered ? 'Nothing matches those filters.' : empty}</div>
+          ) : (
+            <table className="w-full min-w-[560px] text-[13px]">
+              <thead className="sticky top-0 z-10">
+                <tr className="bg-muted">
+                  {selectable && (
+                    <th className="w-9 border-b border-border px-3 py-2.5">
+                      <Check checked={allOn} mixed={someOn} onToggle={toggleAll} label="Select all" />
+                    </th>
+                  )}
+                  {cols.map((c, i) => {
+                    const on = sort?.i === i;
+                    return (
+                      <th key={i} className={cn('whitespace-nowrap border-b border-border px-4 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70', c.num && 'text-right', c.className)}>
+                        {c.sort ? (
+                          <button onClick={() => setSort(s => (s?.i === i ? (s.dir === 1 ? { i, dir: -1 } : null) : { i, dir: 1 }))}
+                            className={cn('inline-flex items-center gap-1 uppercase tracking-wider transition-colors hover:text-foreground', on && 'text-foreground', c.num && 'flex-row-reverse')}>
+                            {c.label}
+                            {on ? (sort!.dir === 1 ? <ArrowUp className="size-3" /> : <ArrowDown className="size-3" />)
+                              : <ArrowUpDown className="size-3 opacity-0 transition-opacity group-hover/th:opacity-40" />}
+                          </button>
+                        ) : c.label}
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {view.map((r, i) => {
+                  const on = selectable && sel.has(ids[i]);
+                  return (
+                    <tr key={selectable ? ids[i] : i}
+                      className={cn('border-b border-border/60 transition-colors last:border-0',
+                        on ? 'bg-primary/[0.06]' : 'hover:bg-black/[0.02] dark:hover:bg-white/[0.02]')}>
+                      {selectable && (
+                        <td className="px-3 py-3 align-middle">
+                          <Check checked={!!on} onToggle={shift => toggleRow(i, shift)} label="Select row" />
+                        </td>
+                      )}
+                      {cols.map((c, j) => (
+                        <td key={j} className={cn('px-4 py-3 align-middle', c.num && 'tnum text-right font-mono')}>{c.render(r)}</td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      {/* one floating bar, so it stays put on a long list */}
+      {selectable && (someOn || undo) && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-40 flex justify-center px-4">
+          <div className="pointer-events-auto flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card/95 px-3.5 py-2 shadow-2xl backdrop-blur">
+            {someOn ? (<>
+              <span className="text-[12.5px] font-medium">{sel.size} selected</span>
+              <button onClick={() => setSel(new Set())} className="text-[12px] text-muted-foreground hover:text-foreground hover:underline">Clear</button>
+              <span className="h-4 w-px bg-border" />
+              <div className="flex flex-wrap gap-2">
+                {(bulk ?? []).map(a => (
+                  <Button key={a.label} size="sm" variant={a.variant ?? 'outline'} disabled={!!busy} onClick={() => run(a)}>
+                    {busy === a.label ? 'Working…' : a.label}
+                  </Button>
+                ))}
+                <Button size="sm" variant="outline" disabled={!!busy}
+                  onClick={() => download(`${exportName || 'export'}-${new Date().toISOString().slice(0, 10)}.csv`, toCSV(chosen as any[]))}>
+                  Export CSV
+                </Button>
+              </div>
+            </>) : (<>
+              <span className="text-[12.5px]">{undo!.label}</span>
+              <Button size="sm" variant="outline" disabled={!!busy} onClick={doUndo}>
+                <Undo2 className="size-3.5" />{busy === 'undo' ? 'Undoing…' : 'Undo'}
               </Button>
-            ))}
-            <Button size="sm" variant="outline" disabled={!!busy}
-              onClick={() => download(`${exportName || 'export'}-${new Date().toISOString().slice(0, 10)}.csv`, toCSV(chosen as any[]))}>
-              Export CSV
-            </Button>
+            </>)}
           </div>
         </div>
       )}
-      <div className="overflow-x-auto">
-        {rows.length === 0 ? (
-          <div className="py-12 text-center text-[13px] text-muted-foreground">{empty}</div>
-        ) : (
-          <table className="w-full min-w-[560px] text-[13px]">
-            <thead>
-              <tr className="bg-muted/60">
-                {selectable && (
-                  <th className="w-9 border-b border-border px-3 py-2.5">
-                    <Check checked={allOn} mixed={someOn} onToggle={toggleAll} label="Select all" />
-                  </th>
-                )}
-                {cols.map((c, i) => (
-                  <th key={i} className={cn('whitespace-nowrap border-b border-border px-4 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70', c.num && 'text-right', c.className)}>
-                    {c.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => {
-                const on = selectable && sel.has(ids[i]);
-                return (
-                  <tr key={selectable ? ids[i] : i}
-                    className={cn('border-b border-border/60 transition-colors last:border-0',
-                      on ? 'bg-primary/[0.06]' : 'hover:bg-black/[0.02] dark:hover:bg-white/[0.02]')}>
-                    {selectable && (
-                      <td className="px-3 py-3 align-middle">
-                        <Check checked={!!on} onToggle={shift => toggleRow(i, shift)} label="Select row" />
-                      </td>
-                    )}
-                    {cols.map((c, j) => (
-                      <td key={j} className={cn('px-4 py-3 align-middle', c.num && 'tnum text-right font-mono')}>{c.render(r)}</td>
-                    ))}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
+    </>
   );
 }

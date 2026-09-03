@@ -86,5 +86,38 @@ export function seed() {
     { id: 'grp_hi', org_id: 'org_sec17', name: 'High-footfall (43" and up)', group_type: 'dynamic', rule_json: { min_size: 43 }, screen_ids: [], created_at: nowISO() },
     { id: 'grp_food', org_id: 'org_sec17', name: 'Food & drink venues', group_type: 'dynamic', rule_json: { venue_types: ['cafe'] }, screen_ids: [], created_at: nowISO() },
   ];
-  return { settings: { platform_name: 'Gridcast', default_fee_pct: 10, support_email: 'ops@gridcast.in' }, orgs, users, screens, advertisers, creatives, campaigns, groups, devices: [] as any[], plays: [] as any[], presence: [] as any[] };
+  // fourteen days of history, so trends and averages have something to say
+  const plays: any[] = [];
+  const presence: any[] = [];
+  let rnd = 7;
+  const rand = () => { rnd = (rnd * 1103515245 + 12345) % 2147483648; return rnd / 2147483648; };
+  const live = campaigns.filter(c => c.status === 'active');
+  for (let day = 13; day >= 0; day--) {
+    for (const c of live) {
+      for (const sid of c.screen_ids) {
+        const scr = screens.find(x => x.id === sid);
+        if (!scr) continue;
+        const cid = c.creative_ids[Math.floor(rand() * c.creative_ids.length)] || c.creative_ids[0];
+        const per = 3 + Math.floor(rand() * 4);
+        for (let k = 0; k < per; k++) {
+          const at = new Date(Date.now() - day * 864e5 - Math.floor(rand() * 12) * 36e5);
+          const dur = (scr.slot_duration_s || 10) * 1000;
+          const play = { id: uid('ply'), org_id: scr.org_id, screen_id: sid, campaign_id: c.id, creative_id: cid,
+            started_at: new Date(at.getTime() - dur).toISOString(), ended_at: at.toISOString(), duration_ms: dur,
+            source: 'seed', created_at: at.toISOString() };
+          plays.push(play);
+          if (!scr.has_camera) continue;
+          // venue-typical footfall, drifting a little over the fortnight
+          const base = { mall: 9, cafe: 4.2, gym: 3.1, grocery: 2.4, pharmacy: 1.8 }[scr.venue_type as string] ?? 3;
+          const drift = scr.venue_type === 'grocery' ? -0.06 : 0.05;
+          const avg = Math.max(0, base + drift * (13 - day) + (rand() - 0.5) * 1.6);
+          presence.push({ id: uid('prs'), play_id: play.id, org_id: scr.org_id, screen_id: sid,
+            measured: true, avg_persons: Math.round(avg * 10) / 10, sample_count: Math.round(dur / 2000),
+            model_ver: 'coco-ssd@2.2.3', at: at.toISOString() });
+        }
+      }
+    }
+  }
+
+  return { settings: { platform_name: 'Gridcast', default_fee_pct: 10, support_email: 'ops@gridcast.in' }, orgs, users, screens, advertisers, creatives, campaigns, groups, devices: [] as any[], plays, presence };
 }

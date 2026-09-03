@@ -1,10 +1,12 @@
 'use client';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, session, type SessionUser } from '@/lib/client';
-import { inr, isLive, ytId } from '@/lib/utils';
+import { inr, isLive, ytId, daySeries } from '@/lib/utils';
 import { operatorNav } from '@/lib/nav';
 import { AppShell, PageHead, SectionHead, type Crumb } from '@/components/ui/app-shell';
 import { DataTable, type BulkAction } from '@/components/ui/table';
+import { InlineSelect } from '@/components/ui/popover';
+import { Spark } from '@/components/ui/spark';
 import { Stat, Progress } from '@/components/ui/stat';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -68,15 +70,39 @@ export default function Operator() {
   const nav = operatorNav({ inbox: alerts.length });
   const orgs = [{ id: user.org_id, name: user.orgName, type: 'operator' }];
   const titleOf: Record<string, string> = { overview: 'Overview', screens: 'My screens', groups: 'Screen groups', advertisers: 'Advertisers', campaigns: 'Campaigns', creatives: 'Creatives', settlement: 'Settlement', inbox: 'Inbox', analytics: 'Analytics', reports: 'Reports', profile: 'Profile', settings: 'Organisation', 'set-org': 'Organisation', 'set-billing': 'Billing & payouts', 'set-team': 'Team & users', 'set-api': 'API keys', 'set-hooks': 'Webhooks' };
+  const presFor = (sid: string) => d.presence.filter((x: any) => x.screen_id === sid && x.measured);
+  const trendScreen = (sid: string) => daySeries(presFor(sid).map((x: any) => ({ at: x.at, value: x.avg_persons })));
+  const trendCampaign = (cid: string) => {
+    const pids = new Set(d.plays.filter((p: any) => p.campaign_id === cid).map((p: any) => p.id));
+    return daySeries(d.presence.filter((x: any) => x.measured && pids.has(x.play_id)).map((x: any) => ({ at: x.at, value: x.avg_persons })));
+  };
+  const setCampaign = async (c: any, patch: any) => { await api(`/campaign/${c.id}`, patch); reload(); };
+  const setScreen = async (x: any, patch: any) => { await api(`/screen/${x.id}`, { ...x, ...patch }); reload(); };
+  const STATUS_CHOICES = [
+    { value: 'active', label: 'Active', dot: 'hsl(var(--ok))' },
+    { value: 'paused', label: 'Paused', dot: 'hsl(var(--warn))' },
+    { value: 'complete', label: 'Complete', dot: 'hsl(var(--muted-foreground))' },
+  ];
+  const INVOICE_CHOICES = [
+    { value: 'not_invoiced', label: 'Not invoiced', dot: 'hsl(var(--muted-foreground))' },
+    { value: 'invoiced', label: 'Invoiced', dot: 'hsl(var(--warn))' },
+    { value: 'paid', label: 'Paid', dot: 'hsl(var(--ok))' },
+  ];
+  const TIER_CHOICES = [
+    { value: 'standard', label: 'Standard' }, { value: 'good', label: 'Good' }, { value: 'prime', label: 'Prime' },
+  ];
+  const restoreC = (k: string) => async (rows: any[]) => { for (const c of rows) await api(`/campaign/${c.id}`, { [k]: c[k] }); };
   const campaignBulk: BulkAction<any>[] = [
-    { label: 'Pause', run: async rows => { for (const c of rows) await api(`/campaign/${c.id}`, { status: 'paused' }); } },
-    { label: 'Resume', run: async rows => { for (const c of rows) await api(`/campaign/${c.id}`, { status: 'active' }); } },
-    { label: 'Mark invoiced', run: async rows => { for (const c of rows) await api(`/campaign/${c.id}`, { invoice_status: 'invoiced' }); } },
-    { label: 'Mark paid', run: async rows => { for (const c of rows) await api(`/campaign/${c.id}`, { invoice_status: 'paid' }); } },
+    { label: 'Pause', run: async rows => { for (const c of rows) await api(`/campaign/${c.id}`, { status: 'paused' }); }, undo: restoreC('status') },
+    { label: 'Resume', run: async rows => { for (const c of rows) await api(`/campaign/${c.id}`, { status: 'active' }); }, undo: restoreC('status') },
+    { label: 'Mark invoiced', run: async rows => { for (const c of rows) await api(`/campaign/${c.id}`, { invoice_status: 'invoiced' }); }, undo: restoreC('invoice_status') },
+    { label: 'Mark paid', run: async rows => { for (const c of rows) await api(`/campaign/${c.id}`, { invoice_status: 'paid' }); }, undo: restoreC('invoice_status') },
   ];
   const screenBulk: BulkAction<any>[] = [
-    { label: 'Activate', run: async rows => { for (const x of rows) await api(`/screen/${x.id}`, { ...x, status: 'active' }); } },
+    { label: 'Activate', run: async rows => { for (const x of rows) await api(`/screen/${x.id}`, { ...x, status: 'active' }); },
+      undo: async rows => { for (const x of rows) await api(`/screen/${x.id}`, x); } },
     { label: 'Pause', run: async rows => { for (const x of rows) await api(`/screen/${x.id}`, { ...x, status: 'paused' }); },
+      undo: async rows => { for (const x of rows) await api(`/screen/${x.id}`, x); },
       confirm: 'Pause {n} screen(s)? They stop receiving new plays.' },
   ];
   const nameOf = (arr: any[], id: string, fb: string) => arr.find((x: any) => x.id === id)?.name ?? fb;
@@ -145,12 +171,14 @@ export default function Operator() {
         </Card>
         <SectionHead>Your screens</SectionHead>
         <DataTable cols={[
-          { label: 'Screen', render: (s: any) => <><button onClick={() => go('s/' + s.id)} className="font-medium text-primary hover:underline">{s.name}</button><div className="text-[12px] text-muted-foreground">{s.address}</div></> },
-          { label: 'State', render: (s: any) => <StatusBadge st={s._status} /> },
-          { label: 'Code', render: (s: any) => <span className="font-mono">{s.code}</span> },
-          { label: 'Running', num: true, render: (s: any) => liveOn(s.id).length ? <><b>{liveOn(s.id).length}</b> <span className="text-muted-foreground">of {s.advertiser_slots}</span></> : <span className="text-muted-foreground">idle</span> },
-          { label: 'Per slot / mo', num: true, render: (s: any) => inr(s.slot_price_month) },
-        ]} rows={d.screens} rowId={(s: any) => s.id} exportName="screens" bulk={screenBulk} onDone={() => reload()} />
+          { label: 'Screen', sort: (s: any) => s.name, render: (s: any) => <><button onClick={() => go('s/' + s.id)} className="font-medium text-primary hover:underline">{s.name}</button><div className="text-[12px] text-muted-foreground">{s.address}</div></> },
+          { label: 'State', sort: (s: any) => s._status.state, render: (s: any) => <StatusBadge st={s._status} /> },
+          { label: 'People / play', sort: (s: any) => trendScreen(s.id).filter(Boolean).slice(-1)[0] ?? -1, render: (s: any) => <Spark data={trendScreen(s.id)} /> },
+          { label: 'Running', num: true, sort: (s: any) => liveOn(s.id).length, render: (s: any) => liveOn(s.id).length ? <><b>{liveOn(s.id).length}</b> <span className="text-muted-foreground">of {s.advertiser_slots}</span></> : <span className="text-muted-foreground">idle</span> },
+          { label: 'Per slot / mo', num: true, sort: (s: any) => s.slot_price_month, render: (s: any) => inr(s.slot_price_month) },
+        ]} rows={d.screens} rowId={(s: any) => s.id} exportName="screens" bulk={screenBulk} onDone={() => reload()}
+          search={(s: any) => `${s.name} ${s.venue_name} ${s.address}`}
+          facets={[{ label: 'State', get: (s: any) => s._status.state }, { label: 'Venue', get: (s: any) => s.venue_type }]} />
       </>)}
 
       {view === 'screens' && (() => {
@@ -232,7 +260,8 @@ export default function Operator() {
           <PageHead title="Advertisers" sub="Your clients, and any that Gridcast has brought to your screens"
             actions={<AddAdvertiser user={user} onAdded={() => reload()} />} />
           <SectionHead hint={`· ${mine.length}`}>Your advertisers</SectionHead>
-          <DataTable cols={cols(false)} rows={mine.map(row)} empty="No advertisers yet" rowId={(r: any) => r.a.id} exportName="advertisers" />
+          <DataTable cols={cols(false)} rows={mine.map(row)} empty="No advertisers yet" rowId={(r: any) => r.a.id} exportName="advertisers"
+            search={(r: any) => `${r.a.name} ${r.a.category} ${r.a.contact}`} facets={[{ label: 'Category', get: (r: any) => r.a.category }]} />
           <SectionHead hint="· network campaigns on your released slots">Brought by Gridcast</SectionHead>
           {bygc.length ? (<>
             <DataTable cols={cols(true)} rows={bygc.map(row)} rowId={(r: any) => r.a.id} exportName="advertisers-gridcast" />
@@ -247,16 +276,26 @@ export default function Operator() {
         <PageHead title="Campaigns" sub="Budgets are entered manually — the platform is a ledger, not a processor"
           actions={<Button onClick={() => go('new')}>+ New campaign</Button>} />
         <DataTable cols={[
-          { label: 'Campaign', render: (c: any) => <><button onClick={() => go('c/' + c.id)} className="font-medium text-primary hover:underline">{c.name}</button><div className="text-[12px] text-muted-foreground">{advName(c.advertiser_id)}</div></> },
-          { label: 'Dates', render: (c: any) => <span className="font-mono text-[12px] text-muted-foreground">{c.starts_at} → {c.ends_at}</span> },
-          { label: 'Type', render: (c: any) => <Badge variant={c.campaign_type === 'network' ? 'default' : 'muted'}>{c.campaign_type}</Badge> },
-          { label: 'Screens', num: true, render: (c: any) => c.screen_ids.length },
+          { label: 'Campaign', sort: (c: any) => c.name, render: (c: any) => <><button onClick={() => go('c/' + c.id)} className="font-medium text-primary hover:underline">{c.name}</button><div className="text-[12px] text-muted-foreground">{advName(c.advertiser_id)}</div></> },
+          { label: 'Dates', sort: (c: any) => c.ends_at, render: (c: any) => <span className="font-mono text-[12px] text-muted-foreground">{c.starts_at} → {c.ends_at}</span> },
+          { label: 'Type', sort: (c: any) => c.campaign_type, render: (c: any) => <Badge variant={c.campaign_type === 'network' ? 'default' : 'muted'}>{c.campaign_type}</Badge> },
+          { label: 'Screens', num: true, sort: (c: any) => c.screen_ids.length, render: (c: any) => c.screen_ids.length },
+          { label: 'People / play', sort: (c: any) => trendCampaign(c.id).filter(Boolean).slice(-1)[0] ?? -1, render: (c: any) => <Spark data={trendCampaign(c.id)} /> },
           { label: 'Rate', num: true, render: (c: any) => c.rate_type === 'flat' ? <>{inr(c.committed_budget)} <span className="text-muted-foreground">flat</span></> : <>{inr(c.rate_value)} <span className="text-muted-foreground">/play</span></> },
-          { label: 'Budget', num: true, render: (c: any) => { const p = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
+          { label: 'Budget', num: true, sort: (c: any) => (c.committed_budget ? c.accrued_spend / c.committed_budget : 0), render: (c: any) => { const p = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
             return <div className="flex flex-col items-end gap-1">{inr(c.accrued_spend)} / {inr(c.committed_budget)}<Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
-          { label: 'Invoice', render: (c: any) => <Badge variant={c.invoice_status === 'paid' ? 'ok' : c.invoice_status === 'invoiced' ? 'warn' : 'muted'}>{c.invoice_status.replace(/_/g, ' ')}</Badge> },
-          { label: 'Status', render: (c: any) => isLive(c) ? <Badge variant="onair" blip>live</Badge> : <Badge variant="muted">{c.status}</Badge> },
-        ]} rows={d.campaigns} rowId={(c: any) => c.id} exportName="campaigns" bulk={campaignBulk} onDone={() => reload()} />
+          { label: 'Invoice', sort: (c: any) => c.invoice_status, render: (c: any) => (
+            <InlineSelect value={c.invoice_status} choices={INVOICE_CHOICES} onChange={v => setCampaign(c, { invoice_status: v })}>
+              <Badge variant={c.invoice_status === 'paid' ? 'ok' : c.invoice_status === 'invoiced' ? 'warn' : 'muted'}>{c.invoice_status.replace(/_/g, ' ')}</Badge>
+            </InlineSelect>) },
+          { label: 'Status', sort: (c: any) => c.status, render: (c: any) => (
+            <InlineSelect value={c.status} choices={STATUS_CHOICES} onChange={v => setCampaign(c, { status: v })}>
+              {isLive(c) ? <Badge variant="onair" blip>live</Badge> : <Badge variant="muted">{c.status}</Badge>}
+            </InlineSelect>) },
+        ]} rows={d.campaigns} rowId={(c: any) => c.id} exportName="campaigns" bulk={campaignBulk} onDone={() => reload()}
+          search={(c: any) => `${c.name} ${advName(c.advertiser_id)}`}
+          facets={[{ label: 'Status', get: (c: any) => c.status }, { label: 'Type', get: (c: any) => c.campaign_type },
+                   { label: 'Invoice', get: (c: any) => c.invoice_status.replace(/_/g, ' ') }]} />
       </>)}
 
       {view === 'creatives' && <Creatives d={d} user={user} onChanged={() => reload()} advName={advName} />}
@@ -319,10 +358,13 @@ export default function Operator() {
           { label: 'Screen', render: (s: any) => <button onClick={() => go('s/' + s.id)} className="font-medium text-primary hover:underline">{s.name}</button> },
           { label: 'Venue', render: (s: any) => <Badge variant="muted">{s.venue_type}</Badge> },
           { label: 'Plays', num: true, render: (s: any) => d.plays.filter((p: any) => p.screen_id === s.id).length },
-          { label: 'Avg people', num: true, render: (s: any) => { const r = d.presence.filter((p: any) => p.screen_id === s.id && p.measured);
-            return r.length ? <b>{(r.reduce((a: number, b: any) => a + b.avg_persons, 0) / r.length).toFixed(1)}</b> : <span className="text-muted-foreground">—</span>; } },
-          { label: 'Monthly value', num: true, render: (s: any) => inr(s.monthly_value) },
-        ]} rows={d.screens} rowId={(s: any) => s.id} exportName="screen-performance" />
+          { label: 'Avg people', num: true, sort: (s: any) => { const r = presFor(s.id); return r.length ? r.reduce((a: number, b: any) => a + b.avg_persons, 0) / r.length : -1; },
+            render: (s: any) => { const r = presFor(s.id);
+              return r.length ? <b>{(r.reduce((a: number, b: any) => a + b.avg_persons, 0) / r.length).toFixed(1)}</b> : <span className="text-muted-foreground">—</span>; } },
+          { label: 'Last 7 days', render: (s: any) => <Spark data={trendScreen(s.id)} /> },
+          { label: 'Monthly value', num: true, sort: (s: any) => s.monthly_value, render: (s: any) => inr(s.monthly_value) },
+        ]} rows={d.screens} rowId={(s: any) => s.id} exportName="screen-performance"
+          search={(s: any) => s.name} facets={[{ label: 'Venue', get: (s: any) => s.venue_type }]} />
         <div className="mt-4"><SoonPage title="Trends, dayparting and exports" note="Time-series charts, daypart breakdowns and CSV export are not built yet. The underlying play and presence data is already being collected." /></div>
       </>)}
 

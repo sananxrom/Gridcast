@@ -44,8 +44,8 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
       creatives: isAdmin ? ownCr : [...ownCr, ...db.creatives.filter((c: any) => refCr.has(c.id) && !ownCr.some((o: any) => o.id === c.id))],
       campaigns: camps, groups: scope(db.groups || [], u.org_id, isAdmin),
       devices: scope(db.devices, u.org_id, isAdmin),
-      plays: scope(db.plays, u.org_id, isAdmin).slice(-400),
-      presence: db.presence.slice(-400),
+      plays: scope(db.plays, u.org_id, isAdmin).slice(-1500),
+      presence: db.presence.slice(-1500),
       settings: db.settings || {},
     } };
   }
