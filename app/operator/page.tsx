@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, session, type SessionUser } from '@/lib/client';
 import { inr, isLive, ytId } from '@/lib/utils';
 import { operatorNav } from '@/lib/nav';
-import { AppShell, PageHead, SectionHead } from '@/components/ui/app-shell';
+import { AppShell, PageHead, SectionHead, type Crumb } from '@/components/ui/app-shell';
 import { DataTable } from '@/components/ui/table';
 import { Stat, Progress } from '@/components/ui/stat';
 import { Badge } from '@/components/ui/badge';
@@ -67,12 +67,22 @@ export default function Operator() {
 
   const nav = operatorNav({ inbox: alerts.length });
   const orgs = [{ id: user.org_id, name: user.orgName, type: 'operator' }];
-  const titleOf: Record<string, string> = { overview: 'Overview', screens: 'My screens', groups: 'Screen groups', advertisers: 'Advertisers', campaigns: 'Campaigns', creatives: 'Creatives', settlement: 'Settlement', inbox: 'Inbox', analytics: 'Analytics', reports: 'Reports', profile: 'Profile', 'set-org': 'Organisation' };
-  const crumb = view.startsWith('s/') ? 'Screen' : view.startsWith('c/') ? 'Campaign' : view.startsWith('a/') ? 'Advertiser' : view === 'new' ? 'New campaign' : titleOf[view] ?? 'Overview';
+  const titleOf: Record<string, string> = { overview: 'Overview', screens: 'My screens', groups: 'Screen groups', advertisers: 'Advertisers', campaigns: 'Campaigns', creatives: 'Creatives', settlement: 'Settlement', inbox: 'Inbox', analytics: 'Analytics', reports: 'Reports', profile: 'Profile', settings: 'Organisation', 'set-org': 'Organisation', 'set-billing': 'Billing & payouts', 'set-team': 'Team & users', 'set-api': 'API keys', 'set-hooks': 'Webhooks' };
+  const nameOf = (arr: any[], id: string, fb: string) => arr.find((x: any) => x.id === id)?.name ?? fb;
+  const trail: Crumb[] = (() => {
+    const root = { label: user.orgName, go: 'overview' };
+    if (view.startsWith('s/')) return [root, { label: 'My screens', go: 'screens' }, nameOf(d.screens, view.slice(2), 'Screen')];
+    if (view.startsWith('c/')) return [root, { label: 'Campaigns', go: 'campaigns' }, nameOf(d.campaigns, view.slice(2), 'Campaign')];
+    if (view.startsWith('a/')) return [root, { label: 'Advertisers', go: 'advertisers' }, nameOf(d.advertisers, view.slice(2), 'Advertiser')];
+    if (view === 'new') return [root, { label: 'Campaigns', go: 'campaigns' }, 'New campaign'];
+    if (view.startsWith('set-') || view === 'settings') return [root, 'Settings', titleOf[view] ?? 'Settings'];
+    if (view === 'overview') return [root];
+    return [root, titleOf[view] ?? 'Overview'];
+  })();
 
   return (
     <AppShell groups={nav.groups} bottom={nav.bottom} activeId={view} onSelect={go}
-      orgs={orgs} currentOrg={orgs[0]} onOrgSelect={() => {}} breadcrumb={[user.orgName, crumb]}
+      orgs={orgs} currentOrg={orgs[0]} onOrgSelect={() => {}} breadcrumb={trail}
       cmdItems={cmdItems} onGo={go} user={{ name: user.name, role: user.role }}>
 
       {view.startsWith('s/') && <ScreenDetail id={view.slice(2)} onGo={go} onChanged={() => reload()} />}

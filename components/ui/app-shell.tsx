@@ -6,13 +6,15 @@ import { CommandPalette, type CmdItem } from './command-palette';
 import { cn } from '@/lib/utils';
 import { TopProgress } from './loader';
 
+export type Crumb = string | { label: string; go?: string };
+
 export function AppShell({
   groups, bottom, activeId, onSelect, orgs, currentOrg, onOrgSelect,
   breadcrumb, cmdItems, onGo, user, children,
 }: {
   groups: NavGroupData[]; bottom: NavItemData[]; activeId: string; onSelect: (id: string) => void;
   orgs: OrgOption[]; currentOrg: OrgOption; onOrgSelect: (id: string) => void;
-  breadcrumb: string[]; cmdItems: CmdItem[]; onGo: (go: string) => void;
+  breadcrumb: Crumb[]; cmdItems: CmdItem[]; onGo: (go: string) => void;
   user: { name: string; role: string }; children: React.ReactNode;
 }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -54,12 +56,18 @@ export function AppShell({
               {collapsed ? <PanelLeftOpen className="size-[18px]" strokeWidth={1.5} /> : <PanelLeftClose className="size-[18px]" strokeWidth={1.5} />}
             </button>
             <nav className="flex min-w-0 items-center gap-2 text-[13px] text-muted-foreground">
-              {breadcrumb.map((b, i) => (
-                <React.Fragment key={i}>
-                  {i > 0 && <span className="text-muted-foreground/40">/</span>}
-                  <span className={cn('truncate', i === breadcrumb.length - 1 && 'font-medium text-foreground')}>{b}</span>
-                </React.Fragment>
-              ))}
+              {breadcrumb.map((b, i) => {
+                const c = typeof b === 'string' ? { label: b } : b;
+                const last = i === breadcrumb.length - 1;
+                return (
+                  <React.Fragment key={i}>
+                    {i > 0 && <span className="text-muted-foreground/40">/</span>}
+                    {c.go && !last
+                      ? <button onClick={() => onGo(c.go!)} className="max-w-[220px] truncate rounded transition-colors hover:text-foreground hover:underline">{c.label}</button>
+                      : <span className={cn('max-w-[280px] truncate', last && 'font-medium text-foreground')}>{c.label}</span>}
+                  </React.Fragment>
+                );
+              })}
             </nav>
           </div>
           <div className="flex items-center gap-3">

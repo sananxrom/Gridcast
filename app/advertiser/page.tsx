@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api, session, type SessionUser } from '@/lib/client';
 import { inr, isLive, fmtDate } from '@/lib/utils';
 import { advertiserNav } from '@/lib/nav';
-import { AppShell, PageHead, SectionHead } from '@/components/ui/app-shell';
+import { AppShell, PageHead, SectionHead, type Crumb } from '@/components/ui/app-shell';
 import { DataTable } from '@/components/ui/table';
 import { Stat, Progress } from '@/components/ui/stat';
 import { Badge } from '@/components/ui/badge';
@@ -41,11 +41,14 @@ export default function Advertiser() {
   const orgs = [{ id: 'me', name: user.name, type: 'advertiser' }];
   const screenName = (id: string) => d.screens.find((s: any) => s.id === id)?.name ?? '—';
   const totalPeople = measured.reduce((s: number, x: any) => s + x.avg_persons, 0);
-  const crumb = view === 'screens' ? 'Where it ran' : view === 'reports' ? 'Reports' : view === 'profile' ? 'Profile' : 'Delivery';
+  const advTitle: Record<string, string> = { overview: 'Delivery', screens: 'Where it ran', reports: 'Reports', profile: 'Profile & account' };
+  const trail: Crumb[] = view === 'overview'
+    ? [{ label: user.orgName, go: 'overview' }]
+    : [{ label: user.orgName, go: 'overview' }, advTitle[view] ?? 'Delivery'];
 
   return (
     <AppShell groups={nav.groups} bottom={nav.bottom} activeId={view} onSelect={go}
-      orgs={orgs} currentOrg={orgs[0]} onOrgSelect={() => {}} breadcrumb={[user.orgName, crumb]}
+      orgs={orgs} currentOrg={orgs[0]} onOrgSelect={() => {}} breadcrumb={trail}
       cmdItems={cmdItems} onGo={go} user={{ name: user.name, role: user.role }}>
 
       {view === 'overview' && (<>
