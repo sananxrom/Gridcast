@@ -52,6 +52,7 @@ export function seed() {
   screens[0].network_available = true; screens[0].network_slots = 3;
   screens[3].network_available = true; screens[3].network_slots = 4;
 
+  screens.forEach(s => { (s as any).priced_against = { loop_length_s: 600, slot_duration_s: 10, operating_hours: { from: '09:00', to: '22:00' } }; });
   screens.forEach((s, i) => { s.photo_url = `https://picsum.photos/seed/gridcast-${i + 1}/800/450`; });
 
 
@@ -86,6 +87,31 @@ export function seed() {
     { id: 'grp_hi', org_id: 'org_sec17', name: 'High-footfall (43" and up)', group_type: 'dynamic', rule_json: { min_size: 43 }, screen_ids: [], created_at: nowISO() },
     { id: 'grp_food', org_id: 'org_sec17', name: 'Food & drink venues', group_type: 'dynamic', rule_json: { venue_types: ['cafe'] }, screen_ids: [], created_at: nowISO() },
   ];
+  const configs = [
+    { id: 'cfg_base', org_id: 'org_gridcast', layer: 'platform', target_id: null, priority: 0,
+      name: 'Gridcast baseline', description: 'Applies to every screen on the network. Measurement and privacy settings are locked here.',
+      tags: ['baseline'], target_platform: ['android', 'windows', 'web'], status: 'active',
+      values: {
+        sample_interval_s: 2, model: 'yolox-tiny', confidence_min: 0.45,
+        measure_during_play_only: true, camera_fail_mode: 'unmeasured', presence_metric: 'avg_persons',
+        upload_frames: 'never', retain_frames: false, face_recognition: false, reidentify: false, demographics: false,
+        heartbeat_s: 30, enable_ssl: true, sync_measure_leader_only: true,
+        content_url: 'https://gridcast-mu.vercel.app/api', telemetry_url: 'https://gridcast-mu.vercel.app/api',
+        sync_interval_min: 5, randomise_sync: true, daily_restart: true, restart_times: '03:00',
+        restart_timing: 'playlist_end', keep_alive: true, loop_length_s: 600, slot_duration_s: 10,
+      }, created_at: nowISO() },
+    { id: 'cfg_s17', org_id: 'org_sec17', layer: 'org', target_id: null, priority: 0,
+      name: 'Sector 17 Media default', description: 'House defaults for every screen this operator runs.',
+      tags: [], target_platform: ['android'], status: 'active',
+      values: { operating_hours: { from: '09:00', to: '22:00' }, filler_behaviour: 'house', bandwidth_kbps: 2000 },
+      created_at: nowISO() },
+    { id: 'cfg_late', org_id: 'org_sec17', layer: 'group', target_id: 'grp_food', priority: 10,
+      name: 'Late-night venues', description: 'Cafes trading past midnight — restart later, longer trading window.',
+      tags: ['late'], target_platform: ['android'], status: 'active',
+      values: { restart_times: '04:30', operating_hours: { from: '09:00', to: '23:30' } },
+      created_at: nowISO() },
+  ];
+
   // fourteen days of history, so trends and averages have something to say
   const plays: any[] = [];
   const presence: any[] = [];
@@ -119,5 +145,5 @@ export function seed() {
     }
   }
 
-  return { settings: { platform_name: 'Gridcast', default_fee_pct: 10, support_email: 'ops@gridcast.in' }, orgs, users, screens, advertisers, creatives, campaigns, groups, devices: [] as any[], plays, presence };
+  return { configs, settings: { platform_name: 'Gridcast', default_fee_pct: 10, support_email: 'ops@gridcast.in' }, orgs, users, screens, advertisers, creatives, campaigns, groups, devices: [] as any[], plays, presence };
 }

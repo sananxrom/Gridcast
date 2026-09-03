@@ -1,5 +1,6 @@
 import * as store from './store';
 import { seed, uid, nowISO, code6 } from './seed';
+import * as cfg from './config';
 
 let db: any = null;
 async function load() {
@@ -10,6 +11,18 @@ async function load() {
 }
 const save = () => store.write(db);
 const scope = (rows: any[], orgId: string, isAdmin: boolean) => (isAdmin ? rows : rows.filter(r => r.org_id === orgId));
+
+/** Configs visible to a caller: their own, plus the platform baseline they inherit. */
+const scopeConfigs = (orgId: string, isAdmin: boolean) =>
+  (db.configs || []).filter((c: any) => isAdmin || c.org_id === orgId || c.layer === 'platform');
+
+/** Locked keys may only be set by a platform-layer config. */
+function lockedViolations(c: any): string[] {
+  if (c.layer === 'platform') return [];
+  return Object.keys(c.values || {}).filter(k => cfg.LOCKED_KEYS.includes(k));
+}
+
+const resolveFor = (screen: any) => cfg.resolve(screen, db.groups || [], db.configs || []);
 
 export function screenStatus(screen: any) {
   const dev = db.devices.find((d: any) => d.screen_id === screen.id);
@@ -47,6 +60,7 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
       plays: scope(db.plays, u.org_id, isAdmin).slice(-1500),
       presence: db.presence.slice(-1500),
       settings: db.settings || {},
+      configs: scopeConfigs(u.org_id, isAdmin),
     } };
   }
 
@@ -75,7 +89,7 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
         items.push({ campaign_id: c.id, campaign_name: c.name, creative_id: cr.id, creative_name: cr.name, advertiser: adv?.name || '—', youtube_id: cr.youtube_id, duration_s: cr.duration_s, rate_value: c.rate_value });
       }
     }
-    return { body: { screen, items, loop_length_s: screen.loop_length_s } };
+    return { body: { config: cfg.flatten(resolveFor(screen)), screen, items, loop_length_s: screen.loop_length_s } };
   }
 
   if (method === 'POST' && p === 'nowplaying') {
@@ -150,7 +164,12 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
       np = { creative: cr, campaign: c ? { id: c.id, name: c.name } : null, advertiser: c ? advOf(c.advertiser_id)?.name || '—' : '—',
         started_at: n.started_at, duration_s: n.duration_s, elapsed_s: (Date.now() - new Date(n.started_at).getTime()) / 1000 };
     }
+    const resolved = resolveFor(screen);
     return { body: { screen, status: st, nowPlaying: np, campaigns: camps,
+      config: resolved,
+      configStack: cfg.applicable(screen, db.groups || [], db.configs || []).map((c: any) => ({ id: c.id, name: c.name, layer: c.layer, keys: Object.keys(c.values || {}).length })),
+      configConflicts: cfg.conflicts(screen, db.groups || [], db.configs || []),
+      pricingDrift: cfg.pricingDrift(screen, resolved),
       stats: { plays: plays.length, playsToday: plays.filter((p: any) => (p.ended_at || '').slice(0, 10) === t).length,
         measured: measured.length, avg: measured.length ? measured.reduce((a: number, b: any) => a + b.avg_persons, 0) / measured.length : null,
         liveCampaigns: camps.filter((c: any) => c.live).length },
@@ -230,6 +249,62 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
     db.settings = { ...(db.settings || {}), ...body };
     await save(); return { body: db.settings };
   }
+  if (method === 'GET' && p === 'config') {
+    const u = db.users.find((x: any) => x.id === q.get('user')) || db.users[0];
+    return { body: scopeConfigs(u.org_id, u.role === 'platform_admin') };
+  }
+  if (method === 'GET' && p === 'config/schema')
+    return { body: { groups: cfg.GROUPS, settings: cfg.SETTINGS, locked: cfg.LOCKED_KEYS, priced: cfg.PRICED_KEYS } };
+
+  if (method === 'POST' && p === 'config') {
+    const c = { id: uid('cfg'), layer: 'group', target_id: null, priority: 0, tags: [] as string[],
+      target_platform: ['android'], status: 'active', values: {}, created_at: nowISO(), ...body };
+    const bad = lockedViolations(c);
+    if (bad.length) return { status: 403, body: { error: `Locked settings cannot be set below the platform layer: ${bad.join(', ')}` } };
+    db.configs.push(c); await save(); return { body: c };
+  }
+  /** Assign one config to many screens by creating or moving screen-layer overrides. */
+  if (method === 'POST' && p === 'config/assign') {
+    const src = db.configs.find((x: any) => x.id === body.config_id);
+    if (!src) return { status: 404, body: { error: 'not found' } };
+    for (const sid of body.screen_ids || []) {
+      const screen = db.screens.find((x: any) => x.id === sid);
+      if (!screen) continue;
+      let own = db.configs.find((x: any) => x.layer === 'screen' && x.target_id === sid);
+      if (!own) {
+        own = { id: uid('cfg'), org_id: screen.org_id, layer: 'screen', target_id: sid, priority: 0,
+          name: `${screen.name} — override`, description: '', tags: [], target_platform: ['android'],
+          status: 'active', values: {}, created_at: nowISO() };
+        db.configs.push(own);
+      }
+      own.values = { ...own.values, ...src.values };
+      own.updated_at = nowISO();
+    }
+    await save(); return { body: { ok: true, screens: (body.screen_ids || []).length } };
+  }
+  if (method === 'POST' && seg[0] === 'config' && seg[1] && !seg[2]) {
+    const c = db.configs.find((x: any) => x.id === seg[1]);
+    if (!c) return { status: 404, body: { error: 'not found' } };
+    const next = { ...c, ...body };
+    const bad = lockedViolations(next);
+    if (bad.length) return { status: 403, body: { error: `Locked settings cannot be set below the platform layer: ${bad.join(', ')}` } };
+    for (const k of ['name', 'description', 'tags', 'layer', 'target_id', 'priority', 'target_platform', 'values', 'status'])
+      if (k in body) c[k] = body[k];
+    c.updated_at = nowISO();
+    await save(); return { body: c };
+  }
+  if (method === 'POST' && seg[0] === 'config' && seg[1] && seg[2] === 'delete') {
+    db.configs = db.configs.filter((x: any) => x.id !== seg[1]);
+    await save(); return { body: { ok: true } };
+  }
+  if (method === 'POST' && seg[0] === 'screen' && seg[1] && seg[2] === 'reprice') {
+    const screen = db.screens.find((x: any) => x.id === seg[1]);
+    if (!screen) return { status: 404, body: { error: 'not found' } };
+    const r = resolveFor(screen);
+    screen.priced_against = Object.fromEntries(cfg.PRICED_KEYS.map(k => [k, r[k]?.value]));
+    await save(); return { body: screen };
+  }
+
   if (method === 'POST' && p === 'reset') { db = seed(); await save(); return { body: { ok: true } }; }
 
   return { status: 404, body: { error: 'no route: ' + method + ' /' + p } };
