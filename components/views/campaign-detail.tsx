@@ -141,7 +141,7 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
           { label: 'Share', num: true, render: (r: any) => { const p = d.totals.plays ? Math.round(r.plays / d.totals.plays * 100) : 0; return <div className="flex items-center justify-end gap-2">{p}%<Progress value={p} className="w-16" /></div>; } },
           { label: 'Avg people', num: true, render: (r: any) => r.avg === null ? <span className="text-muted-foreground">—</span> : <b>{r.avg.toFixed(1)}</b> },
         ]}
-        rows={d.byScreen} empty="No screens on this campaign" />
+        rows={d.byScreen} rowId={(r: any) => r.screen.id} exportName="campaign-screens" empty="No screens on this campaign" />
 
       <SectionHead>Per-creative performance</SectionHead>
       <DataTable
@@ -151,7 +151,7 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
           { label: 'Plays', num: true, render: (r: any) => r.plays },
           { label: 'Avg people', num: true, render: (r: any) => r.avg === null ? <span className="text-muted-foreground">—</span> : <b>{r.avg.toFixed(1)}</b> },
         ]}
-        rows={d.byCreative} empty="No creatives on this campaign" />
+        rows={d.byCreative} rowId={(r: any) => r.creative.id} exportName="campaign-creatives" empty="No creatives on this campaign" />
 
       <SectionHead hint="· every play, auditable">Play log</SectionHead>
       <DataTable
@@ -164,7 +164,7 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
               ? <><b>{p.presence.avg_persons.toFixed(1)}</b> <span className="text-[11.5px] text-muted-foreground">({p.presence.sample_count})</span></>
               : <span className="text-muted-foreground">not measured</span> },
         ]}
-        rows={d.plays} empty="No plays recorded yet — pair a player to one of these screens" />
+        rows={d.plays} rowId={(p: any) => p.id} exportName="play-log" empty="No plays recorded yet — pair a player to one of these screens" />
     </>
   );
 }

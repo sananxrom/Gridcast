@@ -4,7 +4,7 @@ import { api, session, type SessionUser } from '@/lib/client';
 import { inr, isLive, fmtDate } from '@/lib/utils';
 import { adminNav } from '@/lib/nav';
 import { AppShell, PageHead, SectionHead, type Crumb } from '@/components/ui/app-shell';
-import { DataTable } from '@/components/ui/table';
+import { DataTable, type BulkAction } from '@/components/ui/table';
 import { Stat, Progress } from '@/components/ui/stat';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -57,6 +57,15 @@ export default function Admin() {
   const orgs = [{ id: 'all', name: 'All organisations', type: 'gridcast' }, ...d.orgs.map((o: any) => ({ id: o.id, name: o.name, type: o.type }))];
   const currentOrg = orgs.find(o => o.id === orgFilter) ?? orgs[0];
   const titleOf: Record<string, string> = { overview: 'Overview', orgs: 'Organisations', screens: 'All screens', devices: 'Device health', campaigns: 'Campaigns', approvals: 'Approvals', inbox: 'Inbox', analytics: 'Analytics', profile: 'Profile', settings: 'Organisation', 'set-org': 'Organisation', 'set-api': 'API keys', 'set-hooks': 'Webhooks', 'set-billing': 'Billing & payouts', 'set-team': 'Team & users' };
+  const campaignBulk: BulkAction<any>[] = [
+    { label: 'Pause', run: async rows => { for (const c of rows) await api(`/campaign/${c.id}`, { status: 'paused' }); } },
+    { label: 'Resume', run: async rows => { for (const c of rows) await api(`/campaign/${c.id}`, { status: 'active' }); } },
+  ];
+  const screenBulk: BulkAction<any>[] = [
+    { label: 'Activate', run: async rows => { for (const x of rows) await api(`/screen/${x.id}`, { ...x, status: 'active' }); } },
+    { label: 'Pause', run: async rows => { for (const x of rows) await api(`/screen/${x.id}`, { ...x, status: 'paused' }); },
+      confirm: 'Pause {n} screen(s) across the fleet?' },
+  ];
   const nameOf = (arr: any[], id: string, fb: string) => arr.find((x: any) => x.id === id)?.name ?? fb;
   const trail: Crumb[] = (() => {
     const root = { label: currentOrg.name, go: 'overview' };
@@ -96,7 +105,7 @@ export default function Admin() {
             { label: 'People', num: true, render: (r: any) => { const p = d.presence.find((x: any) => x.play_id === r.id);
               return p?.measured ? <b>{p.avg_persons.toFixed(1)}</b> : <span className="text-muted-foreground">not measured</span>; } },
             { label: 'Org', render: (r: any) => <span className="text-muted-foreground">{orgName(r.org_id)}</span> },
-          ]} rows={d.plays.slice(-12).reverse()} empty="No plays yet — open a player and pair a screen." />
+          ]} rows={d.plays.slice(-12).reverse()} rowId={(r: any) => r.id} exportName="recent-plays" empty="No plays yet — open a player and pair a screen." />
         </>);
       })()}
 
@@ -110,7 +119,7 @@ export default function Admin() {
           { label: 'Platform fee', num: true, render: (o: any) => o.type === 'gridcast' ? <span className="text-muted-foreground">—</span> : `${o.platform_fee_pct}%` },
           { label: 'Own inventory', render: (o: any) => o.type === 'gridcast' ? <span className="text-muted-foreground">—</span> : <Badge variant="ok">0% — free tier</Badge> },
           { label: '', render: (o: any) => o.type === 'gridcast' ? null : <button onClick={() => setEditOrg(o.id)} className="text-[12px] font-medium text-primary hover:underline">Edit</button> },
-        ]} rows={d.orgs} />
+        ]} rows={d.orgs} rowId={(o: any) => o.id} exportName="organisations" />
         {editOrg && <EditOrg org={d.orgs.find((o: any) => o.id === editOrg)} onDone={() => { setEditOrg(''); reload(); }} />}
         <Card className="mt-3 border-primary/25 bg-primary/[0.04] p-3.5 text-[12.5px] text-primary">
           <b>Zero cut on operator-sold campaigns.</b> The platform fee applies only to network campaigns — where Gridcast brings the advertiser onto an operator&apos;s released slots.
@@ -129,7 +138,7 @@ export default function Admin() {
           { label: 'Running', num: true, render: (s: any) => { const n = d.campaigns.filter((c: any) => c.screen_ids.includes(s.id) && isLive(c)).length;
             return n ? <><b>{n}</b> <span className="text-muted-foreground">of {s.advertiser_slots}</span></> : <span className="text-muted-foreground">idle</span>; } },
           { label: 'Monthly', num: true, render: (s: any) => inr(s.monthly_value) },
-        ]} rows={byOrg(d.screens)} />
+        ]} rows={byOrg(d.screens)} rowId={(s: any) => s.id} exportName="all-screens" onDone={reload} bulk={screenBulk} />
       </>)}
 
       {view === 'campaigns' && (<>
@@ -145,7 +154,7 @@ export default function Admin() {
             return <div className="flex flex-col items-end gap-1">{inr(c.accrued_spend)} / {inr(c.committed_budget)}<Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
           { label: 'Fee', num: true, render: (c: any) => c.platform_fee_pct ? `${c.platform_fee_pct}%` : <span className="text-muted-foreground">0%</span> },
           { label: 'Status', render: (c: any) => isLive(c) ? <Badge variant="onair" blip>live</Badge> : <Badge variant="muted">{c.status}</Badge> },
-        ]} rows={byOrg(d.campaigns)} />
+        ]} rows={byOrg(d.campaigns)} rowId={(c: any) => c.id} exportName="campaigns" onDone={reload} bulk={campaignBulk} />
       </>)}
 
       {view === 'approvals' && (<>
@@ -159,7 +168,11 @@ export default function Admin() {
             ? <div className="flex gap-1.5"><Button size="sm" onClick={async () => { await api(`/creative/${c.id}/approve`, { status: 'approved' }); reload(); }}>Approve</Button>
                 <Button size="sm" variant="outline" onClick={async () => { await api(`/creative/${c.id}/approve`, { status: 'rejected' }); reload(); }}>Reject</Button></div>
             : <span className="text-muted-foreground">—</span> },
-        ]} rows={byOrg(d.creatives)} />
+        ]} rows={byOrg(d.creatives)} rowId={(c: any) => c.id} exportName="approvals" onDone={reload} bulk={[
+          { label: 'Approve', run: async (rows: any[]) => { for (const c of rows) await api(`/creative/${c.id}/approve`, { status: 'approved' }); } },
+          { label: 'Reject', variant: 'outline' as const, run: async (rows: any[]) => { for (const c of rows) await api(`/creative/${c.id}/approve`, { status: 'rejected' }); },
+            confirm: 'Reject {n} creative(s)?' },
+        ]} />
       </>)}
 
       {view === 'devices' && (<>
@@ -172,7 +185,7 @@ export default function Admin() {
           { label: 'Last heartbeat', render: (v: any) => <span className="font-mono text-[12px] text-muted-foreground">{fmtDate(v.last_heartbeat_at)}</span> },
           { label: 'Plays', num: true, render: (v: any) => d.plays.filter((p: any) => p.screen_id === v.screen_id).length },
           { label: 'App', render: (v: any) => <span className="font-mono text-[12px] text-muted-foreground">v{v.app_ver}</span> },
-        ]} rows={byOrg(d.devices)} empty="No devices paired yet. Open /player and enter a screen code." />
+        ]} rows={byOrg(d.devices)} rowId={(x: any) => x.id} exportName="devices" empty="No devices paired yet. Open /player and enter a screen code." />
       </>)}
 
       {view === 'inbox' && (<>
@@ -199,7 +212,7 @@ export default function Admin() {
           { label: 'Live campaigns', num: true, render: (o: any) => d.campaigns.filter((c: any) => c.org_id === o.id && isLive(c)).length },
           { label: 'Accrued', num: true, render: (o: any) => inr(d.campaigns.filter((c: any) => c.org_id === o.id).reduce((s: number, c: any) => s + c.accrued_spend, 0)) },
           { label: 'Inventory', num: true, render: (o: any) => inr(d.screens.filter((s: any) => s.org_id === o.id).reduce((s: number, x: any) => s + x.monthly_value, 0)) },
-        ]} rows={d.orgs} />
+        ]} rows={d.orgs} rowId={(o: any) => o.id} exportName="org-performance" />
         <div className="mt-4"><SoonPage title="Trends and cohorts" note="Time-series, venue-type benchmarks and exports are not built yet." /></div>
       </>)}
 

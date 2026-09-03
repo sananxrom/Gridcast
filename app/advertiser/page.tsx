@@ -73,7 +73,7 @@ export default function Advertiser() {
           { label: 'Budget used', num: true, render: (c: any) => { const p = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
             return <div className="flex flex-col items-end gap-1">{inr(c.accrued_spend)} / {inr(c.committed_budget)}<Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
           { label: 'Status', render: (c: any) => isLive(c) ? <Badge variant="onair" blip>live</Badge> : <Badge variant="muted">{c.status}</Badge> },
-        ]} rows={mine} empty="No campaigns yet" />
+        ]} rows={mine} rowId={(c: any) => c.id} exportName="my-campaigns" empty="No campaigns yet" />
         <SectionHead>Recent plays</SectionHead>
         <DataTable cols={[
           { label: 'When', render: (p: any) => <span className="font-mono text-[12px] text-muted-foreground">{fmtDate(p.ended_at)}</span> },
@@ -81,7 +81,7 @@ export default function Advertiser() {
           { label: 'Creative', render: (p: any) => d.creatives.find((c: any) => c.id === p.creative_id)?.name ?? '—' },
           { label: 'People present', num: true, render: (p: any) => { const x = d.presence.find((z: any) => z.play_id === p.id);
             return x?.measured ? <b>{x.avg_persons.toFixed(1)}</b> : <span className="text-muted-foreground">not measured</span>; } },
-        ]} rows={myPlays.slice(-15).reverse()} empty="No delivery recorded yet" />
+        ]} rows={myPlays.slice(-15).reverse()} rowId={(p: any) => p.id} exportName="delivery" empty="No delivery recorded yet" />
       </>)}
 
       {view === 'screens' && (() => {
@@ -95,7 +95,7 @@ export default function Advertiser() {
             { label: 'Plays', num: true, render: (id: string) => myPlays.filter((p: any) => p.screen_id === id).length },
             { label: 'Avg people', num: true, render: (id: string) => { const r = myPlays.filter((p: any) => p.screen_id === id).map((p: any) => d.presence.find((x: any) => x.play_id === p.id)).filter((x: any) => x?.measured);
               return r.length ? <b>{(r.reduce((a: number, b: any) => a + b.avg_persons, 0) / r.length).toFixed(1)}</b> : <span className="text-muted-foreground">—</span>; } },
-          ]} rows={ids} empty="No screens yet" />
+          ]} rows={ids} rowId={(id: string) => id} exportName="screens" empty="No screens yet" />
         </>);
       })()}
 

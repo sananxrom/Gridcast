@@ -152,7 +152,7 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
           { label: 'Budget', num: true, render: (c: any) => { const p = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
             return <div className="flex flex-col items-end gap-1">{inr(c.accrued_spend)} / {inr(c.committed_budget)}<Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
         ]}
-        rows={d.campaigns} empty="No campaigns booked on this screen yet" />
+        rows={d.campaigns} rowId={(c: any) => c.id} exportName="screen-campaigns" empty="No campaigns booked on this screen yet" />
 
       <SectionHead>Recent plays</SectionHead>
       <DataTable
@@ -162,7 +162,7 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
           { label: 'Duration', num: true, render: (p: any) => `${Math.round(p.duration_ms / 1000)}s` },
           { label: 'People present', num: true, render: (p: any) => p.presence?.measured ? <b>{p.presence.avg_persons.toFixed(1)}</b> : <span className="text-muted-foreground">not measured</span> },
         ]}
-        rows={d.recent} empty="No plays on this screen yet" />
+        rows={d.recent} rowId={(p: any) => p.id} exportName="screen-plays" empty="No plays on this screen yet" />
     </>
   );
 }

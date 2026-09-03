@@ -4,7 +4,7 @@ import { api, session, type SessionUser } from '@/lib/client';
 import { inr, isLive, ytId } from '@/lib/utils';
 import { operatorNav } from '@/lib/nav';
 import { AppShell, PageHead, SectionHead, type Crumb } from '@/components/ui/app-shell';
-import { DataTable } from '@/components/ui/table';
+import { DataTable, type BulkAction } from '@/components/ui/table';
 import { Stat, Progress } from '@/components/ui/stat';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -68,6 +68,17 @@ export default function Operator() {
   const nav = operatorNav({ inbox: alerts.length });
   const orgs = [{ id: user.org_id, name: user.orgName, type: 'operator' }];
   const titleOf: Record<string, string> = { overview: 'Overview', screens: 'My screens', groups: 'Screen groups', advertisers: 'Advertisers', campaigns: 'Campaigns', creatives: 'Creatives', settlement: 'Settlement', inbox: 'Inbox', analytics: 'Analytics', reports: 'Reports', profile: 'Profile', settings: 'Organisation', 'set-org': 'Organisation', 'set-billing': 'Billing & payouts', 'set-team': 'Team & users', 'set-api': 'API keys', 'set-hooks': 'Webhooks' };
+  const campaignBulk: BulkAction<any>[] = [
+    { label: 'Pause', run: async rows => { for (const c of rows) await api(`/campaign/${c.id}`, { status: 'paused' }); } },
+    { label: 'Resume', run: async rows => { for (const c of rows) await api(`/campaign/${c.id}`, { status: 'active' }); } },
+    { label: 'Mark invoiced', run: async rows => { for (const c of rows) await api(`/campaign/${c.id}`, { invoice_status: 'invoiced' }); } },
+    { label: 'Mark paid', run: async rows => { for (const c of rows) await api(`/campaign/${c.id}`, { invoice_status: 'paid' }); } },
+  ];
+  const screenBulk: BulkAction<any>[] = [
+    { label: 'Activate', run: async rows => { for (const x of rows) await api(`/screen/${x.id}`, { ...x, status: 'active' }); } },
+    { label: 'Pause', run: async rows => { for (const x of rows) await api(`/screen/${x.id}`, { ...x, status: 'paused' }); },
+      confirm: 'Pause {n} screen(s)? They stop receiving new plays.' },
+  ];
   const nameOf = (arr: any[], id: string, fb: string) => arr.find((x: any) => x.id === id)?.name ?? fb;
   const trail: Crumb[] = (() => {
     const root = { label: user.orgName, go: 'overview' };
@@ -104,7 +115,7 @@ export default function Operator() {
             { label: 'Budget', num: true, render: (c: any) => { const p = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
               return <div className="flex flex-col items-end gap-1">{inr(c.accrued_spend)} / {inr(c.committed_budget)}<Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
             { label: 'Status', render: (c: any) => isLive(c) ? <Badge variant="onair" blip>current</Badge> : <Badge variant="muted">{c.status}</Badge> },
-          ]} rows={rows} empty={empty} />
+          ]} rows={rows} empty={empty} rowId={(c: any) => c.id} exportName="campaigns" />
         );
         return (<>
           <PageHead title={a.name} back={{ label: 'Advertisers', go: 'advertisers', onGo: go }}
@@ -139,7 +150,7 @@ export default function Operator() {
           { label: 'Code', render: (s: any) => <span className="font-mono">{s.code}</span> },
           { label: 'Running', num: true, render: (s: any) => liveOn(s.id).length ? <><b>{liveOn(s.id).length}</b> <span className="text-muted-foreground">of {s.advertiser_slots}</span></> : <span className="text-muted-foreground">idle</span> },
           { label: 'Per slot / mo', num: true, render: (s: any) => inr(s.slot_price_month) },
-        ]} rows={d.screens} />
+        ]} rows={d.screens} rowId={(s: any) => s.id} exportName="screens" bulk={screenBulk} onDone={() => reload()} />
       </>)}
 
       {view === 'screens' && (() => {
@@ -221,10 +232,10 @@ export default function Operator() {
           <PageHead title="Advertisers" sub="Your clients, and any that Gridcast has brought to your screens"
             actions={<AddAdvertiser user={user} onAdded={() => reload()} />} />
           <SectionHead hint={`· ${mine.length}`}>Your advertisers</SectionHead>
-          <DataTable cols={cols(false)} rows={mine.map(row)} empty="No advertisers yet" />
+          <DataTable cols={cols(false)} rows={mine.map(row)} empty="No advertisers yet" rowId={(r: any) => r.a.id} exportName="advertisers" />
           <SectionHead hint="· network campaigns on your released slots">Brought by Gridcast</SectionHead>
           {bygc.length ? (<>
-            <DataTable cols={cols(true)} rows={bygc.map(row)} />
+            <DataTable cols={cols(true)} rows={bygc.map(row)} rowId={(r: any) => r.a.id} exportName="advertisers-gridcast" />
             <Card className="mt-3 border-primary/25 bg-primary/[0.04] p-3.5 text-[12.5px] text-primary">
               Gridcast sold these. You keep everything except the platform fee shown. They only run on screens where you released slots to the network.
             </Card>
@@ -245,7 +256,7 @@ export default function Operator() {
             return <div className="flex flex-col items-end gap-1">{inr(c.accrued_spend)} / {inr(c.committed_budget)}<Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
           { label: 'Invoice', render: (c: any) => <Badge variant={c.invoice_status === 'paid' ? 'ok' : c.invoice_status === 'invoiced' ? 'warn' : 'muted'}>{c.invoice_status.replace(/_/g, ' ')}</Badge> },
           { label: 'Status', render: (c: any) => isLive(c) ? <Badge variant="onair" blip>live</Badge> : <Badge variant="muted">{c.status}</Badge> },
-        ]} rows={d.campaigns} />
+        ]} rows={d.campaigns} rowId={(c: any) => c.id} exportName="campaigns" bulk={campaignBulk} onDone={() => reload()} />
       </>)}
 
       {view === 'creatives' && <Creatives d={d} user={user} onChanged={() => reload()} advName={advName} />}
@@ -256,7 +267,7 @@ export default function Operator() {
           { label: 'Group', render: (g: any) => <span className="font-medium">{g.name}</span> },
           { label: 'Type', render: (g: any) => <Badge variant={g.group_type === 'dynamic' ? 'default' : 'muted'}>{g.group_type}</Badge> },
           { label: 'Rule', render: (g: any) => <span className="font-mono text-[12px] text-muted-foreground">{g.rule_json ? JSON.stringify(g.rule_json) : `${g.screen_ids.length} screens, hand-picked`}</span> },
-        ]} rows={d.groups} empty="No groups yet" />
+        ]} rows={d.groups} rowId={(g: any) => g.id} exportName="screen-groups" />
         <div className="mt-4"><SoonPage title="Creating and editing groups" note="Rules resolve and are usable in the campaign builder today. The editor for creating new groups is not built yet." /></div>
       </>)}
 
@@ -277,7 +288,7 @@ export default function Operator() {
             { label: 'Operator share', num: true, render: (r: any) => inr(r.opGross) },
             { label: 'Screen owner', num: true, render: (r: any) => <>−{inr(r.owner)} <span className="text-muted-foreground">({r.ownerPct}%)</span></> },
             { label: 'Your net', num: true, render: (r: any) => <b>{inr(r.net)}</b> },
-          ]} rows={rows} />
+          ]} rows={rows} rowId={(r: any) => r.c.id} exportName="settlement" />
           <Card className="mt-3 border-primary/25 bg-primary/[0.04] p-3.5 text-[12.5px] text-primary">
             Every line is shown gross → fee → share → net. You see exactly what the advertiser paid and exactly what was taken.
           </Card>
@@ -311,7 +322,7 @@ export default function Operator() {
           { label: 'Avg people', num: true, render: (s: any) => { const r = d.presence.filter((p: any) => p.screen_id === s.id && p.measured);
             return r.length ? <b>{(r.reduce((a: number, b: any) => a + b.avg_persons, 0) / r.length).toFixed(1)}</b> : <span className="text-muted-foreground">—</span>; } },
           { label: 'Monthly value', num: true, render: (s: any) => inr(s.monthly_value) },
-        ]} rows={d.screens} />
+        ]} rows={d.screens} rowId={(s: any) => s.id} exportName="screen-performance" />
         <div className="mt-4"><SoonPage title="Trends, dayparting and exports" note="Time-series charts, daypart breakdowns and CSV export are not built yet. The underlying play and presence data is already being collected." /></div>
       </>)}
 
@@ -383,7 +394,10 @@ function Creatives({ d, user, onChanged, advName }: { d: any; user: SessionUser;
           ? <div className="flex gap-1.5"><Button size="sm" onClick={async () => { await api(`/creative/${c.id}/approve`, { status: 'approved' }); onChanged(); }}>Approve</Button>
               <Button size="sm" variant="outline" onClick={async () => { await api(`/creative/${c.id}/approve`, { status: 'rejected' }); onChanged(); }}>Reject</Button></div>
           : <Button size="sm" variant="ghost" onClick={async () => { await api(`/creative/${c.id}/approve`, { status: 'pending' }); onChanged(); }}>Revoke</Button> },
-    ]} rows={d.creatives} />
+    ]} rows={d.creatives} rowId={(c: any) => c.id} exportName="creatives" onDone={onChanged} bulk={[
+      { label: 'Approve', run: async (rows: any[]) => { for (const c of rows) if (c.org_id === user.org_id) await api(`/creative/${c.id}/approve`, { status: 'approved' }); } },
+      { label: 'Reject', variant: 'outline' as const, run: async (rows: any[]) => { for (const c of rows) if (c.org_id === user.org_id) await api(`/creative/${c.id}/approve`, { status: 'rejected' }); } },
+    ]} />
   </>);
 }
 
