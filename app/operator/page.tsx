@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input, Select, Field, Label } from '@/components/ui/input';
-import { StatusBadge, Thumb, Empty, SoonPage } from '@/components/views/bits';
+import { StatusBadge, Thumb, Empty, SoonPage, ScreenPhoto } from '@/components/views/bits';
 import { ScreenDetail } from '@/components/views/screen-detail';
 import { CampaignDetail } from '@/components/views/campaign-detail';
 import { CampaignBuilder } from '@/components/views/campaign-builder';
@@ -130,57 +130,65 @@ export default function Operator() {
         ]} rows={d.screens} />
       </>)}
 
-      {view === 'screens' && (<>
-        <PageHead title="My screens" sub="Pricing, tags, pairing and what's running" />
-        <div className="grid gap-4 lg:grid-cols-2">
-          {d.screens.map((s: any) => (
-            <Card key={s.id} className="p-5">
-              <div className="flex items-start justify-between gap-3">
-                <div><button onClick={() => go('s/' + s.id)} className="text-[15px] font-semibold text-primary hover:underline">{s.name} →</button>
-                  <div className="text-[13px] text-muted-foreground">{s.venue_name} · {s.address}</div></div>
-                <StatusBadge st={s._status} />
-              </div>
-              <div className="my-3 flex flex-wrap gap-1.5">
-                <Badge variant="muted">{s.venue_type}</Badge>
-                {[`${s.size_in}"`, s.aspect, s.location_tier, ...Object.entries(s.tags || {}).map(([k, v]) => `${k}:${v}`)].map(t => (
-                  <span key={t} className="rounded border border-border/70 bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">{t}</span>
-                ))}
-                {!s.has_camera && <Badge variant="warn">no camera</Badge>}
-              </div>
-              <div className="rounded-lg border border-border/60 text-[13px]">
-                {[['venue base × size × location × exposure', `${s.venue_base} × ${s.size_factor} × ${s.location_factor} × ${s.exposure_factor}`],
-                  ['Monthly screen value', inr(s.monthly_value)],
-                  [`÷ ${s.advertiser_slots} advertiser slots`, `${inr(s.slot_price_month)} / slot / mo`]].map(([k, v], i) => (
-                  <div key={i} className="flex justify-between border-b border-border/50 px-3 py-2 last:border-0">
-                    <span className="text-muted-foreground">{k}</span><span className="font-mono tnum font-medium">{v}</span>
+      {view === 'screens' && (() => {
+        const pres = (sid: string) => d.presence.filter((x: any) => x.screen_id === sid && x.measured);
+        const avgOn = (sid: string) => { const m = pres(sid); return m.length ? m.reduce((a: number, b: any) => a + b.avg_persons, 0) / m.length : null; };
+        const plays7 = (sid: string) => { const cut = Date.now() - 7 * 864e5;
+          return d.plays.filter((p: any) => p.screen_id === sid && new Date(p.ended_at || p.started_at).getTime() >= cut).length; };
+        return (<>
+        <PageHead title="My screens" sub={`${d.screens.length} screens · ${inr(d.screens.reduce((a: number, x: any) => a + x.monthly_value, 0))} of monthly inventory`} />
+        <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+          {d.screens.map((s: any) => {
+            const booked = bookedOn(s.id).length, pct = Math.round(booked / s.advertiser_slots * 100);
+            const avg = avgOn(s.id);
+            const tags = [`${s.size_in}"`, s.location_tier, ...Object.entries(s.tags || {}).map(([k, v]) => `${k}:${v}`)];
+            return (
+              <Card key={s.id} className="group overflow-hidden">
+                <button onClick={() => go('s/' + s.id)} className="block w-full text-left">
+                  <ScreenPhoto src={s.photo_url} venue={s.venue_type} className="h-[172px] rounded-none border-0 border-b">
+                    <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-2.5">
+                      <StatusBadge st={s._status} />
+                      {s.network_available && <Badge variant="muted">{s.network_slots} network slots</Badge>}
+                    </div>
+                    <div className="absolute inset-x-0 bottom-0 bg-[linear-gradient(to_top,rgba(0,0,0,.72),transparent)] px-3 pb-2.5 pt-8">
+                      <div className="truncate text-[14.5px] font-semibold text-white">{s.name}</div>
+                      <div className="truncate text-[12px] text-white/75">{s.venue_name} · {s.address}</div>
+                    </div>
+                  </ScreenPhoto>
+                </button>
+
+                <div className="grid grid-cols-4 divide-x divide-border/60 border-b border-border/60">
+                  {[['Slot price', inr(s.slot_price_month), '/mo'],
+                    ['Slots sold', `${booked}/${s.advertiser_slots}`, ''],
+                    ['Avg people', avg == null ? '—' : avg.toFixed(1), avg == null ? '' : '/play'],
+                    ['Plays 7d', String(plays7(s.id)), '']].map(([k, v, suf]) => (
+                    <div key={k} className="px-3 py-2.5">
+                      <div className="text-[9.5px] font-semibold uppercase tracking-wider text-muted-foreground/70">{k}</div>
+                      <div className="font-mono tnum text-[15px] font-semibold leading-tight">{v}<span className="text-[10.5px] font-normal text-muted-foreground">{suf}</span></div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="px-3 pb-3 pt-2.5">
+                  <Progress value={pct} hot={booked >= s.advertiser_slots} />
+                  <div className="mt-2 flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 flex-wrap gap-1">
+                      <Badge variant="muted">{s.venue_type}</Badge>
+                      {tags.slice(0, 2).map(t => (
+                        <span key={t} className="rounded border border-border/70 bg-muted px-1.5 py-0.5 font-mono text-[10.5px] text-muted-foreground">{t}</span>
+                      ))}
+                      {tags.length > 2 && <span className="rounded border border-border/70 bg-muted px-1.5 py-0.5 font-mono text-[10.5px] text-muted-foreground">+{tags.length - 2}</span>}
+                      {!s.has_camera && <Badge variant="warn">no camera</Badge>}
+                    </div>
+                    <button onClick={() => go('s/' + s.id)} className="shrink-0 text-[12px] font-medium text-primary opacity-0 transition-opacity group-hover:opacity-100">Manage →</button>
                   </div>
-                ))}
-              </div>
-              <div className="mt-4">
-                <div className="mb-1 flex items-baseline justify-between">
-                  <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">Running now</span>
-                  <span className="text-[11.5px] text-muted-foreground">{bookedOn(s.id).length} of {s.advertiser_slots} slots sold</span>
                 </div>
-                <Progress value={Math.round(bookedOn(s.id).length / s.advertiser_slots * 100)} hot={bookedOn(s.id).length >= s.advertiser_slots} />
-                <div className="mt-2 flex flex-col gap-1.5">
-                  {liveOn(s.id).length ? liveOn(s.id).map((c: any) => (
-                    <button key={c.id} onClick={() => go('c/' + c.id)} className="flex items-center justify-between gap-3 rounded-md border border-border/60 bg-muted/60 px-2.5 py-1.5 text-left transition-colors hover:bg-muted">
-                      <span className="min-w-0"><span className="block truncate text-[13px] font-medium">{c.name}</span>
-                        <span className="block truncate text-[11.5px] text-muted-foreground">{advName(c.advertiser_id)} · ends {c.ends_at}</span></span>
-                      <span className="shrink-0 font-mono text-[11.5px] text-muted-foreground">{playsOn(s.id, c.id)} plays</span>
-                    </button>
-                  )) : <p className="text-[12.5px] text-muted-foreground">Nothing scheduled on this screen right now.</p>}
-                </div>
-              </div>
-              <div className="mt-4 border-t border-border/60 pt-3">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">Screen code</div>
-                <div className="font-mono text-[19px] font-semibold tracking-[0.18em] text-primary">{s.code}</div>
-                <div className="mt-0.5 text-[11.5px] text-muted-foreground">Permanent — enter this in the player. Replacing the box reuses the same code.</div>
-              </div>
-            </Card>
-          ))}
+              </Card>
+            );
+          })}
         </div>
-      </>)}
+        </>);
+      })()}
 
       {view === 'advertisers' && (() => {
         const mine = d.advertisers.filter((a: any) => a.org_id === user.org_id);

@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input, Field, Label } from '@/components/ui/input';
-import { StatusBadge, Thumb, Empty } from './bits';
+import { StatusBadge, Thumb, Empty, ScreenPhoto } from './bits';
 
 export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: string) => void; onChanged: () => void }) {
   const [d, setD] = useState<any>(null);
@@ -41,7 +41,7 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
     });
     const net = Number(f.network_slots) || 0;
     await api(`/screen/${id}`, {
-      name: f.name, venue_name: f.venue_name, address: f.address,
+      name: f.name, venue_name: f.venue_name, address: f.address, photo_url: f.photo_url || '',
       venue_base: Number(f.venue_base), size_factor: Number(f.size_factor),
       location_factor: Number(f.location_factor), exposure_factor: Number(f.exposure_factor),
       advertiser_slots: Number(f.advertiser_slots) || 10, loop_length_s: Number(f.loop_length_s),
@@ -55,7 +55,7 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
   return (
     <>
       <PageHead title={s.name}
-        sub={<>{s.venue_name} · {s.address} · <span className="font-mono">{s.code}</span></>}
+        sub={<>{s.venue_name} · {s.address}</>}
         back={{ label: 'My screens', go: 'screens', onGo }}
         actions={<><StatusBadge st={st} /><Button variant="outline" size="sm" onClick={() => setEdit(!edit)}>Edit screen</Button></>} />
 
@@ -66,6 +66,7 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
             <Field label="Name"><Input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} /></Field>
             <Field label="Venue"><Input value={f.venue_name} onChange={e => setF({ ...f, venue_name: e.target.value })} /></Field>
             <Field label="Address"><Input value={f.address} onChange={e => setF({ ...f, address: e.target.value })} /></Field>
+            <Field label="Photo URL (a picture of the screen in place)" className="w-full basis-full"><Input value={f.photo_url || ''} placeholder="https://…" onChange={e => setF({ ...f, photo_url: e.target.value })} /></Field>
           </div>
           <Label className="mt-4">Rate factors — value = base × size × location × exposure</Label>
           <div className="mb-2 flex flex-wrap gap-3">
@@ -88,7 +89,15 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
         </Card>
       )}
 
-      <Card className="mb-4 p-5">
+      <div className="mb-4 grid gap-4 lg:grid-cols-[280px_1fr]">
+      <Card className="overflow-hidden">
+        <ScreenPhoto src={s.photo_url} venue={s.venue_type} className="aspect-video rounded-none border-0" />
+        <div className="flex items-center justify-between gap-2 px-3 py-2">
+          <span className="text-[11px] uppercase tracking-wider text-muted-foreground/70">Pairing code</span>
+          <span className="font-mono text-[15px] font-semibold tracking-[0.16em] text-primary">{s.code}</span>
+        </div>
+      </Card>
+      <Card className="p-5">
         {n ? (
           <div className="flex flex-wrap items-start gap-5">
             <Thumb id={n.creative?.youtube_id} w={210} className="rounded-lg" />
@@ -112,6 +121,7 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
           </div>
         )}
       </Card>
+      </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Live campaigns" value={d.stats.liveCampaigns} hint={`of ${s.advertiser_slots} slots`} />

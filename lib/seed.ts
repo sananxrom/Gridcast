@@ -22,7 +22,7 @@ function mkScreen(
     slot_price_month: Math.round(monthly / 10),
     loop_length_s: 600, slot_duration_s: 10, operating_hours: 12,
     owner_share_pct: 25, has_camera: cam, network_available: false, network_slots: 0,
-    geo_lat: lat, geo_lng: lng, tags, code: code6(),
+    geo_lat: lat, geo_lng: lng, tags, code: code6(), photo_url: '',
     exclusions: { categories: [] as string[], advertisers: [] as string[] },
     status: 'active', created_at: nowISO(),
   };
@@ -51,6 +51,9 @@ export function seed() {
   ];
   screens[0].network_available = true; screens[0].network_slots = 3;
   screens[3].network_available = true; screens[3].network_slots = 4;
+
+  screens.forEach((s, i) => { s.photo_url = `https://picsum.photos/seed/gridcast-${i + 1}/800/450`; });
+
 
   const advertisers = [
     { id: 'adv_fitline', org_id: 'org_sec17', name: 'Fitline Gym', contact: 'Ankit Sharma', email: 'billing@fitline.in', phone: '+91 98765 43210', category: 'fitness', created_at: nowISO() },
