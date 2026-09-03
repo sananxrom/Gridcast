@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input, Select, Field, Label } from '@/components/ui/input';
 import { StatusBadge, Thumb, Empty, SoonPage, ScreenPhoto } from '@/components/views/bits';
+import { BootLoader } from '@/components/ui/loader';
 import { ScreenDetail } from '@/components/views/screen-detail';
 import { CampaignDetail } from '@/components/views/campaign-detail';
 import { CampaignBuilder } from '@/components/views/campaign-builder';
@@ -47,7 +48,7 @@ export default function Operator() {
     ];
   }, [d]);
 
-  if (!user || !d) return <div className="grid h-screen place-items-center text-[13px] text-muted-foreground">Loading…</div>;
+  if (!user || !d) return <BootLoader />;
 
   const advName = (id: string) => d.advertisers.find((a: any) => a.id === id)?.name ?? '—';
   const liveOn = (sid: string) => d.campaigns.filter((c: any) => c.screen_ids.includes(sid) && isLive(c));
@@ -137,7 +138,7 @@ export default function Operator() {
           return d.plays.filter((p: any) => p.screen_id === sid && new Date(p.ended_at || p.started_at).getTime() >= cut).length; };
         return (<>
         <PageHead title="My screens" sub={`${d.screens.length} screens · ${inr(d.screens.reduce((a: number, x: any) => a + x.monthly_value, 0))} of monthly inventory`} />
-        <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {d.screens.map((s: any) => {
             const booked = bookedOn(s.id).length, pct = Math.round(booked / s.advertiser_slots * 100);
             const avg = avgOn(s.id);

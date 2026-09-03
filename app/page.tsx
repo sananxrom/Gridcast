@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { api, session } from '@/lib/client';
 import { Button } from '@/components/ui/button';
 import { Monitor } from 'lucide-react';
+import { TopProgress } from '@/components/ui/loader';
 
 const DEST: Record<string, string> = {
   platform_admin: '/admin', org_admin: '/operator', advertiser_viewer: '/advertiser',
@@ -16,7 +17,7 @@ export default function Login() {
   useEffect(() => { api('/users').then(setUsers).catch(() => {}); }, []);
 
   return (
-    <div className="grid min-h-screen place-items-center bg-[hsl(215_28%_10%)] p-4">
+    <><TopProgress /><div className="grid min-h-screen place-items-center bg-[hsl(215_28%_10%)] p-4">
       <div className="w-full max-w-[420px] rounded-xl bg-card p-8 shadow-2xl">
         <div className="mb-6 flex items-center gap-2.5">
           <div className="grid size-7 place-items-center rounded-md bg-primary text-primary-foreground">
@@ -49,5 +50,5 @@ export default function Login() {
         </Button>
       </div>
     </div>
-  );
+  </>);
 }

@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input, Field, Label } from '@/components/ui/input';
 import { StatusBadge, Thumb, Empty, ScreenPhoto } from './bits';
+import { Skeleton } from '@/components/ui/loader';
 
 export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: string) => void; onChanged: () => void }) {
   const [d, setD] = useState<any>(null);
@@ -25,11 +26,17 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
 
   // live ticker
   useEffect(() => {
-    const t = setInterval(() => { api(`/screen/${id}`).then(x => setD((prev: any) => prev ? { ...prev, nowPlaying: x.nowPlaying, status: x.status, stats: x.stats } : x)).catch(() => {}); }, 3000);
+    const t = setInterval(() => { api(`/screen/${id}`, undefined, { quiet: true }).then(x => setD((prev: any) => prev ? { ...prev, nowPlaying: x.nowPlaying, status: x.status, stats: x.stats } : x)).catch(() => {}); }, 3000);
     return () => clearInterval(t);
   }, [id]);
 
-  if (!d || !f) return <Empty>Loading…</Empty>;
+  if (!d || !f) return (
+    <div className="space-y-3">
+      <Skeleton className="h-9 w-64" />
+      <Skeleton className="h-40 w-full" />
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{[0,1,2,3].map(i => <Skeleton key={i} className="h-24" />)}</div>
+    </div>
+  );
   const s = d.screen, st = d.status, n = d.nowPlaying;
   const preview = Math.round(Number(f.venue_base) * Number(f.size_factor) * Number(f.location_factor) * Number(f.exposure_factor));
   const perSlot = Math.round(preview / Math.max(1, Number(f.advertiser_slots) || 1));

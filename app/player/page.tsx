@@ -56,7 +56,7 @@ export default function Player() {
     samples.current = []; setNow(item);
     yt.current.loadVideoById({ videoId: item.youtube_id, startSeconds: 0 });
     yt.current.playVideo(); setState('on air');
-    api('/nowplaying', { screen_id: scr.current.id, campaign_id: item.campaign_id, creative_id: item.creative_id, duration_s: item.duration_s || 10 }).catch(() => {});
+    api('/nowplaying', { screen_id: scr.current.id, campaign_id: item.campaign_id, creative_id: item.creative_id, duration_s: item.duration_s || 10 }, { quiet: true }).catch(() => {});
     clearTimeout(timer.current);
     timer.current = setTimeout(next, (item.duration_s || 10) * 1000);
     // eslint-disable-next-line

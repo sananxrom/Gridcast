@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input, Select, Field, Label } from '@/components/ui/input';
 import { Thumb, Empty } from './bits';
+import { Skeleton } from '@/components/ui/loader';
 
 export function CampaignDetail({ id, boot, onGo, onChanged }: {
   id: string; boot: any; onGo: (g: string) => void; onChanged: () => void;
@@ -22,7 +23,13 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
   const load = () => api(`/campaign/${id}`).then(x => { setD(x); setF({ ...x.campaign }); });
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [id]);
 
-  if (!d) return <Empty>Loading…</Empty>;
+  if (!d) return (
+    <div className="space-y-3">
+      <Skeleton className="h-9 w-64" />
+      <Skeleton className="h-40 w-full" />
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{[0,1,2,3].map(i => <Skeleton key={i} className="h-24" />)}</div>
+    </div>
+  );
   const c = d.campaign;
   const pct = c.committed_budget ? Math.round((c.accrued_spend / c.committed_budget) * 100) : 0;
   const rate = c.rate_type === 'flat'

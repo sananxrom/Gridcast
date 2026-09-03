@@ -77,3 +77,12 @@
 @keyframes blip { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
 .animate-blip { animation: blip 1.6s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .animate-blip { animation: none } }
+
+@keyframes slide {
+  0%   { transform: translateX(-110%); }
+  100% { transform: translateX(320%); }
+}
+.animate-slide { animation: slide 1.1s cubic-bezier(.4,0,.2,1) infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .animate-slide { animation: none; width: 100%; opacity: .5; }
+}

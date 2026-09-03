@@ -15,6 +15,7 @@ import { ScreenDetail } from '@/components/views/screen-detail';
 import { CampaignDetail } from '@/components/views/campaign-detail';
 import { CampaignBuilder } from '@/components/views/campaign-builder';
 import type { CmdItem } from '@/components/ui/command-palette';
+import { BootLoader } from '@/components/ui/loader';
 
 export default function Admin() {
   const [user, setUser] = useState<SessionUser | null>(null);
@@ -39,7 +40,7 @@ export default function Admin() {
     ...d.advertisers.map((a: any) => ({ id: a.id, label: a.name, sub: a.category, kind: 'advertiser', go: 'campaigns' })),
   ], [d]);
 
-  if (!user || !d) return <div className="grid h-screen place-items-center text-[13px] text-muted-foreground">Loading…</div>;
+  if (!user || !d) return <BootLoader />;
 
   const orgName = (id: string) => d.orgs.find((o: any) => o.id === id)?.name ?? '—';
   const advName = (id: string) => d.advertisers.find((a: any) => a.id === id)?.name ?? '—';

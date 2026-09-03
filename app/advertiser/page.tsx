@@ -11,6 +11,7 @@ import { Card } from '@/components/ui/card';
 import { Input, Field } from '@/components/ui/input';
 import { SoonPage } from '@/components/views/bits';
 import type { CmdItem } from '@/components/ui/command-palette';
+import { BootLoader } from '@/components/ui/loader';
 
 export default function Advertiser() {
   const [user, setUser] = useState<SessionUser | null>(null);
@@ -33,7 +34,7 @@ export default function Advertiser() {
   const measured = pres.filter((p: any) => p.measured);
   const cmdItems: CmdItem[] = useMemo(() => mine.map((c: any) => ({ id: c.id, label: c.name, sub: `${c.starts_at} → ${c.ends_at}`, kind: 'campaign', go: 'overview' })), [mine]);
 
-  if (!user || !d) return <div className="grid h-screen place-items-center text-[13px] text-muted-foreground">Loading…</div>;
+  if (!user || !d) return <BootLoader />;
 
   const nav = advertiserNav();
   const orgs = [{ id: 'me', name: user.name, type: 'advertiser' }];

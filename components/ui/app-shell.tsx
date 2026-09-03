@@ -4,6 +4,7 @@ import { PanelLeftClose, PanelLeftOpen, Search, LogOut, User } from 'lucide-reac
 import { SidebarNav, type NavGroupData, type NavItemData, type OrgOption } from './sidebar-nav';
 import { CommandPalette, type CmdItem } from './command-palette';
 import { cn } from '@/lib/utils';
+import { TopProgress } from './loader';
 
 export function AppShell({
   groups, bottom, activeId, onSelect, orgs, currentOrg, onOrgSelect,
@@ -39,6 +40,7 @@ export function AppShell({
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
+      <TopProgress />
       <div className={cn('h-full shrink-0 transition-[width] duration-300 ease-in-out', collapsed ? 'w-[64px]' : 'w-[260px]')}>
         <SidebarNav groups={groups} bottom={bottom} activeId={activeId} onSelect={handleSelect}
           orgs={orgs} currentOrg={currentOrg} onOrgSelect={onOrgSelect} collapsed={collapsed} />
