@@ -9,18 +9,20 @@ import { Stat, Progress } from '@/components/ui/stat';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Input, Field } from '@/components/ui/input';
+import { Input, Field, Select } from '@/components/ui/input';
 import { StatusBadge, Empty, SoonPage } from '@/components/views/bits';
 import { ScreenDetail } from '@/components/views/screen-detail';
 import { CampaignDetail } from '@/components/views/campaign-detail';
 import { CampaignBuilder } from '@/components/views/campaign-builder';
 import type { CmdItem } from '@/components/ui/command-palette';
 import { BootLoader } from '@/components/ui/loader';
+import { useDirtyForm, SaveBar } from '@/components/ui/form';
 
 export default function Admin() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [d, setD] = useState<any>(null);
   const [view, setView] = useState('overview');
+  const [editOrg, setEditOrg] = useState('');
   const [orgFilter, setOrgFilter] = useState('all');
 
   const reload = useCallback(async () => { if (user) setD(await api(`/bootstrap?user=${user.id}`)); }, [user]);
@@ -98,7 +100,9 @@ export default function Admin() {
           { label: 'Advertisers', num: true, render: (o: any) => d.advertisers.filter((a: any) => a.org_id === o.id).length },
           { label: 'Platform fee', num: true, render: (o: any) => o.type === 'gridcast' ? <span className="text-muted-foreground">—</span> : `${o.platform_fee_pct}%` },
           { label: 'Own inventory', render: (o: any) => o.type === 'gridcast' ? <span className="text-muted-foreground">—</span> : <Badge variant="ok">0% — free tier</Badge> },
+          { label: '', render: (o: any) => o.type === 'gridcast' ? null : <button onClick={() => setEditOrg(o.id)} className="text-[12px] font-medium text-primary hover:underline">Edit</button> },
         ]} rows={d.orgs} />
+        {editOrg && <EditOrg org={d.orgs.find((o: any) => o.id === editOrg)} onDone={() => { setEditOrg(''); reload(); }} />}
         <Card className="mt-3 border-primary/25 bg-primary/[0.04] p-3.5 text-[12.5px] text-primary">
           <b>Zero cut on operator-sold campaigns.</b> The platform fee applies only to network campaigns — where Gridcast brings the advertiser onto an operator&apos;s released slots.
         </Card>
@@ -190,8 +194,8 @@ export default function Admin() {
         <div className="mt-4"><SoonPage title="Trends and cohorts" note="Time-series, venue-type benchmarks and exports are not built yet." /></div>
       </>)}
 
-      {view === 'profile' && <><PageHead title="Profile & account" /><Card className="p-5"><div className="flex flex-wrap gap-3"><Field label="Name"><Input defaultValue={user.name} /></Field><Field label="Role"><Input defaultValue="Platform admin" disabled /></Field></div><p className="mt-3 text-[12.5px] text-muted-foreground">Editing your profile is not wired up yet.</p></Card></>}
-      {(view === 'settings' || view === 'set-org') && <><PageHead title="Organisation" sub="Gridcast platform settings" /><Card className="p-5"><div className="flex flex-wrap gap-3"><Field label="Platform name"><Input defaultValue="Gridcast" /></Field><Field label="Default operator fee"><Input defaultValue="10%" /></Field></div><p className="mt-3 text-[12.5px] text-muted-foreground">Saving platform settings is not wired up yet.</p></Card></>}
+      {view === 'profile' && <AdminProfile user={user} onSaved={() => { const u = session.get(); if (u) setUser(u); reload(); }} />}
+      {(view === 'settings' || view === 'set-org') && <PlatformSettings d={d} onSaved={() => { const u = session.get(); if (u) setUser(u); reload(); }} />}
       {['set-billing','set-team','set-api','set-hooks'].includes(view) && <><PageHead title="Settings" /><SoonPage title="Not built yet" note="Billing, team management, API keys and webhooks are planned but not implemented." /></>}
     </AppShell>
   );
@@ -214,6 +218,74 @@ function AddOrg({ onAdded }: { onAdded: () => void }) {
         <Button onClick={async () => { await api('/org', { name: f.name || 'Untitled operator', admin_name: f.admin_name, admin_email: f.admin_email, platform_fee_pct: Number(f.platform_fee_pct) || 10 }); setOpen(false); onAdded(); }}>Create</Button>
         <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
       </div>
+    </Card>
+  );
+}
+
+function PlatformSettings({ d, onSaved }: { d: any; onSaved: () => void }) {
+  const st = d.settings || {};
+  const fm = useDirtyForm({
+    platform_name: st.platform_name ?? 'Gridcast',
+    default_fee_pct: String(st.default_fee_pct ?? 10),
+    support_email: st.support_email ?? '',
+  });
+  return (<>
+    <PageHead title="Organisation" sub="Gridcast platform settings" />
+    <Card className="p-5">
+      <div className="flex flex-wrap gap-3">
+        <Field label="Platform name"><Input value={fm.f.platform_name} onChange={e => fm.set({ platform_name: e.target.value })} /></Field>
+        <Field label="Default operator fee %"><Input type="number" value={fm.f.default_fee_pct} onChange={e => fm.set({ default_fee_pct: e.target.value })} /></Field>
+        <Field label="Support email"><Input value={fm.f.support_email} onChange={e => fm.set({ support_email: e.target.value })} /></Field>
+      </div>
+      <p className="mt-3 text-[12.5px] text-muted-foreground">The default fee applies to new organisations. Existing operators keep the rate on their own record.</p>
+    </Card>
+    <SaveBar {...fm} onSave={() => fm.save(async v => {
+      await api('/settings', { ...v, default_fee_pct: Number(v.default_fee_pct) || 0 });
+      onSaved();
+    })} onDiscard={fm.discard} />
+  </>);
+}
+
+function AdminProfile({ user, onSaved }: { user: SessionUser; onSaved: () => void }) {
+  const fm = useDirtyForm({ name: user.name, email: (user as any).email ?? '', phone: (user as any).phone ?? '' });
+  return (<>
+    <PageHead title="Profile & account" />
+    <Card className="p-5">
+      <div className="flex flex-wrap gap-3">
+        <Field label="Name"><Input value={fm.f.name} onChange={e => fm.set({ name: e.target.value })} /></Field>
+        <Field label="Email"><Input value={fm.f.email} onChange={e => fm.set({ email: e.target.value })} /></Field>
+        <Field label="Phone"><Input value={fm.f.phone} onChange={e => fm.set({ phone: e.target.value })} /></Field>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-3"><Field label="Role"><Input value="Platform admin" disabled /></Field></div>
+    </Card>
+    <SaveBar {...fm} onSave={() => fm.save(async v => {
+      await api(`/user/${user.id}`, v);
+      const u = session.get(); if (u) session.set({ ...u, name: v.name });
+      onSaved();
+    })} onDiscard={fm.discard} />
+  </>);
+}
+
+function EditOrg({ org, onDone }: { org: any; onDone: () => void }) {
+  const fm = useDirtyForm({ name: org?.name ?? '', platform_fee_pct: String(org?.platform_fee_pct ?? 0), status: org?.status ?? 'active' });
+  if (!org) return null;
+  return (
+    <Card className="mt-3 border-primary/40 p-5">
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-[14px] font-semibold">Edit {org.name}</h3>
+        <Button variant="ghost" size="sm" onClick={onDone}>Close</Button>
+      </div>
+      <div className="flex flex-wrap gap-3">
+        <Field label="Organisation name"><Input value={fm.f.name} onChange={e => fm.set({ name: e.target.value })} /></Field>
+        <Field label="Platform fee % (network campaigns only)"><Input type="number" value={fm.f.platform_fee_pct} onChange={e => fm.set({ platform_fee_pct: e.target.value })} /></Field>
+        <Field label="Status"><Select value={fm.f.status} onChange={e => fm.set({ status: e.target.value })}>
+          <option value="active">active</option><option value="paused">paused</option>
+        </Select></Field>
+      </div>
+      <SaveBar {...fm} note="The operator sees this fee on their own settings page." onSave={() => fm.save(async v => {
+        await api(`/org/${org.id}`, { name: v.name, status: v.status, platform_fee_pct: Number(v.platform_fee_pct) || 0, _as: 'platform_admin' });
+        onDone();
+      })} onDiscard={fm.discard} />
     </Card>
   );
 }

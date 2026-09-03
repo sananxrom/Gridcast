@@ -92,7 +92,10 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
             <Field label="Tags (key:value, comma separated)"><Input value={f.tagStr} onChange={e => setF({ ...f, tagStr: e.target.value })} /></Field>
             <Field label="Blocked categories"><Input value={f.excStr} onChange={e => setF({ ...f, excStr: e.target.value })} /></Field>
           </div>
-          <div className="flex gap-2"><Button onClick={save}>Save screen</Button><Button variant="outline" onClick={() => setEdit(false)}>Cancel</Button></div>
+          <div className="sticky bottom-0 -mx-5 -mb-5 mt-4 flex items-center gap-2 border-t border-border bg-card/95 px-5 py-3 backdrop-blur">
+            <Button onClick={save}>Save screen</Button>
+            <Button variant="outline" onClick={() => { setEdit(false); load(); }}>Cancel</Button>
+          </div>
         </Card>
       )}
 

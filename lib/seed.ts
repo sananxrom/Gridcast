@@ -86,5 +86,5 @@ export function seed() {
     { id: 'grp_hi', org_id: 'org_sec17', name: 'High-footfall (43" and up)', group_type: 'dynamic', rule_json: { min_size: 43 }, screen_ids: [], created_at: nowISO() },
     { id: 'grp_food', org_id: 'org_sec17', name: 'Food & drink venues', group_type: 'dynamic', rule_json: { venue_types: ['cafe'] }, screen_ids: [], created_at: nowISO() },
   ];
-  return { orgs, users, screens, advertisers, creatives, campaigns, groups, devices: [] as any[], plays: [] as any[], presence: [] as any[] };
+  return { settings: { platform_name: 'Gridcast', default_fee_pct: 10, support_email: 'ops@gridcast.in' }, orgs, users, screens, advertisers, creatives, campaigns, groups, devices: [] as any[], plays: [] as any[], presence: [] as any[] };
 }

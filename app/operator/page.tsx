@@ -12,6 +12,7 @@ import { Card } from '@/components/ui/card';
 import { Input, Select, Field, Label } from '@/components/ui/input';
 import { StatusBadge, Thumb, Empty, SoonPage, ScreenPhoto } from '@/components/views/bits';
 import { BootLoader } from '@/components/ui/loader';
+import { useDirtyForm, SaveBar } from '@/components/ui/form';
 import { ScreenDetail } from '@/components/views/screen-detail';
 import { CampaignDetail } from '@/components/views/campaign-detail';
 import { CampaignBuilder } from '@/components/views/campaign-builder';
@@ -305,8 +306,8 @@ export default function Operator() {
       </>)}
 
       {['reports'].includes(view) && <><PageHead title="Reports" /><SoonPage title="Scheduled and exportable reports" note="Per-advertiser PDF and CSV reports on a schedule. Not built yet — campaign pages already carry the same numbers." /></>}
-      {view === 'profile' && <><PageHead title="Profile & account" /><Card className="p-5"><div className="flex flex-wrap gap-3"><Field label="Name"><Input defaultValue={user.name} /></Field><Field label="Organisation"><Input defaultValue={user.orgName} disabled /></Field><Field label="Role"><Input defaultValue={user.role.replace(/_/g, ' ')} disabled /></Field></div><p className="mt-3 text-[12.5px] text-muted-foreground">Editing your profile is not wired up yet.</p></Card></>}
-      {view === 'settings' || view === 'set-org' ? <><PageHead title="Organisation" sub="Settings for your operator account" /><Card className="p-5"><div className="flex flex-wrap gap-3"><Field label="Organisation name"><Input defaultValue={user.orgName} /></Field><Field label="Platform fee on network campaigns"><Input defaultValue={`${d.org?.platform_fee_pct ?? 0}%`} disabled /></Field></div><p className="mt-3 text-[12.5px] text-muted-foreground">Your fee is set by Gridcast and shown here for transparency. It applies only to campaigns Gridcast sells onto your released slots.</p></Card></> : null}
+      {view === 'profile' && <ProfileSettings user={user} onSaved={() => { const u = session.get(); if (u) setUser(u); reload(); }} />}
+      {(view === 'settings' || view === 'set-org') && <OrgSettings d={d} user={user} onSaved={() => { const u = session.get(); if (u) setUser(u); reload(); }} />}
       {['set-billing','set-team','set-api','set-hooks'].includes(view) && (<>
         <PageHead title={titleOf[view] ?? 'Settings'} />
         <SoonPage title="Not built yet"
@@ -373,5 +374,55 @@ function Creatives({ d, user, onChanged, advName }: { d: any; user: SessionUser;
               <Button size="sm" variant="outline" onClick={async () => { await api(`/creative/${c.id}/approve`, { status: 'rejected' }); onChanged(); }}>Reject</Button></div>
           : <Button size="sm" variant="ghost" onClick={async () => { await api(`/creative/${c.id}/approve`, { status: 'pending' }); onChanged(); }}>Revoke</Button> },
     ]} rows={d.creatives} />
+  </>);
+}
+
+function OrgSettings({ d, user, onSaved }: { d: any; user: SessionUser; onSaved: () => void }) {
+  const org = d.org || {};
+  const fm = useDirtyForm({ name: org.name ?? user.orgName, support_email: org.support_email ?? '', billing_address: org.billing_address ?? '', gstin: org.gstin ?? '' });
+  return (<>
+    <PageHead title="Organisation" sub="Settings for your operator account" />
+    <Card className="p-5">
+      <div className="flex flex-wrap gap-3">
+        <Field label="Organisation name"><Input value={fm.f.name} onChange={e => fm.set({ name: e.target.value })} /></Field>
+        <Field label="Support email"><Input value={fm.f.support_email} onChange={e => fm.set({ support_email: e.target.value })} placeholder="ops@example.in" /></Field>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-3">
+        <Field label="Billing address" className="flex-[2]"><Input value={fm.f.billing_address} onChange={e => fm.set({ billing_address: e.target.value })} /></Field>
+        <Field label="GSTIN"><Input value={fm.f.gstin} onChange={e => fm.set({ gstin: e.target.value })} /></Field>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-3">
+        <Field label="Platform fee on network campaigns"><Input value={`${d.org?.platform_fee_pct ?? 0}%`} disabled /></Field>
+      </div>
+      <p className="mt-3 text-[12.5px] text-muted-foreground">Your fee is set by Gridcast and shown here for transparency. It applies only to campaigns Gridcast sells onto your released slots.</p>
+    </Card>
+    <SaveBar {...fm} onSave={() => fm.save(async v => {
+      const o = await api(`/org/${user.org_id}`, v);
+      const u = session.get(); if (u) session.set({ ...u, orgName: o.name });
+      onSaved();
+    })} onDiscard={fm.discard} />
+  </>);
+}
+
+function ProfileSettings({ user, onSaved }: { user: SessionUser; onSaved: () => void }) {
+  const fm = useDirtyForm({ name: user.name, email: (user as any).email ?? '', phone: (user as any).phone ?? '' });
+  return (<>
+    <PageHead title="Profile & account" />
+    <Card className="p-5">
+      <div className="flex flex-wrap gap-3">
+        <Field label="Name"><Input value={fm.f.name} onChange={e => fm.set({ name: e.target.value })} /></Field>
+        <Field label="Email"><Input value={fm.f.email} onChange={e => fm.set({ email: e.target.value })} /></Field>
+        <Field label="Phone"><Input value={fm.f.phone} onChange={e => fm.set({ phone: e.target.value })} /></Field>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-3">
+        <Field label="Organisation"><Input value={user.orgName} disabled /></Field>
+        <Field label="Role"><Input value={user.role.replace(/_/g, ' ')} disabled /></Field>
+      </div>
+    </Card>
+    <SaveBar {...fm} onSave={() => fm.save(async v => {
+      await api(`/user/${user.id}`, v);
+      const u = session.get(); if (u) session.set({ ...u, name: v.name });
+      onSaved();
+    })} onDiscard={fm.discard} />
   </>);
 }

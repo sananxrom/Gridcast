@@ -12,6 +12,7 @@ import { Input, Field } from '@/components/ui/input';
 import { SoonPage } from '@/components/views/bits';
 import type { CmdItem } from '@/components/ui/command-palette';
 import { BootLoader } from '@/components/ui/loader';
+import { useDirtyForm, SaveBar } from '@/components/ui/form';
 
 export default function Advertiser() {
   const [user, setUser] = useState<SessionUser | null>(null);
@@ -96,7 +97,27 @@ export default function Advertiser() {
       })()}
 
       {view === 'reports' && <><PageHead title="Reports" /><SoonPage title="Downloadable campaign reports" note="A PDF and CSV of exactly this data, on a schedule. Not built yet." /></>}
-      {view === 'profile' && <><PageHead title="Profile & account" /><Card className="p-5"><div className="flex flex-wrap gap-3"><Field label="Name"><Input defaultValue={user.name} /></Field><Field label="Agency / operator"><Input defaultValue={user.orgName} disabled /></Field></div><p className="mt-3 text-[12.5px] text-muted-foreground">Editing your profile is not wired up yet.</p></Card></>}
+      {view === 'profile' && <AdvProfile user={user} />}
     </AppShell>
   );
+}
+
+function AdvProfile({ user }: { user: SessionUser }) {
+  const fm = useDirtyForm({ name: user.name, email: (user as any).email ?? '', phone: (user as any).phone ?? '' });
+  return (<>
+    <PageHead title="Profile & account" />
+    <Card className="p-5">
+      <div className="flex flex-wrap gap-3">
+        <Field label="Name"><Input value={fm.f.name} onChange={e => fm.set({ name: e.target.value })} /></Field>
+        <Field label="Email"><Input value={fm.f.email} onChange={e => fm.set({ email: e.target.value })} /></Field>
+        <Field label="Phone"><Input value={fm.f.phone} onChange={e => fm.set({ phone: e.target.value })} /></Field>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-3"><Field label="Agency / operator"><Input value={user.orgName} disabled /></Field></div>
+      <p className="mt-3 text-[12.5px] text-muted-foreground">Billing contact changes reach your operator — they raise the invoices.</p>
+    </Card>
+    <SaveBar {...fm} onSave={() => fm.save(async v => {
+      await api(`/user/${user.id}`, v);
+      const u = session.get(); if (u) session.set({ ...u, name: v.name });
+    })} onDiscard={fm.discard} />
+  </>);
 }

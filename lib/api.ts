@@ -46,6 +46,7 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
       devices: scope(db.devices, u.org_id, isAdmin),
       plays: scope(db.plays, u.org_id, isAdmin).slice(-400),
       presence: db.presence.slice(-400),
+      settings: db.settings || {},
     } };
   }
 
@@ -209,6 +210,25 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
     db.orgs.push(o);
     db.users.push({ id: uid('u'), org_id: o.id, name: body.admin_name || o.name + ' admin', email: body.admin_email || '', role: 'org_admin' });
     await save(); return { body: o };
+  }
+  if (method === 'POST' && seg[0] === 'org' && seg[1]) {
+    const o = db.orgs.find((x: any) => x.id === seg[1]);
+    if (!o) return { status: 404, body: { error: 'not found' } };
+    for (const k of ['name', 'type', 'status']) if (k in body) o[k] = body[k];
+    // only the platform may move an operator's fee
+    if ('platform_fee_pct' in body && body._as === 'platform_admin') o.platform_fee_pct = Number(body.platform_fee_pct) || 0;
+    await save(); return { body: o };
+  }
+  if (method === 'POST' && seg[0] === 'user' && seg[1]) {
+    const u = db.users.find((x: any) => x.id === seg[1]);
+    if (!u) return { status: 404, body: { error: 'not found' } };
+    for (const k of ['name', 'email', 'phone']) if (k in body) u[k] = body[k];
+    await save(); return { body: u };
+  }
+  if (method === 'GET' && p === 'settings') return { body: db.settings || {} };
+  if (method === 'POST' && p === 'settings') {
+    db.settings = { ...(db.settings || {}), ...body };
+    await save(); return { body: db.settings };
   }
   if (method === 'POST' && p === 'reset') { db = seed(); await save(); return { body: { ok: true } }; }
 

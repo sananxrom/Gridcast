@@ -116,7 +116,7 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
           <div className="rounded-lg bg-primary/[0.06] p-3 text-[12.5px] text-primary">
             Changing screens or creatives affects delivery from the next schedule pull. Plays already recorded and spend already accrued are not altered.
           </div>
-          <div className="mt-3 flex items-center gap-2">
+          <div className="sticky bottom-0 -mx-5 -mb-5 mt-4 flex items-center gap-2 border-t border-border bg-card/95 px-5 py-3 backdrop-blur">
             <Button onClick={save}>Save changes</Button>
             <Button variant="outline" onClick={() => setEdit(false)}>Cancel</Button>
             {err && <span className="text-[12.5px] text-destructive">{err}</span>}
