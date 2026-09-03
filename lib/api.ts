@@ -167,6 +167,7 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
     const resolved = resolveFor(screen);
     return { body: { screen, status: st, nowPlaying: np, campaigns: camps,
       config: resolved,
+      frameUrl: (db.frames || []).find((f: any) => f.screen_id === screen.id && Date.now() - new Date(f.at).getTime() < 30 * 60_000)?.data ?? null,
       configStack: cfg.applicable(screen, db.groups || [], db.configs || []).map((c: any) => ({ id: c.id, name: c.name, layer: c.layer, keys: Object.keys(c.values || {}).length })),
       configConflicts: cfg.conflicts(screen, db.groups || [], db.configs || []),
       pricingDrift: cfg.pricingDrift(screen, resolved),
@@ -297,6 +298,23 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
     db.configs = db.configs.filter((x: any) => x.id !== seg[1]);
     await save(); return { body: { ok: true } };
   }
+  /** Setup preview: the player posts a still while aiming the camera. */
+  if (method === 'POST' && seg[0] === 'screen' && seg[1] && seg[2] === 'frame') {
+    const screen = db.screens.find((x: any) => x.id === seg[1]);
+    if (!screen) return { status: 404, body: { error: 'not found' } };
+    const r = resolveFor(screen);
+    if (!r.preview_frames?.value) return { status: 403, body: { error: 'Setup preview is off for this screen' } };
+    db.frames = (db.frames || []).filter((f: any) => f.screen_id !== screen.id);
+    db.frames.push({ screen_id: screen.id, data: String(body.data || '').slice(0, 900_000), at: nowISO() });
+    await save(); return { body: { ok: true } };
+  }
+  if (method === 'GET' && seg[0] === 'screen' && seg[1] && seg[2] === 'frame') {
+    const f = (db.frames || []).find((x: any) => x.screen_id === seg[1]);
+    // a still is only good while it is fresh; a stale aim is worse than none
+    if (!f || Date.now() - new Date(f.at).getTime() > 30 * 60_000) return { body: { data: null } };
+    return { body: { data: f.data, at: f.at } };
+  }
+
   /** Set or clear keys on a screen's own override config, creating it on demand. */
   if (method === 'POST' && seg[0] === 'screen' && seg[1] && seg[2] === 'config') {
     const screen = db.screens.find((x: any) => x.id === seg[1]);
