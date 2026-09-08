@@ -37,6 +37,8 @@ export type Setting = {
   platforms?: ('android' | 'windows' | 'web')[];
   /** Feeds the rate card — changing it triggers reconciliation. */
   priced?: boolean;
+  /** Shown without expanding a group. Everything else sits behind "show more". */
+  common?: boolean;
 };
 
 export const GROUPS = [
@@ -58,23 +60,23 @@ const T = (k: string, label: string, group: string, ctl: Ctl, def: any, extra: P
 
 export const SETTINGS: Setting[] = [
   // ---------------------------------------------------------------- identity
-  T('device_label', 'Device label', 'identity', 'text', '', {
+  T('device_label', 'Device label', 'identity', 'text', '', { common: true,
     info: 'Name shown on the player’s own start screen, for whoever is standing in front of it.' }),
   T('show_pairing_code', 'Show pairing code on device', 'identity', 'toggle', true, {
     info: 'Whether the permanent screen code can be read off the device screen. Turn off for public-facing installs.' }),
 
   // ------------------------------------------------------------------ screen
-  T('size_in', 'Diagonal size', 'screen', 'number', 43, { unit: 'in' }),
-  T('resolution', 'Resolution', 'screen', 'wh', { w: 1920, h: 1080 }),
+  T('size_in', 'Diagonal size', 'screen', 'number', 43, { common: true, unit: 'in' }),
+  T('resolution', 'Resolution', 'screen', 'wh', { w: 1920, h: 1080 }, { common: true }),
   T('aspect', 'Aspect ratio', 'screen', 'derived', '16:9'),
-  T('orientation', 'Orientation', 'screen', 'select', 'landscape', { options: ['landscape', 'portrait', 'auto'] }),
+  T('orientation', 'Orientation', 'screen', 'select', 'landscape', { common: true, options: ['landscape', 'portrait', 'auto'] }),
   T('rotation_method', 'Rotation method', 'screen', 'select', 'hardware', { options: ['hardware', 'software'],
     info: 'Software rotation costs performance. Use it only where the panel cannot rotate itself.' }),
   T('screen_color', 'Screen colour', 'screen', 'color', '#000000', {
     info: 'Shown behind slides and during transitions.' }),
   T('hide_system_bars', 'Fullscreen', 'screen', 'toggle', true, {
     info: 'Hide the Android status and navigation bars, or the Windows taskbar.' }),
-  T('keep_screen_on', 'Keep screen awake', 'screen', 'toggle', true, {
+  T('keep_screen_on', 'Keep screen awake', 'screen', 'toggle', true, { common: true,
     info: 'Prevents the panel sleeping, and relaunches the player if someone presses the power button.' }),
   T('limit_resolution', 'Limit content resolution', 'screen', 'select', 'off', { options: ['off', '720p', '1080p'],
     info: 'Downscale content to panel size. Only for devices whose own scaler is broken.' }),
@@ -89,19 +91,19 @@ export const SETTINGS: Setting[] = [
     info: 'Turns the panel itself off outside trading hours, over IP. Requires TV control.' }),
 
   // ---------------------------------------------------------------- playback
-  T('loop_length_s', 'Loop length', 'playback', 'number', 600, { unit: 's', priced: true }),
-  T('slot_duration_s', 'Slot duration', 'playback', 'number', 10, { unit: 's', priced: true,
+  T('loop_length_s', 'Loop length', 'playback', 'number', 600, { common: true, unit: 's', priced: true }),
+  T('slot_duration_s', 'Slot duration', 'playback', 'number', 10, { common: true, unit: 's', priced: true,
     info: 'Also the unit of a billable play.' }),
-  T('operating_hours', 'Trading hours', 'playback', 'timerange', { from: '08:00', to: '20:00' }, { priced: true,
+  T('operating_hours', 'Trading hours', 'playback', 'timerange', { from: '08:00', to: '20:00' }, { common: true, priced: true,
     info: 'When the venue is open. The player sleeps outside this window, and it prices the screen.' }),
-  T('start_automatically', 'Start automatically', 'playback', 'toggle', true),
-  T('resume_playlist', 'Resume playlist', 'playback', 'toggle', true, {
+  T('start_automatically', 'Start automatically', 'playback', 'toggle', true, { common: true }),
+  T('resume_playlist', 'Resume playlist', 'playback', 'toggle', true, { common: true,
     info: 'Continue from the last played slide after a restart.' }),
   T('start_from_cache', 'Start from cache', 'playback', 'toggle', true, {
     info: 'Show cached content immediately and fetch updates in the background. A large win on slow venue Wi-Fi.' }),
   T('start_on_slide_ready', 'Start on first ready', 'playback', 'toggle', true, {
     info: 'Do not wait for the whole playlist to download before playing.' }),
-  T('skip_incomplete', 'Skip broken creatives', 'playback', 'toggle', true, {
+  T('skip_incomplete', 'Skip broken creatives', 'playback', 'toggle', true, { common: true,
     info: 'A creative that will not load is skipped rather than freezing the loop.' }),
   T('log_skips', 'Record skipped creatives', 'playback', 'toggle', true, {
     info: 'Stored as a play with status “skipped”. Never billed.' }),
@@ -112,20 +114,20 @@ export const SETTINGS: Setting[] = [
   T('accelerate_text', 'GPU text acceleration', 'playback', 'toggle', true, {
     info: 'For scrolling or animated text.' }),
   T('filler_behaviour', 'When the loop is not sold out', 'playback', 'select', 'house',
-    { options: [['house', 'Play house content'], ['operator', 'Operator filler'], ['black', 'Black screen'], ['compress', 'Compress the loop']],
+    { common: true, options: [['house', 'Play house content'], ['operator', 'Operator filler'], ['black', 'Black screen'], ['compress', 'Compress the loop']],
       info: 'Compressing the loop makes sold slots recur faster, which changes what an advertiser receives. House content keeps timing honest.' }),
 
   // ------------------------------------------------------------- measurement
-  T('camera_source', 'Camera source', 'measurement', 'select', 'usb', { options: ['builtin', 'usb', 'ip'] }),
+  T('camera_source', 'Camera source', 'measurement', 'select', 'usb', { common: true, options: ['builtin', 'usb', 'ip'] }),
   T('camera_device_id', 'Camera device', 'measurement', 'text', '', {
     info: 'Populated by the paired player. Leave empty to use the first camera found.' }),
   T('camera_url', 'IP camera URL', 'measurement', 'text', '', { info: 'RTSP or HTTP, when the source is an IP camera.' }),
-  T('inference_res', 'Inference resolution', 'measurement', 'select', '640x480', { options: ['320x240', '640x480', '1280x720'],
+  T('inference_res', 'Inference resolution', 'measurement', 'select', '640x480', { common: true, options: ['320x240', '640x480', '1280x720'],
     info: 'Frames are downscaled before detection. Higher is not better — it is slower, and people far from the screen are not the audience.' }),
-  T('sample_interval_s', 'Sample interval', 'measurement', 'number', 2, { unit: 's', locked: true,
+  T('sample_interval_s', 'Sample interval', 'measurement', 'number', 2, { common: true, unit: 's', locked: true,
     lockReason: 'Measurement consistency — screens must be comparable',
     info: 'How often a frame is sampled during a play. Every presence figure on the platform assumes this value.' }),
-  T('model', 'Detection model', 'measurement', 'select', 'yolox-tiny', { options: ['yolox-tiny', 'yolox-s', 'coco-ssd'], locked: true,
+  T('model', 'Detection model', 'measurement', 'select', 'yolox-tiny', { common: true, options: ['yolox-tiny', 'yolox-s', 'coco-ssd'], locked: true,
     lockReason: 'Recorded against every measurement as model_ver',
     info: 'Apache-2.0 licensed. Stamped on each presence record so a number can always be traced to the model that produced it.' }),
   T('confidence_min', 'Confidence floor', 'measurement', 'number', 0.45, { locked: true,
@@ -133,7 +135,7 @@ export const SETTINGS: Setting[] = [
     info: 'Detections below this confidence are discarded.' }),
   T('min_box_px', 'Minimum subject size', 'measurement', 'number', 24, { unit: 'px',
     info: 'Ignores people far in the background who could not read the screen.' }),
-  T('detection_zone', 'Detection zone', 'measurement', 'rect', { x: 0, y: 0, w: 100, h: 100 }, {
+  T('detection_zone', 'Detection zone', 'measurement', 'rect', { x: 0, y: 0, w: 100, h: 100 }, { common: true,
     info: 'The part of the frame that counts as in front of the screen. The gap between this and the whole frame is the adjustment factor.' }),
   T('count_ceiling', 'Count ceiling', 'measurement', 'number', 50, {
     info: 'Caps absurd readings from a crowd surge or a mirror facing the camera.' }),
@@ -149,34 +151,34 @@ export const SETTINGS: Setting[] = [
     info: 'Mean of per-sample counts across one play. Not reach, not impressions, not unique people.' }),
 
   // ----------------------------------------------------------------- privacy
-  T('upload_frames', 'Frames leave the device', 'privacy', 'derived', 'never', { locked: true,
+  T('upload_frames', 'Frames leave the device', 'privacy', 'derived', 'never', { common: true, locked: true,
     lockReason: 'Cannot be enabled by anyone, including Gridcast',
     info: 'Only counts are transmitted. No image ever leaves the player.' }),
-  T('retain_frames', 'Frame retention', 'privacy', 'derived', false, { locked: true,
+  T('retain_frames', 'Frame retention', 'privacy', 'derived', false, { common: true, locked: true,
     lockReason: 'Cannot be enabled',
     info: 'Frames are discarded after inference. They exist in memory only.' }),
-  T('face_recognition', 'Face recognition', 'privacy', 'derived', false, { locked: true,
+  T('face_recognition', 'Face recognition', 'privacy', 'derived', false, { common: true, locked: true,
     lockReason: 'Not implemented',
     info: 'The model detects person-shaped objects. It has no concept of identity.' }),
-  T('reidentify', 'Re-identification across plays', 'privacy', 'derived', false, { locked: true,
+  T('reidentify', 'Re-identification across plays', 'privacy', 'derived', false, { common: true, locked: true,
     lockReason: 'Not implemented',
     info: 'A person seen twice is counted twice. That is a deliberate honesty choice, not a limitation.' }),
   T('demographics', 'Demographic inference', 'privacy', 'derived', false, { locked: true, lockReason: 'Not implemented' }),
-  T('preview_frames', 'Setup preview', 'privacy', 'toggle', false, {
+  T('preview_frames', 'Setup preview', 'privacy', 'toggle', false, { common: true,
     info: 'Streams frames to the dashboard while aiming the camera. Expires automatically after 30 minutes.' }),
 
   // ------------------------------------------------------------ connectivity
-  T('sync_interval_min', 'Sync interval', 'connectivity', 'number', 5, { unit: 'min',
+  T('sync_interval_min', 'Sync interval', 'connectivity', 'number', 5, { common: true, unit: 'min',
     info: 'How often the player pulls its playlist.' }),
-  T('randomise_sync', 'Randomise sync time', 'connectivity', 'toggle', true, {
+  T('randomise_sync', 'Randomise sync time', 'connectivity', 'toggle', true, { common: true,
     info: 'Offsets each player randomly inside the interval. Without it the whole fleet hits the server on the same second.' }),
-  T('sync_window', 'Sync window', 'connectivity', 'timerange', { from: '00:00', to: '00:00' }, {
+  T('sync_window', 'Sync window', 'connectivity', 'timerange', { from: '00:00', to: '00:00' }, { common: true,
     info: 'Restrict updates to a time window. Venue Wi-Fi is often shared with the till.' }),
-  T('bandwidth_kbps', 'Bandwidth cap', 'connectivity', 'number', 0, { unit: 'kbps',
+  T('bandwidth_kbps', 'Bandwidth cap', 'connectivity', 'number', 0, { common: true, unit: 'kbps',
     info: 'Throttle downloads so the venue’s own connection stays usable. 0 is unlimited.' }),
   T('max_parallel_downloads', 'Parallel downloads', 'connectivity', 'number', 2),
   T('retry_downloads', 'Retry failed downloads', 'connectivity', 'toggle', true),
-  T('work_offline', 'Work offline', 'connectivity', 'toggle', false, {
+  T('work_offline', 'Work offline', 'connectivity', 'toggle', false, { common: true,
     info: 'Stop contacting the server entirely and play from cache. For a screen on a dead connection.' }),
   T('offline_buffer_plays', 'Offline play buffer', 'connectivity', 'number', 5000, {
     info: 'Plays stored locally while offline and sent when the link returns. Nothing is lost.' }),
@@ -191,24 +193,24 @@ export const SETTINGS: Setting[] = [
   T('enable_ssl', 'TLS', 'connectivity', 'toggle', true, { locked: true, lockReason: 'Platform security' }),
 
   // ------------------------------------------------------------------- cache
-  T('cache_cleanup', 'Automatic cleanup', 'cache', 'toggle', true),
-  T('cache_min_free_mb', 'Clean below', 'cache', 'number', 500, { unit: 'MB', info: 'Free space that starts cleanup.' }),
-  T('cache_max_free_mb', 'Stop at', 'cache', 'number', 2000, { unit: 'MB',
+  T('cache_cleanup', 'Automatic cleanup', 'cache', 'toggle', true, { common: true }),
+  T('cache_min_free_mb', 'Clean below', 'cache', 'number', 500, { common: true, unit: 'MB', info: 'Free space that starts cleanup.' }),
+  T('cache_max_free_mb', 'Stop at', 'cache', 'number', 2000, { common: true, unit: 'MB',
     info: 'Free space that stops it. The gap between the two prevents cleanup running constantly at the threshold.' }),
   T('cache_max_age_days', 'Drop unused after', 'cache', 'number', 30, { unit: 'days' }),
   T('cache_signatures', 'Verify cached files', 'cache', 'toggle', true, {
     info: 'Turn off only for debugging — it allows cached files to be edited on the device.' }),
 
   // ------------------------------------------------------------- reliability
-  T('daily_restart', 'Daily restart', 'reliability', 'toggle', true, {
+  T('daily_restart', 'Daily restart', 'reliability', 'toggle', true, { common: true,
     info: 'Restarting nightly is prevention, not a fix. Inexpensive Android boxes leak memory.' }),
-  T('restart_times', 'Restart at', 'reliability', 'time', '03:00'),
+  T('restart_times', 'Restart at', 'reliability', 'time', '03:00', { common: true }),
   T('restart_timing', 'Restart timing', 'reliability', 'select', 'playlist_end',
-    { options: [['playlist_end', 'At playlist end'], ['slide_end', 'At slide end'], ['immediate', 'Immediately']],
+    { common: true, options: [['playlist_end', 'At playlist end'], ['slide_end', 'At slide end'], ['immediate', 'Immediately']],
       info: 'Never mid-creative — a restart during a play would truncate its measurement.' }),
   T('restart_force_delay_min', 'Force restart after', 'reliability', 'number', 60, { unit: 'min',
     info: 'Restart anyway if the playlist never reaches its end.' }),
-  T('keep_alive', 'Watchdog', 'reliability', 'toggle', true, { info: 'Restart the player if it stops responding.' }),
+  T('keep_alive', 'Watchdog', 'reliability', 'toggle', true, { common: true, info: 'Restart the player if it stops responding.' }),
   T('keep_alive_s', 'Watchdog interval', 'reliability', 'number', 120, { unit: 's' }),
   T('restart_on_inactivity', 'Restart on inactivity', 'reliability', 'toggle', false, { info: 'For interactive installs only.' }),
   T('inactivity_s', 'Inactivity interval', 'reliability', 'number', 60, { unit: 's' }),
@@ -217,7 +219,7 @@ export const SETTINGS: Setting[] = [
     info: 'Consecutive failures before this screen raises an inbox alert.' }),
 
   // ------------------------------------------------------------- interaction
-  T('touch_enabled', 'Touch enabled', 'interaction', 'toggle', false, { info: 'Master switch for everything below.' }),
+  T('touch_enabled', 'Touch enabled', 'interaction', 'toggle', false, { common: true, info: 'Master switch for everything below.' }),
   T('navigate_on_touch', 'Navigate on touch', 'interaction', 'toggle', false, {
     info: 'Touching the left or right edge skips backward or forward.' }),
   T('disable_web_interaction', 'Lock embedded web pages', 'interaction', 'toggle', true, {
@@ -237,9 +239,9 @@ export const SETTINGS: Setting[] = [
   T('web_server_port', 'Port', 'interaction', 'number', 55554, { soon: true }),
 
   // -------------------------------------------------------------------- sync
-  T('sync_group_id', 'Sync group', 'sync', 'text', '', {
+  T('sync_group_id', 'Sync group', 'sync', 'text', '', { common: true,
     info: 'All players sharing a group play as one surface. Assign the same group to every box driving the screen.' }),
-  T('sync_role', 'Role', 'sync', 'select', 'leader', { options: ['leader', 'follower'], info: 'One leader per group.' }),
+  T('sync_role', 'Role', 'sync', 'select', 'leader', { common: true, options: ['leader', 'follower'], info: 'One leader per group.' }),
   T('tile_rect', 'Tile geometry', 'sync', 'rect', { x: 0, y: 0, w: 100, h: 100 }, {
     info: 'Which part of the logical screen this player renders. Two boxes splitting a wall are 0,0,50,100 and 50,0,50,100.' }),
   T('playback_clock', 'Playback clock', 'sync', 'toggle', false, { info: 'Switched on automatically when a sync group is set.' }),
@@ -258,12 +260,12 @@ export const SETTINGS: Setting[] = [
     info: 'Four boxes driving one wall are one audience. Only the leader’s camera measures — otherwise the wall counts everyone four times.' }),
 
   // ------------------------------------------------------------- diagnostics
-  T('debug_log', 'Debug logging', 'diagnostics', 'toggle', false),
+  T('debug_log', 'Debug logging', 'diagnostics', 'toggle', false, { common: true }),
   T('log_files', 'Log file count', 'diagnostics', 'number', 5),
   T('log_size_mb', 'Log total size', 'diagnostics', 'number', 100, { unit: 'MB' }),
   T('upload_logs', 'Upload logs', 'diagnostics', 'toggle', false, {
     info: 'Send logs to Gridcast when a fault is reported. Off by default.' }),
-  T('diagnostics_overlay', 'On-screen diagnostics', 'diagnostics', 'toggle', false, {
+  T('diagnostics_overlay', 'On-screen diagnostics', 'diagnostics', 'toggle', false, { common: true,
     info: 'Frame rate, sync state, last pull and live presence count. For commissioning.' }),
   T('allow_screenshot', 'Remote screenshot', 'diagnostics', 'toggle', true, {
     info: 'Lets the dashboard show what the screen is displaying right now.' }),
@@ -274,6 +276,14 @@ export const SETTINGS: Setting[] = [
 export const BY_KEY: Record<string, Setting> = Object.fromEntries(SETTINGS.map(s => [s.key, s]));
 export const LOCKED_KEYS = SETTINGS.filter(s => s.locked).map(s => s.key);
 export const PRICED_KEYS = SETTINGS.filter(s => s.priced).map(s => s.key);
+export const COMMON_KEYS = SETTINGS.filter(s => s.common).map(s => s.key);
+
+/** The handful a person opens a screen's config to check. */
+export const SUMMARY_KEYS = [
+  'operating_hours', 'loop_length_s', 'slot_duration_s',
+  'sync_interval_min', 'daily_restart', 'restart_times',
+  'sample_interval_s', 'detection_zone', 'camera_source', 'work_offline',
+];
 
 /** Every setting at its shipped default. */
 export function defaults(): Record<string, any> {

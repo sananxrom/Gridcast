@@ -10,15 +10,20 @@ import { Button } from '@/components/ui/button';
 import { Input, Select, Field, Label } from '@/components/ui/input';
 import { useDirtyForm, SaveBar } from '@/components/ui/form';
 import { Empty } from './bits';
+import { ChevronDown } from 'lucide-react';
+
+/** The ten a screen's config tab leads with. */
+const SUMMARY = ['operating_hours', 'loop_length_s', 'slot_duration_s', 'sync_interval_min',
+  'daily_restart', 'restart_times', 'sample_interval_s', 'detection_zone', 'camera_source', 'work_offline'];
 import { ScreenPreview, DayBar, LoopBar, ZoneEditor } from '@/components/ui/config-visuals';
 import { cn } from '@/lib/utils';
 
 type Setting = {
   key: string; label: string; group: string; ctl: string; unit?: string;
   options?: (string | [string, string])[]; def: any; info?: string;
-  locked?: boolean; lockReason?: string; soon?: boolean; platforms?: string[]; priced?: boolean;
+  locked?: boolean; lockReason?: string; soon?: boolean; platforms?: string[]; priced?: boolean; common?: boolean;
 };
-type Schema = { groups: { id: string; title: string; hint: string }[]; settings: Setting[]; locked: string[]; priced: string[] };
+type Schema = { groups: { id: string; title: string; hint: string }[]; settings: Setting[]; locked: string[]; priced: string[]; summary?: string[] };
 
 const LAYERS: Record<string, { label: string; hint: string }> = {
   platform: { label: 'Platform', hint: 'Every screen on the Gridcast network' },
@@ -111,10 +116,10 @@ export function SettingRow({
   })();
 
   return (
-    <div className={cn('flex flex-wrap items-start justify-between gap-x-6 gap-y-2 border-b border-l-2 border-border/50 px-4 py-3 last:border-b-0 transition-colors',
-      isSet === true ? 'border-l-primary bg-primary/[0.035]' : 'border-l-transparent hover:bg-black/[0.015] dark:hover:bg-white/[0.015]',
-      isSet === false && 'text-muted-foreground')}>
-      <div className="min-w-[220px] flex-1">
+    <div className={cn('grid gap-x-6 gap-y-1.5 border-b border-l-2 border-border/50 px-4 py-2.5 transition-colors last:border-b-0',
+      'md:grid-cols-[minmax(200px,290px)_minmax(0,1fr)_auto] md:items-center',
+      isSet === true ? 'border-l-primary bg-primary/[0.035]' : 'border-l-transparent hover:bg-black/[0.015] dark:hover:bg-white/[0.015]')}>
+      <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-1.5 text-[13px] font-medium">
           {s.label}
           {s.info && <Hint text={s.info} />}
@@ -127,8 +132,8 @@ export function SettingRow({
         {isSet === true && <div className="mt-0.5 text-[11.5px] font-medium text-primary">{setLabel}</div>}
         {source && <div className="mt-0.5 text-[11.5px] text-muted-foreground">⤷ {source.name}</div>}
       </div>
+      <div className="flex min-w-0 items-center">{ctl}</div>
       <div className="flex shrink-0 items-center gap-2">
-        {ctl}
         {onReset && !locked && (
           <button onClick={onReset} title="Reset to inherited"
             className="rounded p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground">
@@ -173,6 +178,87 @@ function GroupVisual({ group, get, set, extra }: {
   }
   return null;
 }
+
+
+/* --------------------------------------------------------- shared shell -- */
+
+/** Sticky group index. Counts are what make it worth the width. */
+function GroupRail({ groups, counts, active, onJump }: {
+  groups: { id: string; title: string }[];
+  counts: Record<string, number>;
+  active: string;
+  onJump: (id: string) => void;
+}) {
+  return (
+    <nav className="sticky top-4 hidden self-start lg:block">
+      <ul className="space-y-0.5">
+        {groups.map(g => (
+          <li key={g.id}>
+            <button onClick={() => onJump(g.id)}
+              className={cn('flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-[12.5px] transition-colors',
+                active === g.id ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground')}>
+              <span className="truncate">{g.title}</span>
+              {counts[g.id] > 0 && (
+                <span className="shrink-0 rounded bg-primary/12 px-1.5 text-[10.5px] font-semibold text-primary">{counts[g.id]}</span>
+              )}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+
+/**
+ * One functional group. Common settings show; the rest stay behind a
+ * disclosure so a group is never mixed with another group's settings.
+ */
+function GroupCard({ group, common, advanced, visual, renderRow, forceOpen }: {
+  group: { id: string; title: string; hint: string };
+  common: Setting[]; advanced: Setting[];
+  visual?: React.ReactNode;
+  renderRow: (s: Setting) => React.ReactNode;
+  forceOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const show = open || forceOpen;
+  if (!common.length && !advanced.length) return null;
+  return (
+    <section id={`grp-${group.id}`} className="mb-5 scroll-mt-4">
+      <SectionHead hint={`· ${group.hint}`}>{group.title}</SectionHead>
+      <Card className="overflow-hidden p-0">
+        {visual}
+        {common.map(renderRow)}
+        {show && advanced.map(renderRow)}
+        {advanced.length > 0 && !forceOpen && (
+          <button onClick={() => setOpen(o => !o)}
+            className="flex w-full items-center justify-center gap-1.5 border-t border-border/50 bg-muted/30 py-2 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground">
+            <ChevronDown className={cn('size-3.5 transition-transform', open && 'rotate-180')} />
+            {open ? 'Fewer settings' : `${advanced.length} more setting${advanced.length === 1 ? '' : 's'}`}
+          </button>
+        )}
+      </Card>
+    </section>
+  );
+}
+
+/** Highlights the group you are looking at as you scroll. */
+function useScrollSpy(ids: string[], dep: any) {
+  const [active, setActive] = useState(ids[0] ?? '');
+  useEffect(() => {
+    const seen = new Map<string, number>();
+    const obs = new IntersectionObserver(entries => {
+      entries.forEach(e => seen.set(e.target.id.replace('grp-', ''), e.intersectionRatio));
+      const best = [...seen.entries()].sort((a, b) => b[1] - a[1])[0];
+      if (best && best[1] > 0) setActive(best[0]);
+    }, { rootMargin: '-80px 0px -60% 0px', threshold: [0, 0.25, 0.6, 1] });
+    ids.forEach(id => { const el = document.getElementById(`grp-${id}`); if (el) obs.observe(el); });
+    return () => obs.disconnect();
+  }, [ids.join(','), dep]);
+  return active;
+}
+
+const jump = (id: string) => document.getElementById(`grp-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
 /* ------------------------------------------------------------------ list -- */
 
@@ -295,6 +381,10 @@ export function ConfigEditor({ id, user, onGo, onChanged }: {
     });
   }, [id, user.id]);
 
+  // hooks must run on every render, so the spy is set up before the guard
+  const groupIds = useMemo(() => (schema?.groups ?? []).map(g => g.id), [schema]);
+  const active = useScrollSpy(groupIds, schema ? 1 : 0);
+
   if (!schema || !conf) return <Empty>Loading…</Empty>;
 
   const dirty = JSON.stringify(values) !== JSON.stringify(conf.values || {});
@@ -307,6 +397,9 @@ export function ConfigEditor({ id, user, onGo, onChanged }: {
   const needle = q.trim().toLowerCase();
   const shown = schema.settings.filter(s =>
     !needle || s.label.toLowerCase().includes(needle) || s.key.includes(needle) || (s.info || '').toLowerCase().includes(needle));
+
+  const setCounts = Object.fromEntries(schema.groups.map(g => [g.id,
+    schema.settings.filter(x => x.group === g.id && x.key in values).length]));
 
   const save = async () => {
     setSaving(true); setErr('');
@@ -335,30 +428,33 @@ export function ConfigEditor({ id, user, onGo, onChanged }: {
       </div>
     </Card>
 
-    {schema.groups.map(g => {
-      const items = shown.filter(s => s.group === g.id);
-      if (!items.length) return null;
-      return (
-        <div key={g.id} className="mb-5">
-          <SectionHead hint={`· ${g.hint}`}>{g.title}</SectionHead>
-          <Card className="overflow-hidden p-0">
-            {!needle && <GroupVisual group={g.id}
-              get={k => (k in values ? values[k] : schema.settings.find(x => x.key === k)?.def)}
-              set={(k, v) => setKey(k, v)} />}
-            {items.map(s => {
-              const isSet = s.key in values;
-              return (
-                <SettingRow key={s.key} s={s} isSet={isSet}
-                  value={isSet ? values[s.key] : s.def}
-                  editable={canEdit(s)}
-                  onChange={v => setKey(s.key, v)}
-                  onReset={isSet ? () => unset(s.key) : undefined} />
-              );
-            })}
-          </Card>
-        </div>
-      );
-    })}
+    <div className="grid gap-6 lg:grid-cols-[188px_minmax(0,1fr)]">
+      <GroupRail groups={schema.groups} counts={setCounts} active={active} onJump={jump} />
+      <div>
+        {schema.groups.map(g => {
+          const items = shown.filter(x => x.group === g.id);
+          if (!items.length) return null;
+          const isSet = (k: string) => k in values;
+          const row = (x: Setting) => (
+            <SettingRow key={x.key} s={x} isSet={isSet(x.key)}
+              value={isSet(x.key) ? values[x.key] : x.def}
+              editable={canEdit(x)}
+              onChange={v => setKey(x.key, v)}
+              onReset={isSet(x.key) ? () => unset(x.key) : undefined} />
+          );
+          return (
+            <GroupCard key={g.id} group={g}
+              common={items.filter(x => x.common || isSet(x.key))}
+              advanced={items.filter(x => !x.common && !isSet(x.key))}
+              forceOpen={!!needle}
+              visual={!needle ? <GroupVisual group={g.id}
+                get={k => (k in values ? values[k] : schema.settings.find(x => x.key === k)?.def)}
+                set={(k, v) => setKey(k, v)} /> : undefined}
+              renderRow={row} />
+          );
+        })}
+      </div>
+    </div>
 
     <SaveBar dirty={dirty} saving={saving} saved={saved} err={err}
       note={`${count} setting${count === 1 ? '' : 's'} carried by this config.`}
@@ -426,8 +522,12 @@ export function ScreenConfig({ screenId, d, onChanged }: {
   const [schema, setSchema] = useState<Schema | null>(null);
   const [q, setQ] = useState('');
   const [onlySet, setOnlySet] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const [busy, setBusy] = useState('');
   useEffect(() => { api('/config/schema').then(setSchema); }, []);
+
+  const groupIds = useMemo(() => (schema?.groups ?? []).map(g => g.id), [schema]);
+  const active = useScrollSpy(groupIds, showAll);
 
   if (!schema || !d.config) return <Empty>Loading…</Empty>;
   const resolved = d.config as Record<string, { value: any; source: any }>;
@@ -446,7 +546,11 @@ export function ScreenConfig({ screenId, d, onChanged }: {
   });
 
   const fmt = (v: any) => typeof v === 'object' && v !== null
-    ? (v.from ? `${v.from}–${v.to}` : JSON.stringify(v)) : String(v);
+    ? (v.from ? `${v.from}–${v.to}` : v.w !== undefined ? `${v.w}×${v.h}%` : JSON.stringify(v))
+    : typeof v === 'boolean' ? (v ? 'on' : 'off') : String(v);
+
+  const setCounts = Object.fromEntries(schema.groups.map(g => [g.id,
+    schema.settings.filter(x => x.group === g.id && resolved[x.key]?.source).length]));
 
   return (<>
     {drift.length > 0 && (
@@ -493,43 +597,76 @@ export function ScreenConfig({ screenId, d, onChanged }: {
       </Card>
     )}
 
-    <Card className="mb-4 p-3.5">
-      <div className="flex flex-wrap items-center gap-3">
-        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search settings…"
-          className="h-8 w-64 rounded-md border border-input bg-background px-2.5 text-[12.5px] outline-none focus-visible:ring-2 focus-visible:ring-ring" />
-        <label className="flex cursor-pointer items-center gap-2 text-[12.5px]">
-          <input type="checkbox" checked={onlySet} onChange={e => setOnlySet(e.target.checked)}
-            className="size-[15px] rounded border-border accent-[hsl(var(--primary))]" />
-          Only settings that come from a config
-        </label>
-      </div>
-    </Card>
-
-    {schema.groups.map(g => {
-      const items = shown.filter(s => s.group === g.id);
-      if (!items.length) return null;
-      return (
-        <div key={g.id} className="mb-5">
-          <SectionHead hint={`· ${g.hint}`}>{g.title}</SectionHead>
-          <Card className="overflow-hidden p-0">
-            {!needle && !onlySet && <GroupVisual group={g.id}
-              get={k => resolved[k]?.value}
-              set={(k, v) => write({ values: { [k]: v } })}
-              extra={{ slotsSold: d.stats?.liveCampaigns ?? 0, slotsTotal: d.screen?.advertiser_slots ?? 10, frameUrl: d.frameUrl }} />}
-            {items.map(s => {
-              const r = resolved[s.key];
-              const ownHere = r?.source?.layer === 'screen';
+    {!showAll ? (
+      <>
+        <SectionHead hint="· the ten a screen is usually opened for">In force on this screen</SectionHead>
+        <Card className="mb-4 overflow-hidden p-0">
+          {SUMMARY.filter(k => resolved[k]).map(k => {
+            const set = schema.settings.find(x => x.key === k)!;
+            const r = resolved[k];
+            return (
+              <div key={k} className="grid gap-x-6 gap-y-1 border-b border-border/50 px-4 py-2.5 last:border-0 md:grid-cols-[minmax(200px,290px)_minmax(0,1fr)_auto] md:items-center">
+                <div className="flex items-center gap-1.5 text-[13px] font-medium">
+                  {set.label}
+                  {set.locked && <Lock className="size-3 text-muted-foreground" />}
+                </div>
+                <div className="font-mono text-[13px]">{fmt(r.value)}{set.unit ? ` ${set.unit}` : ''}</div>
+                <div className="text-[11.5px] text-muted-foreground">
+                  {r.source ? <>⤷ {r.source.name}</> : 'default'}
+                </div>
+              </div>
+            );
+          })}
+        </Card>
+        <Button variant="outline" size="sm" onClick={() => setShowAll(true)}>
+          View all {schema.settings.length} settings
+        </Button>
+      </>
+    ) : (
+      <>
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <Button variant="outline" size="sm" onClick={() => setShowAll(false)}>← Back to summary</Button>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search settings…"
+            className="h-8 w-56 rounded-md border border-input bg-background px-2.5 text-[12.5px] outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+          <label className="flex cursor-pointer items-center gap-2 text-[12.5px]">
+            <input type="checkbox" checked={onlySet} onChange={e => setOnlySet(e.target.checked)}
+              className="size-[15px] rounded border-border accent-[hsl(var(--primary))]" />
+            Only settings that come from a config
+          </label>
+        </div>
+        <div className="grid gap-6 lg:grid-cols-[188px_minmax(0,1fr)]">
+          <GroupRail groups={schema.groups} counts={setCounts} active={active} onJump={jump} />
+          <div>
+            {schema.groups.map(g => {
+              const items = shown.filter(x => x.group === g.id);
+              if (!items.length) return null;
+              const ownHere = (k: string) => resolved[k]?.source?.layer === 'screen';
+              const row = (x: Setting) => {
+                const r = resolved[x.key];
+                return (
+                  <SettingRow key={x.key} s={x} value={r?.value}
+                    isSet={ownHere(x.key) ? true : undefined} setLabel="set on this screen"
+                    source={r?.source && !ownHere(x.key) ? { name: r.source.name, layer: r.source.layer } : null}
+                    editable={!x.locked}
+                    onChange={v => write({ values: { [x.key]: v } })}
+                    onReset={ownHere(x.key) ? () => write({ unset: [x.key] }) : undefined} />
+                );
+              };
               return (
-                <SettingRow key={s.key} s={s} value={r?.value} isSet={ownHere ? true : undefined} setLabel="set on this screen"
-                  source={r?.source && !ownHere ? { name: r.source.name, layer: r.source.layer } : null}
-                  editable={!s.locked}
-                  onChange={v => write({ values: { [s.key]: v } })}
-                  onReset={ownHere ? () => write({ unset: [s.key] }) : undefined} />
+                <GroupCard key={g.id} group={g}
+                  common={items.filter(x => x.common || resolved[x.key]?.source)}
+                  advanced={items.filter(x => !x.common && !resolved[x.key]?.source)}
+                  forceOpen={!!needle || onlySet}
+                  visual={!needle && !onlySet ? <GroupVisual group={g.id}
+                    get={k => resolved[k]?.value}
+                    set={(k, v) => write({ values: { [k]: v } })}
+                    extra={{ slotsSold: d.stats?.liveCampaigns ?? 0, slotsTotal: d.screen?.advertiser_slots ?? 10, frameUrl: d.frameUrl }} /> : undefined}
+                  renderRow={row} />
               );
             })}
-          </Card>
+          </div>
         </div>
-      );
-    })}
+      </>
+    )}
   </>);
 }
