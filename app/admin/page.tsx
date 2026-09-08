@@ -1,5 +1,6 @@
 'use client';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { tabFor } from '@/lib/roles';
 import { api, session, type SessionUser } from '@/lib/client';
 import { inr, isLive, fmtDate, daySeries } from '@/lib/utils';
 import { adminNav } from '@/lib/nav';
@@ -19,6 +20,7 @@ import { CampaignBuilder } from '@/components/views/campaign-builder';
 import type { CmdItem } from '@/components/ui/command-palette';
 import { BootLoader } from '@/components/ui/loader';
 import { ConfigList, ConfigEditor } from '@/components/views/config-views';
+import { ProfilePage, TeamPage } from '@/components/views/account';
 import { useDirtyForm, SaveBar } from '@/components/ui/form';
 
 export default function Admin() {
@@ -31,7 +33,7 @@ export default function Admin() {
   const reload = useCallback(async () => { if (user) setD(await api(`/bootstrap?user=${user.id}`)); }, [user]);
   useEffect(() => {
     const u = session.get();
-    if (!u || u.role !== 'platform_admin') { location.href = '/'; return; }
+    if (!u || tabFor(u.role) !== 'platform') { location.href = '/'; return; }
     setUser(u); api(`/bootstrap?user=${u.id}`).then(setD);
     const sync = () => setView(location.hash.slice(1) || 'overview');
     sync(); window.addEventListener('hashchange', sync);
@@ -248,7 +250,8 @@ export default function Admin() {
         <div className="mt-4"><SoonPage title="Trends and cohorts" note="Time-series, venue-type benchmarks and exports are not built yet." /></div>
       </>)}
 
-      {view === 'profile' && <AdminProfile user={user} onSaved={() => { const u = session.get(); if (u) setUser(u); reload(); }} />}
+      {view === 'profile' && <ProfilePage user={user} onSaved={() => { const u = session.get(); if (u) setUser(u); reload(); }} />}
+      {view === 'set-team' && <TeamPage user={user} onChanged={reload} />}
       {(view === 'settings' || view === 'set-org') && <PlatformSettings d={d} onSaved={() => { const u = session.get(); if (u) setUser(u); reload(); }} />}
       {['set-billing','set-team','set-api','set-hooks'].includes(view) && <><PageHead title="Settings" /><SoonPage title="Not built yet" note="Billing, team management, API keys and webhooks are planned but not implemented." /></>}
     </AppShell>
@@ -322,25 +325,6 @@ function PlatformSettings({ d, onSaved }: { d: any; onSaved: () => void }) {
   </>);
 }
 
-function AdminProfile({ user, onSaved }: { user: SessionUser; onSaved: () => void }) {
-  const fm = useDirtyForm({ name: user.name, email: (user as any).email ?? '', phone: (user as any).phone ?? '' });
-  return (<>
-    <PageHead title="Profile & account" />
-    <Card className="p-5">
-      <div className="flex flex-wrap gap-3">
-        <Field label="Name"><Input value={fm.f.name} onChange={e => fm.set({ name: e.target.value })} /></Field>
-        <Field label="Email"><Input value={fm.f.email} onChange={e => fm.set({ email: e.target.value })} /></Field>
-        <Field label="Phone"><Input value={fm.f.phone} onChange={e => fm.set({ phone: e.target.value })} /></Field>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-3"><Field label="Role"><Input value="Platform admin" disabled /></Field></div>
-    </Card>
-    <SaveBar {...fm} onSave={() => fm.save(async v => {
-      await api(`/user/${user.id}`, v);
-      const u = session.get(); if (u) session.set({ ...u, name: v.name });
-      onSaved();
-    })} onDiscard={fm.discard} />
-  </>);
-}
 
 function EditOrg({ org, onDone }: { org: any; onDone: () => void }) {
   const fm = useDirtyForm({ name: org?.name ?? '', platform_fee_pct: String(org?.platform_fee_pct ?? 0), status: org?.status ?? 'active' });

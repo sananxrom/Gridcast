@@ -1,5 +1,6 @@
 'use client';
 import React, { useEffect, useMemo, useState } from 'react';
+import { tabFor } from '@/lib/roles';
 import { api, session, type SessionUser } from '@/lib/client';
 import { inr, isLive, fmtDate } from '@/lib/utils';
 import { advertiserNav } from '@/lib/nav';
@@ -12,6 +13,7 @@ import { Input, Field } from '@/components/ui/input';
 import { SoonPage } from '@/components/views/bits';
 import type { CmdItem } from '@/components/ui/command-palette';
 import { BootLoader } from '@/components/ui/loader';
+import { ProfilePage } from '@/components/views/account';
 import { useDirtyForm, SaveBar } from '@/components/ui/form';
 
 export default function Advertiser() {
@@ -21,7 +23,7 @@ export default function Advertiser() {
 
   useEffect(() => {
     const u = session.get();
-    if (!u || u.role !== 'advertiser_viewer') { location.href = '/'; return; }
+    if (!u || tabFor(u.role) !== 'advertiser') { location.href = '/'; return; }
     setUser(u); api(`/bootstrap?user=${u.id}`).then(setD);
     const sync = () => setView(location.hash.slice(1) || 'overview');
     sync(); window.addEventListener('hashchange', sync);
@@ -100,27 +102,8 @@ export default function Advertiser() {
       })()}
 
       {view === 'reports' && <><PageHead title="Reports" /><SoonPage title="Downloadable campaign reports" note="A PDF and CSV of exactly this data, on a schedule. Not built yet." /></>}
-      {view === 'profile' && <AdvProfile user={user} />}
+      {view === 'profile' && <ProfilePage user={user} onSaved={() => {}} />}
     </AppShell>
   );
 }
 
-function AdvProfile({ user }: { user: SessionUser }) {
-  const fm = useDirtyForm({ name: user.name, email: (user as any).email ?? '', phone: (user as any).phone ?? '' });
-  return (<>
-    <PageHead title="Profile & account" />
-    <Card className="p-5">
-      <div className="flex flex-wrap gap-3">
-        <Field label="Name"><Input value={fm.f.name} onChange={e => fm.set({ name: e.target.value })} /></Field>
-        <Field label="Email"><Input value={fm.f.email} onChange={e => fm.set({ email: e.target.value })} /></Field>
-        <Field label="Phone"><Input value={fm.f.phone} onChange={e => fm.set({ phone: e.target.value })} /></Field>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-3"><Field label="Agency / operator"><Input value={user.orgName} disabled /></Field></div>
-      <p className="mt-3 text-[12.5px] text-muted-foreground">Billing contact changes reach your operator — they raise the invoices.</p>
-    </Card>
-    <SaveBar {...fm} onSave={() => fm.save(async v => {
-      await api(`/user/${user.id}`, v);
-      const u = session.get(); if (u) session.set({ ...u, name: v.name });
-    })} onDiscard={fm.discard} />
-  </>);
-}

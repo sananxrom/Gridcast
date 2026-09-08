@@ -1,6 +1,7 @@
 import * as store from './store';
 import { seed, uid, nowISO, code6 } from './seed';
 import * as cfg from './config';
+import { can, ROLES, PLATFORM_ADMIN, ADVERTISER, tabFor } from './roles';
 import { hashPassword, verifyPassword, issueToken, readToken, tempPassword, throttled, noteFailure, clearFailures, type Claims } from './auth';
 
 let db: any = null;
@@ -68,8 +69,7 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
     // the tab the person chose must match the account, so a mistyped address
     // fails with something they can act on
     const want = String(body.role || '');
-    const roleOf = (r: string) => (r === 'org_admin' ? 'operator' : r === 'advertiser_viewer' ? 'advertiser' : 'platform');
-    if (want && roleOf(u.role) !== want) {
+    if (want && tabFor(u.role) !== want) {
       noteFailure(email);
       return { status: 403, body: { error: `That account is not ${want === 'operator' ? 'an operator' : want === 'advertiser' ? 'an advertiser' : 'a platform'} login.` } };
     }
@@ -78,9 +78,54 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
     u.last_login_at = nowISO(); await save();
     const org = db.orgs.find((o: any) => o.id === u.org_id);
     return { body: { token: issueToken(u), user: {
-      id: u.id, name: u.name, email: u.email, role: u.role, org_id: u.org_id,
+      id: u.id, name: u.name, email: u.email, phone: u.phone, role: u.role, org_id: u.org_id,
       orgName: org?.name ?? '—', advertiser_id: u.advertiser_id, must_change: !!u.must_change,
     } } };
+  }
+
+  if (method === 'GET' && p === 'team') {
+    if (!actor) return { status: 401, body: { error: 'Not signed in' } };
+    const rows = db.users.filter((u: any) => isAdmin ? u.org_id === (q.get('org') || actor.org_id) : u.org_id === actor.org_id);
+    return { body: rows.map((u: any) => ({ id: u.id, name: u.name, email: u.email, phone: u.phone,
+      role: u.role, status: u.status ?? 'active', must_change: !!u.must_change,
+      last_login_at: u.last_login_at, created_at: u.created_at, advertiser_id: u.advertiser_id })) };
+  }
+
+  if (method === 'POST' && seg[0] === 'user' && seg[1] && seg[2] === 'role') {
+    if (!can(actor?.role, 'team')) return { status: 403, body: { error: 'You cannot change roles.' } };
+    const u = db.users.find((x: any) => x.id === seg[1]);
+    if (!u) return { status: 404, body: { error: 'not found' } };
+    if (!isAdmin && u.org_id !== actor!.org_id) return { status: 403, body: { error: 'Not your organisation.' } };
+    if (u.id === actor!.id) return { status: 400, body: { error: 'You cannot change your own role.' } };
+    const role = String(body.role || '');
+    if (!ROLES.some(r => r.id === role)) return { status: 400, body: { error: 'Unknown role.' } };
+    // an organisation must keep at least one owner, or nobody can reach settlement
+    const owners = db.users.filter((x: any) => x.org_id === u.org_id && ['owner', 'org_admin'].includes(x.role) && x.status !== 'disabled');
+    if (owners.length === 1 && owners[0].id === u.id && role !== 'owner')
+      return { status: 400, body: { error: 'This is the only owner. Promote someone else first.' } };
+    u.role = role; await save(); return { body: { ok: true, role } };
+  }
+
+  if (method === 'POST' && seg[0] === 'user' && seg[1] && seg[2] === 'status') {
+    if (!can(actor?.role, 'team')) return { status: 403, body: { error: 'You cannot change access.' } };
+    const u = db.users.find((x: any) => x.id === seg[1]);
+    if (!u) return { status: 404, body: { error: 'not found' } };
+    if (!isAdmin && u.org_id !== actor!.org_id) return { status: 403, body: { error: 'Not your organisation.' } };
+    if (u.id === actor!.id) return { status: 400, body: { error: 'You cannot disable yourself.' } };
+    u.status = body.status === 'disabled' ? 'disabled' : 'active';
+    await save(); return { body: { ok: true, status: u.status } };
+  }
+
+  /** A new one-time password, shown once to whoever asked for it. */
+  if (method === 'POST' && seg[0] === 'user' && seg[1] && seg[2] === 'newpassword') {
+    if (!can(actor?.role, 'team')) return { status: 403, body: { error: 'You cannot reset passwords.' } };
+    const u = db.users.find((x: any) => x.id === seg[1]);
+    if (!u) return { status: 404, body: { error: 'not found' } };
+    if (!isAdmin && u.org_id !== actor!.org_id) return { status: 403, body: { error: 'Not your organisation.' } };
+    const pw = tempPassword();
+    const { salt, hash } = hashPassword(pw);
+    u.password_salt = salt; u.password_hash = hash; u.must_change = true;
+    await save(); return { body: { temp_password: pw, email: u.email } };
   }
 
   if (method === 'GET' && p === 'me') {
@@ -112,11 +157,13 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
     if (db.users.some((u: any) => String(u.email || '').toLowerCase() === email))
       return { status: 409, body: { error: 'That email already has a login.' } };
 
-    const role = body.role === 'advertiser_viewer' ? 'advertiser_viewer' : body.role === 'org_admin' ? 'org_admin' : null;
+    if (!can(actor.role, 'team')) return { status: 403, body: { error: 'You cannot add people.' } };
+    const role = body.role === ADVERTISER ? ADVERTISER
+      : ROLES.some(r => r.id === body.role) ? String(body.role) : null;
     if (!role) return { status: 400, body: { error: 'Unknown role.' } };
     // an operator may only create logins inside their own organisation
     const org_id = isAdmin ? (body.org_id || actor.org_id) : actor.org_id;
-    if (!isAdmin && role === 'org_admin' && body.org_id && body.org_id !== actor.org_id)
+    if (!isAdmin && body.org_id && body.org_id !== actor.org_id)
       return { status: 403, body: { error: 'You can only add people to your own organisation.' } };
 
     const pw = tempPassword();
@@ -153,6 +200,7 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
       presence: db.presence.slice(-1500),
       settings: db.settings || {},
       configs: scopeConfigs(u.org_id, isAdmin),
+      caps: (['screens','sales','money','team','org','platform'] as const).filter(c => can(u.role, c)),
     } };
   }
 
@@ -333,7 +381,13 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
   if (method === 'POST' && seg[0] === 'org' && seg[1]) {
     const o = db.orgs.find((x: any) => x.id === seg[1]);
     if (!o) return { status: 404, body: { error: 'not found' } };
-    for (const k of ['name', 'type', 'status']) if (k in body) o[k] = body[k];
+    if (!isAdmin && o.id !== actor!.org_id) return { status: 403, body: { error: 'Not your organisation.' } };
+    if (!can(actor?.role, 'org')) return { status: 403, body: { error: 'You cannot change organisation settings.' } };
+    for (const k of ['name', 'type', 'status', 'legal_name', 'support_email', 'phone', 'website',
+                     'registered_address', 'billing_address']) if (k in body) o[k] = body[k];
+    // tax identity and payouts sit behind the money capability
+    if (can(actor?.role, 'money'))
+      for (const k of ['gstin', 'pan', 'state_code', 'payout_method', 'upi_id', 'payout_note']) if (k in body) o[k] = body[k];
     // only the platform may move an operator's fee
     if ('platform_fee_pct' in body && body._as === 'platform_admin') o.platform_fee_pct = Number(body.platform_fee_pct) || 0;
     await save(); return { body: o };
@@ -341,6 +395,10 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
   if (method === 'POST' && seg[0] === 'user' && seg[1]) {
     const u = db.users.find((x: any) => x.id === seg[1]);
     if (!u) return { status: 404, body: { error: 'not found' } };
+    if (!isAdmin && u.id !== actor!.id && u.org_id !== actor!.org_id)
+      return { status: 403, body: { error: 'Not your organisation.' } };
+    if (u.id !== actor!.id && !can(actor?.role, 'team'))
+      return { status: 403, body: { error: 'You can only edit your own profile.' } };
     for (const k of ['name', 'email', 'phone']) if (k in body) u[k] = body[k];
     await save(); return { body: u };
   }

@@ -5,10 +5,9 @@ import { api, session, token as tok } from '@/lib/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { AuthLayout, AuthSeparator, AuthTabs } from '@/components/ui/auth-page';
+import { homeFor } from '@/lib/roles';
 
-const DEST: Record<string, string> = {
-  platform_admin: '/admin', org_admin: '/operator', advertiser_viewer: '/advertiser',
-};
+
 
 /** An input with a leading icon, as the reference layout uses. */
 function IconInput({ icon: Icon, ...props }: any) {
@@ -52,7 +51,7 @@ export function SignInForm({ role, onRole, platform }: {
       const r = await api('/login', { email, password, role });
       tok.set(r.token); session.set(r.user);
       if (r.user.must_change) { setChange({ next: '', again: '' }); return; }
-      location.href = DEST[r.user.role] ?? '/';
+      location.href = homeFor(r.user.role);
     } catch (e: any) { setErr(e?.message || 'Could not sign in'); }
     finally { setBusy(false); }
   };
@@ -64,7 +63,7 @@ export function SignInForm({ role, onRole, platform }: {
     try {
       const r = await api('/password', { next: change.next });
       tok.set(r.token);
-      location.href = DEST[session.get()?.role ?? ''] ?? '/';
+      location.href = homeFor(session.get()?.role ?? '');
     } catch (e: any) { setErr(e?.message || 'Could not set the password'); }
     finally { setBusy(false); }
   };

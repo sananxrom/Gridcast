@@ -1,5 +1,6 @@
 'use client';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { tabFor } from '@/lib/roles';
 import { api, session, type SessionUser } from '@/lib/client';
 import { inr, isLive, ytId, daySeries } from '@/lib/utils';
 import { operatorNav } from '@/lib/nav';
@@ -15,6 +16,7 @@ import { Input, Select, Field, Label } from '@/components/ui/input';
 import { StatusBadge, Thumb, Empty, SoonPage, ScreenPhoto } from '@/components/views/bits';
 import { BootLoader } from '@/components/ui/loader';
 import { ConfigList, ConfigEditor } from '@/components/views/config-views';
+import { ProfilePage, OrgPage, PayoutPage, TeamPage } from '@/components/views/account';
 import { useDirtyForm, SaveBar } from '@/components/ui/form';
 import { ScreenDetail } from '@/components/views/screen-detail';
 import { CampaignDetail } from '@/components/views/campaign-detail';
@@ -33,7 +35,7 @@ export default function Operator() {
 
   useEffect(() => {
     const u = session.get();
-    if (!u || u.role !== 'org_admin') { location.href = '/'; return; }
+    if (!u || tabFor(u.role) !== 'operator') { location.href = '/'; return; }
     setUser(u); api(`/bootstrap?user=${u.id}`).then(setD);
     const sync = () => setView(location.hash.slice(1) || 'overview');
     sync(); window.addEventListener('hashchange', sync);
@@ -68,7 +70,8 @@ export default function Operator() {
       .map((c: any) => ({ kind: 'Approval', tone: 'warn', text: `${c.name} is awaiting approval`, go: 'creatives' })),
   ];
 
-  const nav = operatorNav({ inbox: alerts.length });
+  const caps: string[] = d.caps ?? ['screens', 'sales', 'money', 'team', 'org'];
+  const nav = operatorNav({ inbox: alerts.length }, caps);
   const orgs = [{ id: user.org_id, name: user.orgName, type: 'operator' }];
   const titleOf: Record<string, string> = { overview: 'Overview', screens: 'My screens', groups: 'Screen groups', advertisers: 'Advertisers', campaigns: 'Campaigns', creatives: 'Creatives', settlement: 'Settlement', inbox: 'Inbox', analytics: 'Analytics', reports: 'Reports', profile: 'Profile', configs: 'Device configs', settings: 'Organisation', 'set-org': 'Organisation', 'set-billing': 'Billing & payouts', 'set-team': 'Team & users', 'set-api': 'API keys', 'set-hooks': 'Webhooks' };
   const presFor = (sid: string) => d.presence.filter((x: any) => x.screen_id === sid && x.measured);
@@ -374,9 +377,11 @@ export default function Operator() {
       </>)}
 
       {['reports'].includes(view) && <><PageHead title="Reports" /><SoonPage title="Scheduled and exportable reports" note="Per-advertiser PDF and CSV reports on a schedule. Not built yet — campaign pages already carry the same numbers." /></>}
-      {view === 'profile' && <ProfileSettings user={user} onSaved={() => { const u = session.get(); if (u) setUser(u); reload(); }} />}
-      {(view === 'settings' || view === 'set-org') && <OrgSettings d={d} user={user} onSaved={() => { const u = session.get(); if (u) setUser(u); reload(); }} />}
-      {['set-billing','set-team','set-api','set-hooks'].includes(view) && (<>
+      {view === 'profile' && <ProfilePage user={user} onSaved={() => { const u = session.get(); if (u) setUser(u); reload(); }} />}
+      {(view === 'settings' || view === 'set-org') && <OrgPage d={d} user={user} onSaved={() => { const u = session.get(); if (u) setUser(u); reload(); }} />}
+      {view === 'set-billing' && <PayoutPage d={d} user={user} onSaved={() => reload()} />}
+      {view === 'set-team' && <TeamPage user={user} onChanged={() => reload()} />}
+      {['set-api','set-hooks'].includes(view) && (<>
         <PageHead title={titleOf[view] ?? 'Settings'} />
         <SoonPage title="Not built yet"
           note={view === 'set-billing' ? 'Payouts and invoices. Billing is manual today — the platform records what was agreed, money moves outside it.'
@@ -448,52 +453,4 @@ function Creatives({ d, user, onChanged, advName }: { d: any; user: SessionUser;
   </>);
 }
 
-function OrgSettings({ d, user, onSaved }: { d: any; user: SessionUser; onSaved: () => void }) {
-  const org = d.org || {};
-  const fm = useDirtyForm({ name: org.name ?? user.orgName, support_email: org.support_email ?? '', billing_address: org.billing_address ?? '', gstin: org.gstin ?? '' });
-  return (<>
-    <PageHead title="Organisation" sub="Settings for your operator account" />
-    <Card className="p-5">
-      <div className="flex flex-wrap gap-3">
-        <Field label="Organisation name"><Input value={fm.f.name} onChange={e => fm.set({ name: e.target.value })} /></Field>
-        <Field label="Support email"><Input value={fm.f.support_email} onChange={e => fm.set({ support_email: e.target.value })} placeholder="ops@example.in" /></Field>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-3">
-        <Field label="Billing address" className="flex-[2]"><Input value={fm.f.billing_address} onChange={e => fm.set({ billing_address: e.target.value })} /></Field>
-        <Field label="GSTIN"><Input value={fm.f.gstin} onChange={e => fm.set({ gstin: e.target.value })} /></Field>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-3">
-        <Field label="Platform fee on network campaigns"><Input value={`${d.org?.platform_fee_pct ?? 0}%`} disabled /></Field>
-      </div>
-      <p className="mt-3 text-[12.5px] text-muted-foreground">Your fee is set by Gridcast and shown here for transparency. It applies only to campaigns Gridcast sells onto your released slots.</p>
-    </Card>
-    <SaveBar {...fm} onSave={() => fm.save(async v => {
-      const o = await api(`/org/${user.org_id}`, v);
-      const u = session.get(); if (u) session.set({ ...u, orgName: o.name });
-      onSaved();
-    })} onDiscard={fm.discard} />
-  </>);
-}
 
-function ProfileSettings({ user, onSaved }: { user: SessionUser; onSaved: () => void }) {
-  const fm = useDirtyForm({ name: user.name, email: (user as any).email ?? '', phone: (user as any).phone ?? '' });
-  return (<>
-    <PageHead title="Profile & account" />
-    <Card className="p-5">
-      <div className="flex flex-wrap gap-3">
-        <Field label="Name"><Input value={fm.f.name} onChange={e => fm.set({ name: e.target.value })} /></Field>
-        <Field label="Email"><Input value={fm.f.email} onChange={e => fm.set({ email: e.target.value })} /></Field>
-        <Field label="Phone"><Input value={fm.f.phone} onChange={e => fm.set({ phone: e.target.value })} /></Field>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-3">
-        <Field label="Organisation"><Input value={user.orgName} disabled /></Field>
-        <Field label="Role"><Input value={user.role.replace(/_/g, ' ')} disabled /></Field>
-      </div>
-    </Card>
-    <SaveBar {...fm} onSave={() => fm.save(async v => {
-      await api(`/user/${user.id}`, v);
-      const u = session.get(); if (u) session.set({ ...u, name: v.name });
-      onSaved();
-    })} onDiscard={fm.discard} />
-  </>);
-}

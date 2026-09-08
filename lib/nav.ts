@@ -5,23 +5,23 @@ import {
 } from 'lucide-react';
 import type { NavGroupData, NavItemData } from '@/components/ui/sidebar-nav';
 
-const settingsItem = (): NavItemData => ({
+const settingsItem = (caps: string[] = ['org', 'money', 'team']): NavItemData => ({
   id: 'settings', title: 'Settings', icon: Settings, shortcut: '⌘,',
   children: [
     { id: 'set-org', title: 'Organisation', icon: Building2 },
-    { id: 'set-billing', title: 'Billing & payouts', icon: CreditCard, soon: true },
-    { id: 'set-team', title: 'Team & users', icon: UserCog, soon: true },
+    ...(caps.includes('money') ? [{ id: 'set-billing', title: 'Billing & payouts', icon: CreditCard }] : []),
+    ...(caps.includes('team') ? [{ id: 'set-team', title: 'Team & users', icon: UserCog }] : []),
     { id: 'set-api', title: 'API keys', icon: Terminal, soon: true },
     { id: 'set-hooks', title: 'Webhooks', icon: Blocks, soon: true },
   ],
 });
-const accountItems = (): NavItemData[] => [
-  settingsItem(),
+const accountItems = (caps?: string[]): NavItemData[] => [
+  settingsItem(caps),
   { id: 'profile', title: 'Profile & account', icon: User },
   { id: 'logout', title: 'Log out', icon: LogOut },
 ];
 
-export function operatorNav(badges: { inbox: number }): { groups: NavGroupData[]; bottom: NavItemData[] } {
+export function operatorNav(badges: { inbox: number }, caps: string[] = ['screens', 'sales', 'money', 'team', 'org']): { groups: NavGroupData[]; bottom: NavItemData[] } {
   return {
     groups: [
       { items: [
@@ -30,22 +30,22 @@ export function operatorNav(badges: { inbox: number }): { groups: NavGroupData[]
         { id: 'inbox', title: 'Inbox', icon: Inbox, badge: badges.inbox },
         { id: 'analytics', title: 'Analytics', icon: Activity },
       ] },
-      { heading: 'Network', items: [
+      ...(caps.includes('screens') ? [{ heading: 'Network', items: [
         { id: 'screens', title: 'My screens', icon: Monitor },
         { id: 'groups', title: 'Screen groups', icon: Layers },
         { id: 'configs', title: 'Device configs', icon: SlidersHorizontal },
-      ] },
-      { heading: 'Sales', items: [
+      ] }] : []),
+      ...(caps.includes('sales') ? [{ heading: 'Sales', items: [
         { id: 'advertisers', title: 'Advertisers', icon: Users },
         { id: 'campaigns', title: 'Campaigns', icon: Megaphone },
         { id: 'creatives', title: 'Creatives', icon: Film },
-      ] },
-      { heading: 'Money', items: [
+      ] }] : []),
+      ...(caps.includes('money') ? [{ heading: 'Money', items: [
         { id: 'settlement', title: 'Settlement', icon: Wallet },
         { id: 'reports', title: 'Reports', icon: FileBarChart, soon: true },
-      ] },
+      ] }] : []),
     ],
-    bottom: accountItems(),
+    bottom: accountItems(caps),
   };
 }
 

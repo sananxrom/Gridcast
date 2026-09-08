@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { session } from '@/lib/client';
+import { homeFor } from '@/lib/roles';
 import { AuthLayout, SignInForm, PlayerEntry } from '@/components/views/auth';
 import { TopProgress } from '@/components/ui/loader';
 
@@ -9,9 +10,7 @@ export default function Login() {
 
   useEffect(() => {
     const u = session.get();
-    if (u && localStorage.getItem('gc_token')) {
-      location.href = u.role === 'platform_admin' ? '/admin' : u.role === 'org_admin' ? '/operator' : '/advertiser';
-    }
+    if (u && localStorage.getItem('gc_token')) location.href = homeFor(u.role);
   }, []);
 
   return (<>

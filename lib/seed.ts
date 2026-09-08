@@ -32,17 +32,32 @@ function mkScreen(
 
 export function seed() {
   const orgs = [
-    { id: 'org_gridcast', name: 'Gridcast', type: 'gridcast', platform_fee_pct: 0, status: 'active', created_at: nowISO() },
-    { id: 'org_sec17', name: 'Sector 17 Media', type: 'operator', platform_fee_pct: 10, status: 'active', created_at: nowISO() },
-    { id: 'org_tricity', name: 'Tricity Screens', type: 'operator', platform_fee_pct: 12, status: 'active', created_at: nowISO() },
+    { id: 'org_gridcast', name: 'Gridcast', legal_name: 'Gridcast Media Networks Pvt Ltd', type: 'gridcast',
+      platform_fee_pct: 0, status: 'active', gstin: '', pan: '', state_code: 'Chandigarh (04)',
+      registered_address: 'Sector 34, Chandigarh', billing_address: '', support_email: 'ops@gridcast.in',
+      phone: '', website: 'gridcast.in', payout_method: 'upi', upi_id: '', created_at: nowISO() },
+    { id: 'org_sec17', name: 'Sector 17 Media', legal_name: 'Sector 17 Media Pvt Ltd', type: 'operator',
+      platform_fee_pct: 10, status: 'active', gstin: '04AABCS1234F1Z5', pan: 'AABCS1234F',
+      state_code: 'Chandigarh (04)', registered_address: 'SCO 112, Sector 17-C, Chandigarh 160017',
+      billing_address: 'SCO 112, Sector 17-C, Chandigarh 160017', support_email: 'ops@sector17media.in',
+      phone: '+91 98150 00112', website: 'sector17media.in', payout_method: 'upi', upi_id: 'sector17@okhdfc',
+      created_at: nowISO() },
+    { id: 'org_tricity', name: 'Tricity Screens', legal_name: 'Tricity Screens LLP', type: 'operator',
+      platform_fee_pct: 12, status: 'active', gstin: '03AAFTT5678G1ZX', pan: 'AAFTT5678G',
+      state_code: 'Punjab (03)', registered_address: 'Phase 7, Mohali 160055', billing_address: '',
+      support_email: '', phone: '+91 98720 44551', website: '', payout_method: 'upi', upi_id: '',
+      created_at: nowISO() },
   ];
   // demo credentials — every seeded account uses the same password so the
   // prototype can be handed to someone without a password list
   const withPw = (u: any, pw = 'gridcast') => { const { salt, hash } = hashPassword(pw); return { ...u, password_salt: salt, password_hash: hash, must_change: false, status: 'active' }; };
   const users = [
     withPw({ id: 'u_admin', org_id: 'org_gridcast', name: 'Sanan', email: 'sanan@xrom.in', role: 'platform_admin' }),
-    withPw({ id: 'u_op1', org_id: 'org_sec17', name: 'Ravi Mehta', email: 'ravi@sector17media.in', role: 'org_admin' }),
-    withPw({ id: 'u_op2', org_id: 'org_tricity', name: 'Priya Anand', email: 'priya@tricityscreens.in', role: 'org_admin' }),
+    withPw({ id: 'u_op1', org_id: 'org_sec17', name: 'Ravi Mehta', email: 'ravi@sector17media.in', role: 'owner', phone: '+91 98150 00112' }),
+    withPw({ id: 'u_op2', org_id: 'org_tricity', name: 'Priya Anand', email: 'priya@tricityscreens.in', role: 'owner', phone: '+91 98720 44551' }),
+    withPw({ id: 'u_op3', org_id: 'org_sec17', name: 'Neha Bansal', email: 'neha@sector17media.in', role: 'manager', phone: '+91 98155 20031' }),
+    withPw({ id: 'u_op4', org_id: 'org_sec17', name: 'Karan Sethi', email: 'karan@sector17media.in', role: 'sales', phone: '+91 99884 71209' }),
+    withPw({ id: 'u_op5', org_id: 'org_sec17', name: 'Deepak Kumar', email: 'deepak@sector17media.in', role: 'installer', phone: '+91 97790 33418' }),
     withPw({ id: 'u_adv1', org_id: 'org_sec17', name: 'Fitline Gym', email: 'billing@fitline.in', role: 'advertiser_viewer', advertiser_id: 'adv_fitline' }),
   ];
   const screens = [
