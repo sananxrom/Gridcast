@@ -1,13 +1,12 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { session } from '@/lib/client';
-import { SignIn, RoleTabs, PlayerLink, Shell } from '@/components/views/auth';
+import { AuthLayout, SignInForm, PlayerEntry } from '@/components/views/auth';
 import { TopProgress } from '@/components/ui/loader';
 
 export default function Login() {
   const [role, setRole] = useState<'operator' | 'advertiser'>('operator');
 
-  // a live session skips the form
   useEffect(() => {
     const u = session.get();
     if (u && localStorage.getItem('gc_token')) {
@@ -17,14 +16,15 @@ export default function Login() {
 
   return (<>
     <TopProgress />
-    <Shell note={<PlayerLink />}>
-      <SignIn
-        role={role}
-        tabs={<RoleTabs value={role} onChange={setRole} />}
-        title="Sign in"
-        sub={role === 'operator'
-          ? 'Manage your screens, advertisers and campaigns.'
-          : 'See where your campaigns ran and how they performed.'} />
-    </Shell>
+    <AuthLayout
+      quote="Every number on this platform can be traced back to the play that produced it."
+      by="Gridcast measurement principle">
+      <SignInForm role={role} onRole={setRole} />
+      <PlayerEntry />
+      <p className="pt-2 text-sm text-muted-foreground">
+        Accounts are created for you — operators by Gridcast, advertisers by their operator.
+        No public sign-up.
+      </p>
+    </AuthLayout>
   </>);
 }
