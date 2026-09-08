@@ -9,9 +9,11 @@ const badgeVariants = cva(
       variant: {
         default: 'bg-primary/10 text-primary',
         muted: 'bg-black/5 dark:bg-white/10 text-muted-foreground',
-        onair: 'bg-onair/10 text-onair',
-        ok: 'bg-ok/10 text-ok',
-        warn: 'bg-warn/10 text-warn',
+        // solid, because with one accent hue a live screen has to separate
+        // from every other warm pill by weight rather than colour
+        onair: 'bg-onair text-onair-foreground shadow-sm',
+        ok: 'bg-ok/12 text-ok ring-1 ring-inset ring-ok/25',
+        warn: 'bg-warn/12 text-warn',
         destructive: 'bg-destructive/10 text-destructive',
         outline: 'border border-border/70 text-muted-foreground',
       },

@@ -146,10 +146,14 @@ export function PlayerEntry() {
   );
 }
 
+/**
+ * Sits in the flow rather than pinned to the corner — absolute positioning put
+ * it on top of the logo once the layout collapsed to one column.
+ */
 export function BackHome() {
   return (
-    <Button variant="ghost" className="absolute left-5 top-7" asChild>
-      <a href="/"><ChevronLeft className="me-2 size-4" />Home</a>
+    <Button variant="ghost" size="sm" className="-ms-2 w-fit" asChild>
+      <a href="/"><ChevronLeft className="me-1 size-4" />Home</a>
     </Button>
   );
 }

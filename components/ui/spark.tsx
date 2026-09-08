@@ -21,7 +21,8 @@ export function Spark({ data, w = 62, h = 20, className }: {
 
   const first = pts[0].v, last = pts[pts.length - 1].v;
   const dir = last > first ? 'up' : last < first ? 'down' : 'flat';
-  const stroke = dir === 'up' ? 'hsl(var(--ok))' : dir === 'down' ? 'hsl(var(--warn))' : 'hsl(var(--muted-foreground))';
+  // up is the brand tone, a decline borrows the failure hue, flat is inert
+  const stroke = dir === 'up' ? 'hsl(var(--primary))' : dir === 'down' ? 'hsl(var(--destructive))' : 'hsl(var(--muted-foreground))';
 
   return (
     <span className={cn('inline-flex items-center gap-1.5', className)}>

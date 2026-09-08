@@ -15,24 +15,28 @@
     --accent-foreground: 215 25% 12%;
     --border: 214 16% 89%;
     --input: 214 16% 86%;
-    --ring: 175 77% 26%;
+    --ring: 38 92% 33%;
 
-    /* #0F766E teal — settled / verified */
-    --primary: 175 77% 26%;
+    /* #A16207 ochre — the brand colour, and the only accent hue.
+       States are told apart by weight and fill, not by inventing hues. */
+    --primary: 38 92% 33%;
     --primary-foreground: 0 0% 100%;
     --secondary: 210 16% 95%;
     --secondary-foreground: 215 25% 20%;
 
-    /* #A16207 ochre — open / pending / undecided */
-    --warn: 38 92% 33%;
+    /* open / pending — the same hue, lighter and softer than an action */
+    --warn: 36 84% 44%;
     --warn-foreground: 0 0% 100%;
 
-    /* amber, reserved for ON AIR only */
-    --onair: 32 95% 44%;
+    /* live — the hottest point on the ramp, and the only thing that blinks */
+    --onair: 32 95% 48%;
     --onair-foreground: 0 0% 100%;
 
-    --ok: 142 69% 29%;
+    /* settled / verified — the deep end of the ramp, reads as weight */
+    --ok: 34 78% 26%;
     --ok-foreground: 0 0% 100%;
+
+    /* failure keeps its own hue: an offline screen has to be able to shout */
     --destructive: 0 72% 42%;
     --destructive-foreground: 0 0% 100%;
 
@@ -50,16 +54,19 @@
     --accent-foreground: 210 20% 92%;
     --border: 215 18% 20%;
     --input: 215 18% 24%;
-    --ring: 174 60% 45%;
+    --ring: 38 80% 55%;
 
-    --primary: 174 62% 42%;
-    --primary-foreground: 215 28% 8%;
+    --primary: 38 80% 55%;
+    --primary-foreground: 30 40% 10%;
     --secondary: 215 20% 18%;
     --secondary-foreground: 210 20% 92%;
 
-    --warn: 38 80% 52%;
-    --onair: 32 92% 55%;
-    --ok: 142 55% 45%;
+    --warn: 36 78% 60%;
+    --warn-foreground: 30 40% 10%;
+    --onair: 32 92% 58%;
+    --onair-foreground: 30 40% 10%;
+    --ok: 38 60% 44%;
+    --ok-foreground: 0 0% 100%;
     --destructive: 0 65% 55%;
   }
 }

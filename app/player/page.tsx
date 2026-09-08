@@ -110,11 +110,11 @@ export default function Player() {
       const sx = c.width / v.videoWidth, sy = c.height / v.videoHeight;
       ctx.clearRect(0, 0, c.width, c.height);
       // the counted region, so the installer can see what the numbers mean
-      ctx.strokeStyle = 'rgba(15,118,110,0.9)'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = 'rgba(161,98,7,0.95)'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
       ctx.strokeRect((100 - zone.x - zone.w) / 100 * c.width, zone.y / 100 * c.height,
         (zone.w / 100) * c.width, (zone.h / 100) * c.height);
       ctx.setLineDash([]);
-      ctx.strokeStyle = '#D97706'; ctx.lineWidth = 2;
+      ctx.strokeStyle = '#F59E0B'; ctx.lineWidth = 2;
       preds.forEach((p: any) => { const [x, y, w, h] = p.bbox; ctx.strokeRect(c.width - (x + w) * sx, y * sy, w * sx, h * sy); });
 
       // setup preview — a still, only while someone is aiming the camera
