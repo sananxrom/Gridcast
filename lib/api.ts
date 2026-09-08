@@ -1,6 +1,7 @@
 import * as store from './store';
 import { seed, uid, nowISO, code6 } from './seed';
 import * as cfg from './config';
+import { hashPassword, verifyPassword, issueToken, readToken, tempPassword, throttled, noteFailure, clearFailures, type Claims } from './auth';
 
 let db: any = null;
 async function load() {
@@ -34,16 +35,107 @@ export function screenStatus(screen: any) {
 
 type Res = { status?: number; body: any };
 
-export async function handle(method: string, seg: string[], q: URLSearchParams, body: any): Promise<Res> {
+const OPEN = new Set(['_health', 'login', 'pair', 'reset']);
+
+export async function handle(method: string, seg: string[], q: URLSearchParams, body: any, token?: string | null): Promise<Res> {
   await load();
   const p = seg.join('/');
+  const claims = readToken(token);
+  const me = claims ? db.users.find((u: any) => u.id === claims.uid) : null;
+
+  // the player is a device, not a person: playlist and play reporting are
+  // reached with a screen id it already holds, so they stay open
+  const deviceRoute = seg[0] === 'playlist' || p === 'play' || p === 'nowplaying'
+    || (seg[0] === 'screen' && seg[2] === 'frame');
+
+  if (!OPEN.has(p) && !deviceRoute && !me)
+    return { status: 401, body: { error: 'Sign in to continue' } };
+
+  // a caller is only ever the user their token names
+  const actor = me;
+  const isAdmin = actor?.role === 'platform_admin';
 
   if (method === 'GET' && p === '_health') return { body: { ok: true, store: store.mode, plays: db.plays.length } };
-  if (method === 'GET' && p === 'users')
-    return { body: db.users.map((u: any) => ({ ...u, org: db.orgs.find((o: any) => o.id === u.org_id).name })) };
+  if (method === 'POST' && p === 'login') {
+    const email = String(body.email || '').trim().toLowerCase();
+    const wait = throttled(email);
+    if (wait) return { status: 429, body: { error: `Too many attempts. Try again in ${Math.ceil(wait / 60)} minute(s).` } };
+
+    const u = db.users.find((x: any) => String(x.email || '').toLowerCase() === email);
+    const ok = u && u.status !== 'disabled' && verifyPassword(String(body.password || ''), u.password_salt, u.password_hash);
+    if (!ok) { noteFailure(email); return { status: 401, body: { error: 'Email or password is not right.' } }; }
+
+    // the tab the person chose must match the account, so a mistyped address
+    // fails with something they can act on
+    const want = String(body.role || '');
+    const roleOf = (r: string) => (r === 'org_admin' ? 'operator' : r === 'advertiser_viewer' ? 'advertiser' : 'platform');
+    if (want && roleOf(u.role) !== want) {
+      noteFailure(email);
+      return { status: 403, body: { error: `That account is not ${want === 'operator' ? 'an operator' : want === 'advertiser' ? 'an advertiser' : 'a platform'} login.` } };
+    }
+
+    clearFailures(email);
+    u.last_login_at = nowISO(); await save();
+    const org = db.orgs.find((o: any) => o.id === u.org_id);
+    return { body: { token: issueToken(u), user: {
+      id: u.id, name: u.name, email: u.email, role: u.role, org_id: u.org_id,
+      orgName: org?.name ?? '—', advertiser_id: u.advertiser_id, must_change: !!u.must_change,
+    } } };
+  }
+
+  if (method === 'GET' && p === 'me') {
+    if (!actor) return { status: 401, body: { error: 'Not signed in' } };
+    const org = db.orgs.find((o: any) => o.id === actor.org_id);
+    return { body: { id: actor.id, name: actor.name, email: actor.email, role: actor.role,
+      org_id: actor.org_id, orgName: org?.name ?? '—', advertiser_id: actor.advertiser_id, must_change: !!actor.must_change } };
+  }
+
+  if (method === 'POST' && p === 'password') {
+    if (!actor) return { status: 401, body: { error: 'Not signed in' } };
+    const current = String(body.current || ''), next = String(body.next || '');
+    // a forced first change is the one case where there is no current password
+    // worth checking — the temp one was handed over in the open
+    if (!actor.must_change && !verifyPassword(current, actor.password_salt, actor.password_hash))
+      return { status: 403, body: { error: 'Current password is not right.' } };
+    if (next.length < 8) return { status: 400, body: { error: 'Use at least 8 characters.' } };
+    const { salt, hash } = hashPassword(next);
+    actor.password_salt = salt; actor.password_hash = hash; actor.must_change = false;
+    await save();
+    return { body: { ok: true, token: issueToken(actor) } };
+  }
+
+  /** Create a login for someone. The password is shown once, to the creator. */
+  if (method === 'POST' && p === 'invite') {
+    if (!actor) return { status: 401, body: { error: 'Not signed in' } };
+    const email = String(body.email || '').trim().toLowerCase();
+    if (!email.includes('@')) return { status: 400, body: { error: 'Enter a valid email.' } };
+    if (db.users.some((u: any) => String(u.email || '').toLowerCase() === email))
+      return { status: 409, body: { error: 'That email already has a login.' } };
+
+    const role = body.role === 'advertiser_viewer' ? 'advertiser_viewer' : body.role === 'org_admin' ? 'org_admin' : null;
+    if (!role) return { status: 400, body: { error: 'Unknown role.' } };
+    // an operator may only create logins inside their own organisation
+    const org_id = isAdmin ? (body.org_id || actor.org_id) : actor.org_id;
+    if (!isAdmin && role === 'org_admin' && body.org_id && body.org_id !== actor.org_id)
+      return { status: 403, body: { error: 'You can only add people to your own organisation.' } };
+
+    const pw = tempPassword();
+    const { salt, hash } = hashPassword(pw);
+    const u = { id: uid('u'), org_id, name: body.name || email.split('@')[0], email, role,
+      advertiser_id: body.advertiser_id || undefined, password_salt: salt, password_hash: hash,
+      must_change: true, status: 'active', created_at: nowISO() };
+    db.users.push(u); await save();
+    return { body: { user: { id: u.id, name: u.name, email: u.email, role: u.role }, temp_password: pw } };
+  }
+
+  if (method === 'GET' && p === 'users') {
+    if (!isAdmin) return { status: 403, body: { error: 'Not allowed' } };
+    return { body: db.users.map((u: any) => ({ id: u.id, name: u.name, email: u.email, role: u.role,
+      org_id: u.org_id, org: db.orgs.find((o: any) => o.id === u.org_id)?.name, last_login_at: u.last_login_at })) };
+  }
 
   if (method === 'GET' && p === 'bootstrap') {
-    const u = db.users.find((x: any) => x.id === q.get('user')) || db.users[0];
+    const u = actor!;
     const isAdmin = u.role === 'platform_admin';
     const camps = scope(db.campaigns, u.org_id, isAdmin);
     const refAdv = new Set(camps.map((c: any) => c.advertiser_id));
@@ -228,8 +320,15 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
   if (method === 'POST' && p === 'org') {
     const o = { id: uid('org'), type: 'operator', platform_fee_pct: 10, status: 'active', created_at: nowISO(), ...body };
     db.orgs.push(o);
-    db.users.push({ id: uid('u'), org_id: o.id, name: body.admin_name || o.name + ' admin', email: body.admin_email || '', role: 'org_admin' });
-    await save(); return { body: o };
+    let temp: string | null = null;
+    if (body.admin_email) {
+      temp = tempPassword();
+      const { salt, hash } = hashPassword(temp);
+      db.users.push({ id: uid('u'), org_id: o.id, name: body.admin_name || o.name + ' admin',
+        email: String(body.admin_email).toLowerCase(), role: 'org_admin',
+        password_salt: salt, password_hash: hash, must_change: true, status: 'active', created_at: nowISO() });
+    }
+    await save(); return { body: { ...o, temp_password: temp } };
   }
   if (method === 'POST' && seg[0] === 'org' && seg[1]) {
     const o = db.orgs.find((x: any) => x.id === seg[1]);
@@ -250,10 +349,8 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
     db.settings = { ...(db.settings || {}), ...body };
     await save(); return { body: db.settings };
   }
-  if (method === 'GET' && p === 'config') {
-    const u = db.users.find((x: any) => x.id === q.get('user')) || db.users[0];
-    return { body: scopeConfigs(u.org_id, u.role === 'platform_admin') };
-  }
+  if (method === 'GET' && p === 'config')
+    return { body: scopeConfigs(actor!.org_id, isAdmin) };
   if (method === 'GET' && p === 'config/schema')
     return { body: { groups: cfg.GROUPS, settings: cfg.SETTINGS, locked: cfg.LOCKED_KEYS, priced: cfg.PRICED_KEYS } };
 

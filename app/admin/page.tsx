@@ -258,7 +258,25 @@ export default function Admin() {
 function AddOrg({ onAdded }: { onAdded: () => void }) {
   const [open, setOpen] = useState(false);
   const [f, setF] = useState({ name: '', admin_name: '', admin_email: '', platform_fee_pct: '10' });
+  const [temp, setTemp] = useState<{ email: string; pw: string } | null>(null);
   if (!open) return <Button onClick={() => setOpen(true)}>+ Add operator</Button>;
+  if (temp) return (
+    <Card className="absolute right-8 z-30 w-[min(560px,90vw)] p-5 shadow-xl">
+      <h3 className="text-[14px] font-semibold">Operator created</h3>
+      <p className="mb-3 mt-1 text-[12.5px] text-muted-foreground">
+        Hand these over yourself — the password is shown once and cannot be recovered.
+        They will be asked to choose their own on first sign-in.
+      </p>
+      <div className="rounded-lg border border-border bg-muted/60 p-3 font-mono text-[13px]">
+        <div>{temp.email}</div>
+        <div className="mt-1 text-[17px] font-semibold tracking-wider text-primary">{temp.pw}</div>
+      </div>
+      <div className="mt-3 flex gap-2">
+        <Button onClick={() => { navigator.clipboard?.writeText(`${temp.email} / ${temp.pw}`).catch(() => {}); }}>Copy</Button>
+        <Button variant="outline" onClick={() => { setTemp(null); setOpen(false); onAdded(); }}>Done</Button>
+      </div>
+    </Card>
+  );
   return (
     <Card className="absolute right-8 z-30 w-[min(560px,90vw)] p-5 shadow-xl">
       <h3 className="mb-3 text-[14px] font-semibold">New operator organisation</h3>
@@ -269,7 +287,11 @@ function AddOrg({ onAdded }: { onAdded: () => void }) {
         <Field label="Platform fee %"><Input type="number" value={f.platform_fee_pct} onChange={e => setF({ ...f, platform_fee_pct: e.target.value })} /></Field>
       </div>
       <div className="mt-3 flex gap-2">
-        <Button onClick={async () => { await api('/org', { name: f.name || 'Untitled operator', admin_name: f.admin_name, admin_email: f.admin_email, platform_fee_pct: Number(f.platform_fee_pct) || 10 }); setOpen(false); onAdded(); }}>Create</Button>
+        <Button onClick={async () => {
+          const r = await api('/org', { name: f.name || 'Untitled operator', admin_name: f.admin_name, admin_email: f.admin_email, platform_fee_pct: Number(f.platform_fee_pct) || 10 });
+          if (r?.temp_password) setTemp({ email: f.admin_email, pw: r.temp_password });
+          else { setOpen(false); onAdded(); }
+        }}>Create</Button>
         <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
       </div>
     </Card>

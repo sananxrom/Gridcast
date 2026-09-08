@@ -2,6 +2,8 @@ export const uid = (p: string) => p + '_' + Math.random().toString(36).slice(2, 
 export const nowISO = () => new Date().toISOString();
 export const code6 = () => Math.random().toString(36).slice(2, 8).toUpperCase();
 
+import { hashPassword } from './auth';
+
 const VENUE_BASE: Record<string, number> = {
   grocery: 3000, cafe: 5000, gym: 6000, salon: 4000, mall: 15000, pharmacy: 3500,
 };
@@ -34,11 +36,14 @@ export function seed() {
     { id: 'org_sec17', name: 'Sector 17 Media', type: 'operator', platform_fee_pct: 10, status: 'active', created_at: nowISO() },
     { id: 'org_tricity', name: 'Tricity Screens', type: 'operator', platform_fee_pct: 12, status: 'active', created_at: nowISO() },
   ];
+  // demo credentials — every seeded account uses the same password so the
+  // prototype can be handed to someone without a password list
+  const withPw = (u: any, pw = 'gridcast') => { const { salt, hash } = hashPassword(pw); return { ...u, password_salt: salt, password_hash: hash, must_change: false, status: 'active' }; };
   const users = [
-    { id: 'u_admin', org_id: 'org_gridcast', name: 'Sanan', email: 'sanan@xrom.in', role: 'platform_admin' },
-    { id: 'u_op1', org_id: 'org_sec17', name: 'Ravi Mehta', email: 'ravi@sector17media.in', role: 'org_admin' },
-    { id: 'u_op2', org_id: 'org_tricity', name: 'Priya Anand', email: 'priya@tricityscreens.in', role: 'org_admin' },
-    { id: 'u_adv1', org_id: 'org_sec17', name: 'Fitline Gym', email: 'billing@fitline.in', role: 'advertiser_viewer', advertiser_id: 'adv_fitline' },
+    withPw({ id: 'u_admin', org_id: 'org_gridcast', name: 'Sanan', email: 'sanan@xrom.in', role: 'platform_admin' }),
+    withPw({ id: 'u_op1', org_id: 'org_sec17', name: 'Ravi Mehta', email: 'ravi@sector17media.in', role: 'org_admin' }),
+    withPw({ id: 'u_op2', org_id: 'org_tricity', name: 'Priya Anand', email: 'priya@tricityscreens.in', role: 'org_admin' }),
+    withPw({ id: 'u_adv1', org_id: 'org_sec17', name: 'Fitline Gym', email: 'billing@fitline.in', role: 'advertiser_viewer', advertiser_id: 'adv_fitline' }),
   ];
   const screens = [
     mkScreen('org_sec17', 'Cafe Delzo — Main Wall', 'Cafe Delzo', 'cafe', '43', 1.0, 'Sector 17-C, Chandigarh', 1.5, 1.25, 30.7411, 76.7822, { floor: 'ground', daypart: 'evening_heavy' }),
