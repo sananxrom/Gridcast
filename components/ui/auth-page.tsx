@@ -1,7 +1,7 @@
 'use client';
 import React from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
-import { BrandMark } from './brand-mark';
+import { BrandLogo } from './brand-mark';
 import { cn } from '@/lib/utils';
 
 /**
@@ -18,10 +18,7 @@ export function AuthLayout({ children, quote, by }: {
       {/* brand column */}
       <div className="relative hidden h-full flex-col overflow-hidden border-r border-border bg-muted/60 p-10 lg:flex">
         <div className="absolute inset-0 z-10 bg-gradient-to-t from-background to-transparent" />
-        <div className="z-10 flex items-center gap-2.5">
-          <BrandMark className="size-8" />
-          <p className="text-xl font-semibold tracking-tight">Gridcast</p>
-        </div>
+        <BrandLogo className="z-10" />
         <div className="z-10 mt-auto">
           <blockquote className="space-y-2">
             <p className="max-w-md text-xl leading-snug">&ldquo;{quote}&rdquo;</p>
@@ -43,10 +40,7 @@ export function AuthLayout({ children, quote, by }: {
           <div className="absolute -bottom-56 -right-20 size-[34rem] rounded-full bg-[radial-gradient(closest-side,hsl(var(--primary)/0.05),transparent)]" />
         </div>
         <div className="relative z-10 mx-auto w-full space-y-4 sm:w-[24rem]">
-          <div className="flex items-center gap-2.5 lg:hidden">
-            <BrandMark className="size-8" />
-            <p className="text-xl font-semibold tracking-tight">Gridcast</p>
-          </div>
+          <BrandLogo className="lg:hidden" />
           {children}
         </div>
       </div>

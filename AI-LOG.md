@@ -890,3 +890,12 @@ about hardest, because it makes the ledger quietly unreliable exactly where it m
 
 **Outcome:** Firebase build `build-2026-09-24-005` READY from exact commit `3c00375eb2388dd9284c537bce694b0ffc5ceda6`, 100% traffic; rollout CLI completed successfully. Live sign-in HTML references the brand SVG and declares SVG/ICO/apple icon links. All four deployed assets returned 200 and matched local release files byte for byte (SHA-256 comparison). Prior build `004` remains available. Temporary browser preview closed and local preview server stopped.
 **Files/commit:** Application branding `3c00375`; `AI-LOG.md` completion append in a separate log-only commit. No additional application deployment needed.
+
+
+### 2026-09-25 02:15 IST · GPT-6 (Codex desktop) · Solid gold mark and balanced wordmark
+
+**Asked:** Remove the logo gradient; fix scenarios where the Gridcast text is too small relative to the icon.
+**Did:** Replaced SVG gradient with solid site-primary gold HSL(38,92%,33%), regenerated ICO and Apple icon. Added a shared BrandLogo pairing: 28px mark/24px wordmark, compact player 24px/20px. Applied to both sign-in layouts, loading and player setup; loading now uses a horizontal pairing rather than 40px icon above 13px text. Platform sidebar uses a 28px mark and 18px Gridcast name. Added a versioned mark URL to refresh previously cached gradients. Original SVG paths unchanged.
+**Verification:** Production build/typecheck and diff checks PASS. No gradient definitions or references remain in either SVG. Sign-in page screenshot checked locally; wordmark is visibly larger relative to mark. No new tests for visual-only styling. No failures.
+**Files:** `components/ui/brand-mark.tsx`, `components/ui/auth-page.tsx`, `components/ui/loader.tsx`, `components/ui/sidebar-nav.tsx`, `app/player/page.tsx`, `public/brand/gridcast-mark.svg`, `app/icon.svg`, `app/favicon.ico`, `app/apple-icon.png`, `AI-LOG.md`.
+**Commit/release:** Base `59f7c05`; scoped commit and existing Firebase deployment follow.

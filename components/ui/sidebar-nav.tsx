@@ -18,7 +18,7 @@ export type NavGroupData = { heading?: string; items: NavItemData[] };
 export type OrgOption = { id: string; name: string; type: string };
 
 function OrgMark({current}:{current:OrgOption}) {
-  return current.type === 'gridcast' ? <BrandMark label="Gridcast" /> :
+  return current.type === 'gridcast' ? <BrandMark label="Gridcast" className="size-7" /> :
     <div className="grid size-8 shrink-0 place-items-center rounded-md bg-primary text-[13px] font-semibold text-primary-foreground shadow-sm">{current.name.charAt(0)}</div>;
 }
 
@@ -40,7 +40,7 @@ function OrgSwitcher({ orgs, current, onSelect, collapsed }: {
         <div className="flex items-center gap-3 overflow-hidden">
           <OrgMark current={current} />
           <div className="flex flex-col overflow-hidden">
-            <span className="mb-1 max-w-[130px] truncate text-[13px] font-medium leading-none">{current.name}</span>
+            <span className={cn("mb-1 max-w-[130px] truncate font-medium leading-none", current.type === 'gridcast' && current.name === 'Gridcast' ? "text-lg font-semibold tracking-tight" : "text-[13px]")}>{current.name}</span>
             <span className="text-[11px] leading-none text-muted-foreground">
               {current.type === 'gridcast' ? 'Platform' : 'Operator'}
             </span>
