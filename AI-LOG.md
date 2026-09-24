@@ -1301,3 +1301,12 @@ independent of the rollup and deliverable now: the palette fix, and the `definit
 **Did:** Completed the final advertiser historical-screen projection: retired target screens remain visible through authorized settlement/receipt evidence, including venues outside recent receipt history, without exposing other advertisers. Added API/store regressions.
 **Verification:** Final Node suite170 passed/2 emulator-only entries skipped; separate actual Enterprise run16/16 as above. Final production build completed successfully including TypeScript and all static routes. Browser26 cases covered across the runs above. Whitespace check clean.55/55 Firestore indexes READY.
 **Outcome:** Ready to commit/push and roll out the verified revision; no live seeding. Media and physical burn-in remain pending. Base93eb350; actual release SHA will be appended after deployment.
+
+
+### 2026-09-25 03:53 IST · GPT-6 (Codex desktop) · Network release deployed to Firebase
+
+**Did:** Committed and pushed implementation `b78a87a5bdd3af9b49728d83beb5b2d7a85907c8` on `codex/gridcast-trust-layer-wp5`. Rolled out that exact revision to existing `gridcast-backend` / `gridcast-508011` in asia-southeast1; Mumbai Firestore unchanged in location.
+**Outcome:** `build-2026-09-24-008` READY, rollout SUCCEEDED, traffic100% on b78a87a. Live `/api/_health`200 reports firestore/databasegridcast/schema1; `/admin` and `/player`200; unauthenticated `/api/network-inventory`401. No live demo seeding, credential changes, Test-screen changes or re-pairing.
+**Evidence:** Final Node170passed/2emulator-onlyskips; separate Enterprise harness16passed (8 real SDK integration cases plus8protocol tests); browser26 cases passed; productionbuild successful; all55requiredindexesREADY.
+**Open:** User will send the11demo media entries; API importer is ready and tested but has not been run live. Physical72-hour playback/CVburn-in remains unperformed. Flat obligations remain deferred. Claude’s separate doc17 scale analysis remains untracked and unimplemented in this scope. Next work should start from this release, not the earlier5b18cae build.
+**Files/commit:** `AI-LOG.md` append; application source `b78a87a`. This following commit records deployment only.
