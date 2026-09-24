@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { flushPlays, enqueuePlay, queueStatus, queueCapacity, queuedPlays } from '@/lib/player-queue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Monitor } from 'lucide-react';
+import { BrandMark } from '@/components/ui/brand-mark';
 import { pendingDiagnostic, saveDiagnostic, flushDiagnostic } from '@/lib/player-diagnostics';
 import { cameraConstraints, cameraError, frameSize } from '@/lib/player-vision';
 
@@ -417,7 +417,7 @@ export default function Player() {
     } catch (e: any) { setErr(e.message || 'Pairing failed'); }
   };
   if (!credential) return <div className="grid min-h-screen place-items-center bg-slate-950 p-4"><div className="w-full max-w-[420px] rounded-xl bg-card p-8">
-    <div className="mb-5 flex items-center gap-2"><Monitor className="size-5 text-primary" /><b>Gridcast Player</b></div>
+    <div className="mb-5 flex items-center gap-2"><BrandMark className="size-7" /><b>Gridcast Player</b></div>
     <h1 className="text-xl font-semibold">Pair this player</h1><p className="my-3 text-sm text-muted-foreground">Generate a one-time code from the screen’s dashboard. Codes expire after 10 minutes.</p>
     <Input value={code} onChange={e => setCode(e.target.value)} onKeyDown={e => e.key === 'Enter' && pair()} maxLength={8} placeholder="ABCDEFGH" autoComplete="off" className="h-14 text-center font-mono text-2xl uppercase tracking-widest" />
     <p className="my-2 text-sm text-destructive">{err}</p><Button className="w-full" onClick={pair}>Pair and play</Button>

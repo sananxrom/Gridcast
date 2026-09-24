@@ -1,6 +1,7 @@
 'use client';
 import React, { useState } from 'react';
 import { ChevronDown, ChevronRight, Check } from 'lucide-react';
+import { BrandMark } from './brand-mark';
 import { cn } from '@/lib/utils';
 
 export type NavItemData = {
@@ -16,6 +17,11 @@ export type NavGroupData = { heading?: string; items: NavItemData[] };
 
 export type OrgOption = { id: string; name: string; type: string };
 
+function OrgMark({current}:{current:OrgOption}) {
+  return current.type === 'gridcast' ? <BrandMark label="Gridcast" /> :
+    <div className="grid size-8 shrink-0 place-items-center rounded-md bg-primary text-[13px] font-semibold text-primary-foreground shadow-sm">{current.name.charAt(0)}</div>;
+}
+
 function OrgSwitcher({ orgs, current, onSelect, collapsed }: {
   orgs: OrgOption[]; current: OrgOption; onSelect: (id: string) => void; collapsed: boolean;
 }) {
@@ -23,9 +29,7 @@ function OrgSwitcher({ orgs, current, onSelect, collapsed }: {
   if (collapsed) {
     return (
       <div className="mb-4 flex justify-center">
-        <div className="grid size-8 place-items-center rounded-md bg-primary text-[13px] font-semibold text-primary-foreground shadow-sm">
-          {current.name.charAt(0)}
-        </div>
+        <OrgMark current={current} />
       </div>
     );
   }
@@ -34,9 +38,7 @@ function OrgSwitcher({ orgs, current, onSelect, collapsed }: {
       <div onClick={() => setOpen(!open)}
         className="group mb-4 flex cursor-pointer select-none items-center justify-between rounded-lg px-2 py-2 transition-colors hover:bg-black/5 dark:hover:bg-white/5">
         <div className="flex items-center gap-3 overflow-hidden">
-          <div className="grid size-8 shrink-0 place-items-center rounded-md bg-primary text-[13px] font-semibold text-primary-foreground shadow-sm">
-            {current.name.charAt(0)}
-          </div>
+          <OrgMark current={current} />
           <div className="flex flex-col overflow-hidden">
             <span className="mb-1 max-w-[130px] truncate text-[13px] font-medium leading-none">{current.name}</span>
             <span className="text-[11px] leading-none text-muted-foreground">

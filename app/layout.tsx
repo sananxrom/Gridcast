@@ -3,7 +3,7 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: 'Gridcast',
-  description: 'The AdEngine for the physical world — verified impressions on every screen.',
+  description: 'The AdEngine for the physical world — verified playback and measured presence on every screen.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

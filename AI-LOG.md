@@ -874,3 +874,13 @@ about hardest, because it makes the ledger quietly unreliable exactly where it m
 
 **Outcome:** Released `8184d10b0aedff30603a63b610398a47b85b206e` to Firebase `gridcast-backend`, `build-2026-09-24-004`: READY, rollout SUCCEEDED, 100% traffic. Previous build `003` remains available. Fetched live `/admin` and its referenced JavaScript bundles: Edit creative name, Save creative and approval-warning controls are present. `/api/_health` returned 200, Firestore database `gridcast`, ok=true. No live customer creative was edited for verification. Local save/cancel and endpoint checks passed as recorded above; temporary test server stopped.
 **Files/commit:** `AI-LOG.md` completion append; application commit `8184d10`. Log-only follow-up commit on the same review branch, no additional deployment required.
+
+
+### 2026-09-25 02:04 IST · GPT-6 (Codex desktop) · Supplied Gridcast SVG branding
+
+**Asked:** Use the supplied Gridcast SVG for icons, favicon and branding, in the existing gold/ombre colour.
+**Did:** Preserved all three path strings from `Asset 2Gridcast.svg` exactly; added a shared vector mark using the existing HSL primary/dark/light gold ramp. Replaced placeholder branding in desktop/mobile sign-in, platform organisation badge (expanded/collapsed), loading screen and player pairing screen. Operator organisation initials remain distinct. Added SVG favicon, 16/32/48px ICO and 180px Apple touch icon derived from the same geometry; Next metadata includes their links automatically. Corrected root description from impressions to verified playback/measured presence to honour the standing terminology.
+**Verification:** Production build/typecheck PASS, exact source-path comparison PASS, sign-in screenshot visually checked, all four logo/icon URLs return 200 with correct media types, head declares SVG/ICO/apple links. `git diff --check` PASS. No new tests for this visual-only change.
+**Failures:** Initial read glob had no matches and initial localhost HTTP check hit sandbox network permissions; explicit paths and scoped approved verification succeeded. No source/build failure.
+**Files:** `public/brand/gridcast-mark.svg`, `components/ui/brand-mark.tsx`, `components/ui/auth-page.tsx`, `components/ui/sidebar-nav.tsx`, `components/ui/loader.tsx`, `app/player/page.tsx`, `app/layout.tsx`, `app/icon.svg`, `app/favicon.ico`, `app/apple-icon.png`, `AI-LOG.md`.
+**Commit/release:** Base `affdbee`; scoped commit/push and Firebase deployment follow. No customer data changed.

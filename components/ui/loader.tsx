@@ -1,6 +1,7 @@
 'use client';
 import React, { useEffect, useRef, useState } from 'react';
 import { onLoading } from '@/lib/client';
+import { BrandMark } from './brand-mark';
 import { cn } from '@/lib/utils';
 
 /** Thin indeterminate progress bar pinned to the top of the viewport. */
@@ -38,7 +39,7 @@ export function BootLoader({ label = 'Loading' }: { label?: string }) {
   return (
     <div className="grid h-screen place-items-center bg-background">
       <div className="w-[220px] text-center">
-        <div className="mb-4 text-[13px] font-semibold tracking-tight">Gridcast</div>
+        <BrandMark className="mx-auto mb-3 size-10" /><div className="mb-4 text-[13px] font-semibold tracking-tight">Gridcast</div>
         <div className="h-0.5 w-full overflow-hidden rounded-full bg-muted">
           <div className="h-full w-1/3 rounded-full bg-primary animate-slide" />
         </div>

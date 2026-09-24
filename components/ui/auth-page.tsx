@@ -1,7 +1,7 @@
 'use client';
 import React from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
-import { Monitor } from 'lucide-react';
+import { BrandMark } from './brand-mark';
 import { cn } from '@/lib/utils';
 
 /**
@@ -19,9 +19,7 @@ export function AuthLayout({ children, quote, by }: {
       <div className="relative hidden h-full flex-col overflow-hidden border-r border-border bg-muted/60 p-10 lg:flex">
         <div className="absolute inset-0 z-10 bg-gradient-to-t from-background to-transparent" />
         <div className="z-10 flex items-center gap-2.5">
-          <div className="grid size-7 place-items-center rounded-md bg-primary text-primary-foreground">
-            <Monitor className="size-4" strokeWidth={2} />
-          </div>
+          <BrandMark className="size-8" />
           <p className="text-xl font-semibold tracking-tight">Gridcast</p>
         </div>
         <div className="z-10 mt-auto">
@@ -46,9 +44,7 @@ export function AuthLayout({ children, quote, by }: {
         </div>
         <div className="relative z-10 mx-auto w-full space-y-4 sm:w-[24rem]">
           <div className="flex items-center gap-2.5 lg:hidden">
-            <div className="grid size-7 place-items-center rounded-md bg-primary text-primary-foreground">
-              <Monitor className="size-4" strokeWidth={2} />
-            </div>
+            <BrandMark className="size-8" />
             <p className="text-xl font-semibold tracking-tight">Gridcast</p>
           </div>
           {children}
