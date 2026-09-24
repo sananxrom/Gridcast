@@ -859,3 +859,12 @@ about hardest, because it makes the ledger quietly unreliable exactly where it m
 **Files:** `AI-LOG.md` append only for this completion record; released implementation includes `app/admin/page.tsx`, `components/views/commercial.tsx`, `components/views/screen-diagnostics.tsx`, `lib/devices.ts`, `lib/audit.ts`, `lib/api.ts`, `lib/firestore-store.ts`, `app/player/page.tsx`, tests and index manifest in `8059e7a`.
 **Commit:** Application release `8059e7a`; this completion entry will be committed separately on the same review branch. No main merge or second application rollout.
 **Open:** Resume existing Test screen in Brave, verify its camera-enabled setting and use the noncommercial screen diagnostic to validate playback/detector status. Real-person ground truth is still needed before claiming counting accuracy.
+
+
+### 2026-09-25 01:45 IST · GPT-6 (Codex desktop) · Creative editing
+
+**Asked:** “there is no way to edit a creative add that”.
+**Did:** Added Edit buttons and a prefilled save/cancel editor to the shared admin/operator Creatives view. Added POST `/creative/:id` with sales capability and organisation ownership enforcement, an explicit field allowlist, input validation and existing atomic audit integration. Name changes retain approval; category/YouTube/duration changes return to pending and clear the old approval timestamp. Uploaded-file measurements and advertiser/organisation ownership cannot be overwritten. Existing campaign links and historical assignments remain intact; inventory capacity is revalidated before saving.
+**Verification:** Typecheck and production build PASS. Full suite: 109 entries, 108 pass, one emulator entry skipped. Admin browser suite 5/5 pass, including creative save/cancel and existing client/upload/approval/campaign workflows. New endpoint regression covers cross-tenant denial, protected fields, invalid values, audit, approval reset, uploaded metadata and archived advertiser restrictions. `git diff --check` PASS. No test failures.
+**Files:** `components/views/commercial.tsx`, `lib/access.ts`, `lib/api.ts`, `tests/authorization.test.cjs`, `tests/admin.browser.cjs`, `AI-LOG.md`.
+**Commit/release:** Base `fdb0817`; committing this scoped change on `codex/gridcast-trust-layer-wp5` and releasing to the existing Firebase backend. Deployment outcome to be appended. No live creative records modified for testing.

@@ -20,7 +20,7 @@ async function harness(role='platform_admin') {
   else if(path==='/advertiser'&&body){result={id:'adv-'+advertisers.length,status:'active',...body};advertisers.push(result);}
   else if(path.startsWith('/advertiser/')&&body){const a=advertisers.find(a=>a.id===path.split('/')[2]);if(path.endsWith('/archive'))a.status='archived';else if(path.endsWith('/restore'))a.status='active';else Object.assign(a,body);result=a;}
   else if(path==='/creative'&&body){result={id:'cr-'+creatives.length,approval_status:'pending',...body};creatives.push(result);}
-  else if(path.startsWith('/creative/')&&body){result=creatives.find(c=>c.id===path.split('/')[2]);result.approval_status=body.status;}
+  else if(path.startsWith('/creative/')&&body){result=creatives.find(c=>c.id===path.split('/')[2]);if(path.endsWith('/approve'))result.approval_status=body.status;else Object.assign(result,body);}
   else if(path==='/assets/upload'){result={asset:{duration_s:10,width:1280,height:720}};}
   else if(path==='/campaign'&&body){result={id:'campaign-'+campaigns.length,accrued_spend:0,invoice_status:'not_invoiced',...body};campaigns.push(result);}
   else if(path==='/invite')result={user:{email:body.email},temp_password:'local-test-only'};
@@ -67,5 +67,15 @@ test('sales operator can read campaign list without redacted invoice data',async
   await h.page.route('**/api/bootstrap**',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({...h.boot('a'),caps:['sales']})}));
   await h.page.addInitScript(()=>localStorage.setItem('gc_user',JSON.stringify({id:'sales',org_id:'a',role:'sales',name:'Sales user',orgName:'Operator Alpha'})));
   await h.page.goto(base+'/operator#campaigns');await h.page.getByRole('button',{name:'Sales campaign',exact:true}).waitFor();assert.equal(await h.page.getByRole('columnheader',{name:'Invoice',exact:true}).count(),0);
+ }finally{await h.browser.close();}
+});
+
+test('creative editor saves existing row and cancel leaves it unchanged',async()=>{
+ const h=await harness();try{
+  h.advertisers.push({id:'active-a',org_id:'a',name:'Active client',status:'active'});await h.page.reload();
+  await h.nav('creatives');await h.field('Name').fill('Editable video');await h.page.getByLabel('Creative advertiser').selectOption('active-a');await h.page.getByRole('button',{name:'Add creative',exact:true}).click();
+  await h.page.getByRole('button',{name:'Edit creative Editable video',exact:true}).click();await h.page.getByLabel('Edit creative name',{exact:true}).fill('Updated video');await h.page.getByRole('button',{name:'Save creative',exact:true}).click();
+  await h.page.getByRole('button',{name:'Edit creative Updated video',exact:true}).waitFor();assert.equal(h.requests.filter(r=>r.path==='/creative/cr-0').at(-1).body.name,'Updated video');
+  await h.page.getByRole('button',{name:'Edit creative Updated video',exact:true}).click();await h.page.getByLabel('Edit creative name',{exact:true}).fill('Discard me');await h.page.getByRole('button',{name:'Cancel',exact:true}).click();assert.equal(h.requests.filter(r=>r.path==='/creative/cr-0').length,1);
  }finally{await h.browser.close();}
 });

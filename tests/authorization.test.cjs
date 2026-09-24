@@ -321,3 +321,23 @@ test('explicit nonproduction reset preserves earlier audit evidence; production 
  // Production storage guard blocks this memory fixture before reset; direct authorization has a separate existing test.
  assert.notEqual((await f.call('POST','reset',{},f.token('u_admin'))).status,200);
 });
+
+
+test('creative editing protects ownership, media provenance and approval while retaining campaign links',async()=>{
+ const f=fixture(),id='cr_fit_a',admin=f.token('u_admin'),owner=f.token('u_op1');
+ const original=f.data().creatives.find(c=>c.id===id);
+ expectStatus(await f.call('POST',`creative/${id}`,{name:'Renamed'},f.token('u_op2')),404);
+ for(const patch of [{org_id:'org_tricity'},{advertiser_id:'adv_mobile'},{approval_status:'approved'},{assets:[]},{name:''},{youtube_id:'bad'},{duration_s:-1}]) expectStatus(await f.call('POST',`creative/${id}`,patch,owner),400);
+ const renamed=expectStatus(await f.call('POST',`creative/${id}`,{name:'Renamed'},owner),200);
+ assert.equal(renamed.approval_status,original.approval_status);
+ const edited=expectStatus(await f.call('POST',`creative/${id}`,{category:'new-category',youtube_id:'abcdefghijk',duration_s:12},admin),200);
+ assert.equal(edited.approval_status,'pending');assert.equal(edited.youtube_id,'abcdefghijk');assert.equal(edited.metadata_source,'operator_declared');assert.equal(edited.approved_at,undefined);
+ assert.ok(f.data().campaigns.find(c=>c.id==='cmp_1').creative_ids.includes(id));
+ assert.ok(f.data().audit.some(a=>a.action===`creative/${id}`));
+ f.change(d=>{d.creatives.find(c=>c.id===id).assets=[{id:'asset',duration_s:12}];});
+ expectStatus(await f.call('POST',`creative/${id}`,{duration_s:20},admin),400);
+ expectStatus(await f.call('POST',`creative/${id}`,{youtube_id:'lmnopqrstuv'},admin),400);
+ expectStatus(await f.call('POST',`creative/${id}`,{name:'Uploaded renamed'},admin),200);
+ f.change(d=>{d.advertisers.find(a=>a.id===original.advertiser_id).status='archived';});
+ expectStatus(await f.call('POST',`creative/${id}`,{name:'Blocked'},admin),409);
+});

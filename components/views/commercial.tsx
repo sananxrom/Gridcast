@@ -1,6 +1,7 @@
 'use client';
 import React, {useState} from 'react';
 import {api, type SessionUser} from '@/lib/client';
+import {can} from '@/lib/roles';
 import {inr, ytId} from '@/lib/utils';
 import {PageHead, SectionHead} from '@/components/ui/app-shell';
 import {Card} from '@/components/ui/card';
@@ -10,9 +11,39 @@ import {Badge} from '@/components/ui/badge';
 import {DataTable} from '@/components/ui/table';
 import {Thumb, Empty} from './bits';
 import {CreativeUpload} from './creative-upload';
+function CreativeEditor({row,onClose,onChanged}:{row:any;onClose:()=>void;onChanged:()=>void}) {
+  const [f,setF]=useState({name:row.name??'',category:row.category??'general',url:row.youtube_id??'',duration:String(row.duration_s??10)});
+  const [error,setError]=useState(''),[busy,setBusy]=useState(false);
+  const uploaded=!!row.assets?.length;
+  const save=async()=>{setError('');setBusy(true);try{
+    const patch:any={};
+    if(f.name.trim()!==row.name)patch.name=f.name.trim();
+    if(f.category.trim()!==(row.category??'general'))patch.category=f.category.trim();
+    if(!uploaded){
+      const id=f.url.trim()?ytId(f.url.trim()):'';
+      if(f.url.trim()&&!id)throw new Error('Enter a valid YouTube URL or video ID.');
+      if(row.youtube_id&&!id)throw new Error('Enter a YouTube video; the existing source cannot be removed here.');
+      if(id&&id!==row.youtube_id)patch.youtube_id=id;
+      if(id&&Number(f.duration)!==row.duration_s)patch.duration_s=Number(f.duration);
+    }
+    await api(`/creative/${row.id}`,patch);await onChanged();onClose();
+  }catch(e){setError((e as Error).message);}finally{setBusy(false);}};
+  return <Card className="mb-4 p-5" aria-label="Edit creative"><h3 className="mb-3 font-semibold">Edit creative</h3>
+    <div className="grid gap-3 sm:grid-cols-2">
+      <Field label="Name"><Input aria-label="Edit creative name" maxLength={200} value={f.name} onChange={e=>setF({...f,name:e.target.value})}/></Field>
+      <Field label="Category"><Input aria-label="Edit creative category" maxLength={200} value={f.category} onChange={e=>setF({...f,category:e.target.value})}/></Field>
+      {!uploaded&&<><Field label="YouTube URL or video ID"><Input aria-label="Edit creative video" value={f.url} onChange={e=>setF({...f,url:e.target.value})}/></Field><Field label="Expected seconds"><Input aria-label="Edit creative duration" type="number" min="0.001" max="86400" step="any" value={f.duration} onChange={e=>setF({...f,duration:e.target.value})}/></Field></>}
+    </div>
+    <p className="mt-3 text-sm text-muted-foreground">Category or video changes require platform approval again and pause new delivery of this creative until approved. Renaming keeps its approval.</p>
+    {uploaded&&<p className="mt-2 text-sm text-muted-foreground">Video dimensions and duration come from the uploaded file. Use Upload video on the row to add a variation.</p>}
+    {error&&<p role="alert" className="mt-3 text-sm text-destructive">{error}</p>}
+    <div className="mt-3 flex gap-2"><Button disabled={busy||!f.name.trim()||!f.category.trim()} onClick={save}>{busy?'Saving…':'Save creative'}</Button><Button disabled={busy} variant="outline" onClick={onClose}>Cancel</Button></div>
+  </Card>;
+}
 export function Creatives({ d, user, orgId, onChanged }: { d: any; user: SessionUser; orgId: string | null; onChanged: () => void }) {
   const advName = (id:string) => d.advertisers.find((a:any)=>a.id===id)?.name ?? id;
   const organisation = orgId ?? '';
+  const [editing,setEditing]=useState<any>(null);
   const advertisers = d.advertisers.filter((a:any)=>a.org_id===organisation && a.status!=='archived');
   const [f, setF] = useState({ adv: advertisers[0]?.id ?? '', url: '', name: '', dur: '10', source: 'upload', category: 'general' });
   const [err, setErr] = useState(''), [busy,setBusy] = useState(false);
@@ -49,6 +80,7 @@ export function Creatives({ d, user, orgId, onChanged }: { d: any; user: Session
       {f.source==='youtube'&&<p className="mt-3 text-xs text-muted-foreground">The entered duration is self-reported. Upload a file for server-verified dimensions and duration.</p>}
       <div className="mt-3 flex items-center gap-3"><Button onClick={add} disabled={busy||!organisation}>{busy?'Creating…':'Add creative'}</Button>{err && <span role="alert" className="text-[12.5px] text-destructive">{err}</span>}</div>
     </Card>
+    {editing&&<CreativeEditor key={editing.id} row={editing} onClose={()=>setEditing(null)} onChanged={onChanged}/>}
     <DataTable cols={[
       { label: 'Creative', render: (c: any) => <div className="flex items-center gap-3"><Thumb id={c.youtube_id} w={76} /><div><div className="font-medium">{c.name}</div><div className="text-[12px] text-muted-foreground">{advName(c.advertiser_id)}</div></div></div> },
       { label: 'Organisation', render: (c:any) => d.orgs?.find((o:any)=>o.id===c.org_id)?.name ?? c.org_id },
@@ -56,6 +88,7 @@ export function Creatives({ d, user, orgId, onChanged }: { d: any; user: Session
       { label: 'Source', render: (c: any) => <span className="text-[12px] text-muted-foreground">{c.assets?.length?`${c.assets.length} uploaded variation${c.assets.length===1?'':'s'}`:c.youtube_id?'YouTube':'Awaiting upload'}</span> },
       { label: 'Length', num: true, render: (c: any) => c.assets?.length?<span className="text-xs">{c.assets.map((a:any)=>`${a.duration_s ?? (a.duration_ms/1000)}s`).join(' / ')}</span>:c.duration_s?`${c.duration_s}s (reported)`:'—' },
       { label: 'Approval', render: (c: any) => <Badge variant={c.approval_status === 'approved' ? 'ok' : c.approval_status === 'rejected' ? 'destructive' : 'warn'}>{c.approval_status}</Badge> },
+      { label: 'Edit', render: (c:any) => can(user.role,'sales')&&(user.role==='platform_admin'||c.org_id===user.org_id)?<Button size="sm" variant="outline" aria-label={`Edit creative ${c.name}`} onClick={()=>setEditing(c)}>Edit</Button>:null },
       { label: 'Video', render: (c:any) => (user.role==='platform_admin'||c.org_id===user.org_id)?<CreativeUpload creativeId={c.id} onUploaded={()=>onChanged()}/>:<span className="text-xs text-muted-foreground">Managed by originating organisation</span> },
       { label: 'Review', render: (c:any) => user.role==='platform_admin' ? <div className="flex gap-2">{['approved','rejected'].map(status=><Button key={status} size="sm" variant="outline" disabled={busy||c.approval_status===status} onClick={async()=>{setBusy(true);setErr('');try{await api(`/creative/${c.id}/approve`,{status});await onChanged();}catch(e){setErr((e as Error).message);}finally{setBusy(false);}}}>{status==='approved'?'Approve':'Reject'}</Button>)}</div> : <span className="text-[12px] text-muted-foreground">Reviewed by Gridcast</span> },
     ]} rows={d.creatives} rowId={(c: any) => c.id} exportName="creatives" />

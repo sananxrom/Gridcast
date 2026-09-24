@@ -43,6 +43,7 @@ export const ROUTES: { method: string; path: RegExp; caps: Cap[] }[] = [
   { method: 'GET', path: /^campaign\/[^/]+$/, caps: [] },
   { method: 'POST', path: /^campaign(?:\/[^/]+)?$/, caps: ['sales'] },
   { method: 'POST', path: /^(creative|advertiser)$/, caps: ['sales'] },
+  { method: 'POST', path: /^creative\/[^/]+$/, caps: ['sales'] },
   { method: 'POST', path: /^creative\/[^/]+\/approve$/, caps: ['platform'] },
   { method: 'GET', path: /^creative\/[^/]+\/asset$/, caps: ['sales'] },
   { method: 'POST', path: /^creative\/[^/]+\/asset$/, caps: ['sales'] },
@@ -184,6 +185,10 @@ export function authorize(db: any, actor: any, method: string, seg: string[], in
   }
   if (entity === 'creative' && id) {
     const creative = own(db.creatives, id, actor);
+    if (method === 'POST' && !action) {
+      rejectUnknown(body, ['name','category','youtube_id','duration_s']);
+      if (creative.assets?.length && ('youtube_id' in body || 'duration_s' in body)) fail(400, 'Uploaded video metadata cannot be edited; upload a new variation instead');
+    }
     if (method === 'POST' && db.advertisers.some((a: any) => a.id === creative.advertiser_id && a.status === 'archived')) fail(409, 'Restore this advertiser before changing creatives');
     if (action === 'asset' && method === 'POST') rejectUnknown(body,['proof']);
     if (action === 'approve' && !['approved','rejected','pending'].includes(body.status || 'approved')) fail(400, 'Unknown approval state');

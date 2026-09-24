@@ -396,6 +396,31 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     creative.aspect = asset.aspect; creative.approval_status = 'pending'; creative.metadata_source = 'server_ffprobe';
     validateInventory(); await save(); return { status: 201, body: { creative, asset } };
   }
+  if (method === 'POST' && seg[0] === 'creative' && seg[1] && !seg[2]) {
+    const c = db.creatives.find((x: any) => x.id === seg[1]);
+    const patch: Record<string, any> = {};
+    for (const key of ['name','category']) if (key in body) {
+      if (typeof body[key] !== 'string' || !body[key].trim() || body[key].trim().length > 200) throw new AccessError(400, `Enter a ${key} of 1–200 characters`);
+      patch[key] = body[key].trim();
+    }
+    if ('youtube_id' in body) {
+      if (typeof body.youtube_id !== 'string' || !/^[a-zA-Z0-9_-]{11}$/.test(body.youtube_id)) throw new AccessError(400, 'Enter a valid YouTube video ID');
+      patch.youtube_id = body.youtube_id;
+    }
+    if ('duration_s' in body) {
+      if (typeof body.duration_s !== 'number' || !Number.isFinite(body.duration_s) || body.duration_s <= 0 || body.duration_s > 86400) throw new AccessError(400, 'Duration must be between 0 and 86400 seconds');
+      if (!(patch.youtube_id || c.youtube_id)) throw new AccessError(400, 'Duration can only be edited for YouTube videos');
+      patch.duration_s = body.duration_s;
+    }
+    if (patch.youtube_id && !(patch.duration_s || c.duration_s)) throw new AccessError(400, 'Enter the expected video duration');
+    const changed = Object.keys(patch).filter(key => patch[key] !== c[key]);
+    if (!changed.length) return {body:c};
+    for (const key of changed) c[key] = patch[key];
+    if (changed.some(key => key !== 'name')) { c.approval_status = 'pending'; delete c.approved_at; }
+    if ('youtube_id' in patch || 'duration_s' in patch) { c.metadata_source = 'operator_declared'; c.aspect ||= '16:9'; }
+    c.updated_at = nowISO();
+    validateInventory(); await save(); return {body:c};
+  }
   if (method === 'POST' && p === 'creative') {
     const c = { metadata_source: 'operator_declared', id: uid('cr'), created_at: nowISO(), approval_status: 'pending', content_source: 'advertiser', ...body };
     db.creatives.push(c); await save(); return { body: c };
