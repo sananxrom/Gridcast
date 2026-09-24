@@ -884,3 +884,9 @@ about hardest, because it makes the ledger quietly unreliable exactly where it m
 **Failures:** Initial read glob had no matches and initial localhost HTTP check hit sandbox network permissions; explicit paths and scoped approved verification succeeded. No source/build failure.
 **Files:** `public/brand/gridcast-mark.svg`, `components/ui/brand-mark.tsx`, `components/ui/auth-page.tsx`, `components/ui/sidebar-nav.tsx`, `components/ui/loader.tsx`, `app/player/page.tsx`, `app/layout.tsx`, `app/icon.svg`, `app/favicon.ico`, `app/apple-icon.png`, `AI-LOG.md`.
 **Commit/release:** Base `affdbee`; scoped commit/push and Firebase deployment follow. No customer data changed.
+
+
+### 2026-09-25 02:10 IST · GPT-6 (Codex desktop) · Gold SVG branding deployed
+
+**Outcome:** Firebase build `build-2026-09-24-005` READY from exact commit `3c00375eb2388dd9284c537bce694b0ffc5ceda6`, 100% traffic; rollout CLI completed successfully. Live sign-in HTML references the brand SVG and declares SVG/ICO/apple icon links. All four deployed assets returned 200 and matched local release files byte for byte (SHA-256 comparison). Prior build `004` remains available. Temporary browser preview closed and local preview server stopped.
+**Files/commit:** Application branding `3c00375`; `AI-LOG.md` completion append in a separate log-only commit. No additional application deployment needed.
