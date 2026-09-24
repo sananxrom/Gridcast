@@ -1383,3 +1383,12 @@ of these decisions and are not in git.
 **Outcome:** The user's nine supplied videos passed actual embedded playback. Seven advertisers, nine approved creatives and seven active network campaigns are live, targeting twelve additive demo screens. Coke and Lay's each have two-creative rotation. Live rerun added zero records. The dashboard was left open in Brave.
 **Limits:** New demo screens still need pairing and follow 09:00–21:00 IST, with campaign dates 2026-09-25 through 2026-10-25. Browser playback checks do not establish physical screen delivery, camera accuracy or a 72-hour burn-in. Existing Test delivery continued during this work; its running accrual was not frozen. No credentials or pairing bindings changed.
 **Files/commit:** `AI-LOG.md` append only after deployed source `0969af0`. This following log-only commit does not require another application rollout.
+
+
+### 2026-09-25 04:29 IST · GPT-6 (Codex desktop) · Checked missing screens and organisations
+
+**Asked:** Not all screens or organisations were showing; check.
+**Found:** The user's existing Firebase admin tab was at `/admin?org=org_gridcast#screens`, with Gridcast selected in the global organisation switcher. Its five screens were correctly scoped; the same scope also narrowed the Organisations tab. The screen heading still says “All screens” even under an organisation filter, which makes this easy to misunderstand.
+**Did:** Used the existing signed-in Brave tab to select “All organisations”. Verified all thirteen screen rows, then opened Organisations and verified all four rows: Gridcast5 screens, Sector17 Media3, Tricity Screens3, Mohali Retail Media2. These match the previously verified live database totals. Left the user's tab on the full organisation directory.
+**Outcome:** Records were present; no missing seed, data repair, account change or deployment required. Only the browser's organisation scope changed. No source changes or tests needed for this UI-only diagnosis.
+**Files/commit:** `AI-LOG.md` append; application remains `0969af0`, base log commit `b0636d4`.
