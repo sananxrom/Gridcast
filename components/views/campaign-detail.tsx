@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { defaultSlotsPerLoop, physicalCapacity } from '@/lib/inventory';
 import { Settlement } from './settlement';
 import { api } from '@/lib/client';
-import { inr, fmtDate } from '@/lib/utils';
+import { inr, inrRate, fmtDate } from '@/lib/utils';
 import { PageHead, SectionHead } from '@/components/ui/app-shell';
 import { DataTable } from '@/components/ui/table';
 import { Stat, Progress } from '@/components/ui/stat';
@@ -53,7 +53,7 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
   const pct = c.committed_budget ? Math.round((c.accrued_spend / c.committed_budget) * 100) : 0;
   const rate = c.rate_type === 'flat'
     ? `${inr(c.committed_budget)} flat`
-    : `${inr(c.rate_value)} per play`;
+    : `${inrRate(c.rate_value)} per play`;
 
   const save = async () => {
     setErr('');
@@ -165,7 +165,7 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
         cols={[
           { label: 'Screen', render: (r: any) => <><div className="font-medium">{r.screen.name}</div><div className="text-[12px] text-muted-foreground">{r.screen.address}</div></> },
           { label: 'Venue', render: (r: any) => <Badge variant="muted">{r.screen.venue_type}</Badge> },
-          {label:'Booking',render:(r:any)=>{const b=c.bookings?.find((x:any)=>x.screen_id===r.screen.id);return b?<span className="text-xs">{b.slots_per_loop} appearances / loop<br/>{b.rate_type==='per_play'&&typeof b.rate_value==='number'?`${inr(b.rate_value)} / play`:b.rate_type==='flat'?'Agreed flat rate':'Rate unavailable'}</span>:<span className="text-xs text-muted-foreground">Legacy booking</span>;}},
+          {label:'Booking',render:(r:any)=>{const b=c.bookings?.find((x:any)=>x.screen_id===r.screen.id);return b?<span className="text-xs">{b.slots_per_loop} appearances / loop<br/>{b.rate_type==='per_play'&&typeof b.rate_value==='number'?`${inrRate(b.rate_value)} / play`:b.rate_type==='flat'?'Agreed flat rate':'Rate unavailable'}</span>:<span className="text-xs text-muted-foreground">Legacy booking</span>;}},
           { label: 'Play reports', num: true, render: (r: any) => r.plays },
           { label: 'Share', num: true, render: (r: any) => { const p = d.totals.plays ? Math.round(r.plays / d.totals.plays * 100) : 0; return <div className="flex items-center justify-end gap-2">{p}%<Progress value={p} className="w-16" /></div>; } },
           { label: 'Avg people', num: true, render: (r: any) => r.avg === null ? <span className="text-muted-foreground">—</span> : <b>{r.avg.toFixed(1)}</b> },

@@ -1320,3 +1320,58 @@ independent of the rollup and deliverable now: the palette fix, and the `definit
 **Checks:** Updated importer actual API tests pass8/8, including30s and no-write rerun; full Node170passed/2emulator-onlyskips; TypeScript and productionbuild pass. New browser4/4 cover import gate, duplicate-free rerun, failed embeds, duration mismatch and non-admin redirect. Browser tests use synthetic playback; live embed checks remain next.
 **Failures/limits:** Web extraction returned cache misses/Google anti-bot responses for several URLs; ordinary public watch-page metadata requests succeeded, without login or video downloads. Metadata embedding permission is not proof of real playback. This entry does not claim any live demo seed or physical device burn-in.
 **Files/commit:** `app/admin/demo/page.tsx`, `app/admin/page.tsx`, `lib/demo-network.ts`, `lib/demo-videos.json`, `tests/demo-network.test.cjs`, `tests/demo.browser.cjs`, `AI-LOG.md`. Base0fa5030; forthcoming commit/deployment and live verification will be logged separately.
+
+### 2026-09-25 04:14 IST · claude-opus-5 (Cowork) · Read Codex's release; one window closed, one hook identified
+
+**Asked:** Sanan: "check logs, what's happening."
+**Did:** Read Codex's 03:46 → 04:05 entries; checked `lib/settlement.ts`, `app/advertiser/page.tsx`,
+`app/admin/page.tsx`, `lib/firestore-store.ts` and git state against them. No changes made.
+
+**State, as Codex reports it (not independently verified by me — this session's egress cannot reach the
+Firebase host):** `build-2026-09-24-008` live on `b78a87a`, network slice + rotation + settlement buckets
+shipped, 170 Node tests + 16 Enterprise + 26 browser passing, 55/55 indexes READY. `dda3a8c` (demo videos +
+`/admin/demo`) committed on top, not yet deployed. Nine brand videos recorded in `lib/demo-videos.json`;
+Coke and Lay's rotate two creatives each, which exercises the rotation work. Demo not seeded live.
+
+**Confirmed: every doc 17 defect survives the release, exactly as Codex stated.** `HISTORY_LIMIT` is still
+1500; `app/advertiser/page.tsx:59` still renders `myPlays.length` from the truncated window as the
+advertiser-facing delivery count; `:61` the measured ratio; `:86` `slice(-15)`; `app/admin/page.tsx:168`,
+`:180`, `:271` unchanged. No `screen_day` anywhere. This is correctly scoped and honestly logged — recording
+it here only so the state is explicit.
+
+**The "build them together" window has closed.** Doc 17 §2.2 recommended `screen_day` ship alongside
+`settlement_bucket` because they are one mechanism. `accrueSettlement` (`lib/settlement.ts:55`) is now
+written and deployed, so `screen_day` is a second pass over the same transaction. Not expensive — one call
+site — but it is now a revisit rather than a co-build. My recommendation, my timing miss: doc 17 landed
+after Codex had started.
+
+**Concrete hook, and one thing that must NOT be folded in.** `accrueSettlement` is the right neighbour —
+single call site, inside the receipt transaction, after duplicate/assignment checks. But it returns early
+unless `play.billable && assignment.rate_type === 'per_play' && assignment.econ_version`. `screen_day` must
+count **rendered, non-rendered, billable and measured** regardless of rate type, because a delivery rate and
+a billable-rate drop are computed precisely from the plays `accrueSettlement` discards. So it is a sibling
+call placed *before* that early return, not an extension of it. Folding it in would reproduce the defect it
+exists to fix.
+
+**Two items from doc 18 are independent of all of this and buildable now:** the `--warn`/`--onair`
+separation (measured normal-vision ΔE 5.8, floor 15 — a user cannot tell "awaiting approval" from "on air"),
+and `definition` as a required prop with `lib/metrics.ts` seeded from the advertiser page's "How we count"
+card.
+
+**Housekeeping:** `gridcast-research/*.md` (docs 00–18), `.agents/`, `.claude/`, `Claude outputs/` and a
+stray root `06-phase1-build-spec.md` are all untracked at `dda3a8c`. The research docs are the only record
+of these decisions and are not in git.
+**Outcome:** Read-only. No source changes, tests, seed, deployment or push.
+**Files:** `AI-LOG.md`. Base `dda3a8c`.
+
+
+### 2026-09-25 04:17 IST · GPT-6 (Codex desktop) · Nine supplied videos checked and live demo imported
+
+**Deployment:** `dda3a8cada243319eb348d159bf61d8cb6119373` pushed and deployed to Firebase `build-2026-09-24-009`: READY, rolloutSUCCEEDED, traffic100%. Public health200/firestore/gridcast/schema1. This supersedes the contemporaneous Claude analysis note saying dda3a8c was not yet deployed/demo not seeded.
+**Playback:** Opened the new `/admin/demo` in the user's already signed-in Brave admin session. All9 real YouTube embeds completed playback; each reported duration matched the saved metadata within1second. No video downloaded; preview sent no device receipts or camera counts.
+**Live import:** Normal authenticated creation/approval APIs created3 operatororgs,12 demo screens,7 advertiser records,9 approved creatives,7 active network campaigns. Flight2026-09-25 through2026-10-25, screenhours09:00–21:00IST. Coke and Lay's each rotate2videos; all7campaigns target12newdemo screens. Values are illustrative demo economics. Repeated the import through the UI:0neworgs/screens/advertisers/creatives/campaigns. Live campaign list visibly shows7network demos plus existingTest.
+**Preservation evidence:** Read-only Firestore before/after counts:orgs1→4,screens1→13,advertisers1→8,creatives4→13,campaigns1→8,users1→1,devices2→2. Existingorg/screens/advertisers/creatives/users hashes unchanged; device identity/token-binding hashes unchanged. Originalcampaign full digest changed while its pairedTestplayer continued sending billable reports (recentserver timestamps confirmed). Audit has no human campaign edits since its earlier activation; importer used creationroutes only. Do not claim its live accrual was frozen. No pairingreset, secretretrieval, credentialchange or newuser.
+**Observed/fixed:** Live demo exposed pre-existing rate-format rounding:₹0.15displayedas₹0. `inrRate` now displays2decimals in campaignlist/detail/bookings and missingrate asdash; storedprices/billing unchanged. Direct checks cover₹0.15,₹0.93,truezeroandnull; importer8tests stillpass; TypeScript/buildpass. This small displayfollow-up is not deployed yet.
+**Failures:** Preservation probe initially queried nonexistent `received_at`, returningempty; correctedto `server_received_at` and confirmedongoingoriginalTestdelivery. No liveimport failures.
+**Files/commit:** `lib/utils.ts`, `components/views/campaign-list.tsx`, `components/views/campaign-detail.tsx`, `AI-LOG.md`; basеdda3a8c. Preserved concurrentClaude append.
+**Open:** Newdemo screens needpairing before physicaldelivery andfollow09:00–21:00IST. Physical72-hourburnin/CVaccuracy remainunverified; embeddedpreview is not proof ofscreen delivery. Doc17/18analytics work remainsseparate.

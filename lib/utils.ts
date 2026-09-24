@@ -6,6 +6,10 @@ export function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); }
 export const inr = (n: number | null | undefined) =>
   '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
+// Per-play prices need paise precision; an unavailable price is not a free play.
+export const inrRate = (n: number | null | undefined) =>
+  typeof n === 'number' && Number.isFinite(n) ? '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
+
 export const ytThumb = (id?: string) => `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
 
 export const ytId = (u: string) => {

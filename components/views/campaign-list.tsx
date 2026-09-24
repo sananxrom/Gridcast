@@ -1,7 +1,7 @@
 'use client';
 import React from 'react';
 import {api} from '@/lib/client';
-import {inr,isLive,daySeries} from '@/lib/utils';
+import {inr,inrRate,isLive,daySeries} from '@/lib/utils';
 import {PageHead} from '@/components/ui/app-shell';
 import {DataTable, type BulkAction} from '@/components/ui/table';
 import {Button} from '@/components/ui/button';
@@ -30,7 +30,7 @@ return (
           { label: 'Type', sort: (c: any) => c.campaign_type, render: (c: any) => <Badge variant={c.campaign_type === 'network' ? 'default' : 'muted'}>{c.campaign_type}</Badge> },
           { label: 'Screens', num: true, sort: (c: any) => c.screen_ids.length, render: (c: any) => c.screen_ids.length },
           { label: 'People / play', sort: (c: any) => trendCampaign(c.id).filter(Boolean).slice(-1)[0] ?? -1, render: (c: any) => <Spark data={trendCampaign(c.id)} /> },
-          { label: 'Rate', num: true, render: (c: any) => <span className="whitespace-nowrap">{c.rate_type === 'flat' ? <>{money(c.committed_budget)} <span className="text-muted-foreground">flat</span></> : <>{money(c.rate_value)} <span className="text-muted-foreground">/play</span></>}</span> },
+          { label: 'Rate', num: true, render: (c: any) => <span className="whitespace-nowrap">{c.rate_type === 'flat' ? <>{money(c.committed_budget)} <span className="text-muted-foreground">flat</span></> : <>{inrRate(c.rate_value)} <span className="text-muted-foreground">/play</span></>}</span> },
           { label: 'Budget', num: true, sort: (c: any) => (c.committed_budget ? c.accrued_spend / c.committed_budget : 0), render: (c: any) => { if(c.committed_budget==null)return <span>{money(c.accrued_spend)}<br/><span className="text-xs text-muted-foreground">Your screens only</span></span>;const p = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
             return <div className="flex flex-col items-end gap-1 whitespace-nowrap"><span>{inr(c.accrued_spend)}</span><span className="text-[11.5px] text-muted-foreground">of {inr(c.committed_budget)}</span><Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
           ...(caps.includes('money') ? [{ label: 'Invoice', sort: (c: any) => c.invoice_status, render: (c: any) => (
