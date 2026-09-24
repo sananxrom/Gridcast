@@ -1,7 +1,7 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
 const {seedDemo,DEMO_CAMPAIGNS,DEMO_ADVERTISERS,DEMO_MEDIA_KEYS}=require('./load-lib.cjs')('demo-network');
-function manifest(){const today=new Date(Date.now()+330*60000).toISOString().slice(0,10);return{starts_at:today,ends_at:today,media:Object.fromEntries(DEMO_MEDIA_KEYS.map((k,i)=>[k,{youtube_id:'testvideo'+String(i).padStart(2,'0'),duration_s:10+i%11,verification:{reference:'Synthetic unit-test duration evidence '+i,verified_at:new Date().toISOString()},approved_for_demo:true}]))}}
+function manifest(){const today=new Date(Date.now()+330*60000).toISOString().slice(0,10);return{starts_at:today,ends_at:today,media:Object.fromEntries(DEMO_MEDIA_KEYS.map((k,i)=>[k,{youtube_id:'testvideo'+String(i).padStart(2,'0'),duration_s:i===DEMO_MEDIA_KEYS.length-1?30:10+i%11,verification:{reference:'Synthetic unit-test duration evidence '+i,verified_at:new Date().toISOString()},approved_for_demo:true}]))}}
 function fixture(){
  const records={orgs:[{id:'gridcast-real',name:'Gridcast',type:'gridcast',status:'active'}],screens:[{id:'test-real',org_id:'gridcast-real',name:'Test',pairing_code_hash:'existing-preserved'}],advertisers:[],creatives:[],campaigns:[]};
  const users=[{id:'real-admin',role:'platform_admin'}],devices=[{id:'real-device',screen_id:'test-real'}],calls=[];
@@ -26,15 +26,15 @@ function fixture(){
  return{records,users,devices,calls,request};
 }
 test('missing media and unverified duration fail before any API calls or mutations',async()=>{
- for(const mutate of [m=>{delete m.media[DEMO_MEDIA_KEYS[0]]},m=>{m.media[DEMO_MEDIA_KEYS[0]].duration_s=21},m=>{delete m.media[DEMO_MEDIA_KEYS[0]].verification},m=>{m.media[DEMO_MEDIA_KEYS[0]].approved_for_demo=false},m=>{m.starts_at='2000-01-01';m.ends_at='2000-01-02'}]){
+ for(const mutate of [m=>{delete m.media[DEMO_MEDIA_KEYS[0]]},m=>{m.media[DEMO_MEDIA_KEYS[0]].duration_s=31},m=>{delete m.media[DEMO_MEDIA_KEYS[0]].verification},m=>{m.media[DEMO_MEDIA_KEYS[0]].approved_for_demo=false},m=>{m.starts_at='2000-01-01';m.ends_at='2000-01-02'}]){
   const f=fixture(),m=manifest();mutate(m);await assert.rejects(seedDemo(f.request,m));assert.equal(f.calls.length,0);
  }
 });
 test('seed adds exact demo cohort while retaining original Gridcast/Test/player and emits no secrets',async()=>{
  const f=fixture(),original=structuredClone({org:f.records.orgs[0],screen:f.records.screens[0],users:f.users,devices:f.devices});
  const result=await seedDemo(f.request,manifest());
- assert.deepEqual(result.created,{orgs:3,screens:12,advertisers:6,creatives:11,campaigns:9});
- assert.deepEqual(Object.fromEntries(Object.entries(result.cohort).map(([k,v])=>[k,v.length])),{orgs:4,screens:12,advertisers:6,creatives:11,campaigns:9});
+ assert.deepEqual(result.created,{orgs:3,screens:12,advertisers:7,creatives:9,campaigns:7});
+ assert.deepEqual(Object.fromEntries(Object.entries(result.cohort).map(([k,v])=>[k,v.length])),{orgs:4,screens:12,advertisers:7,creatives:9,campaigns:7});
  assert.equal(result.before.screens,1);assert.equal(result.existing_non_demo.screens,1);assert.equal(f.records.screens.length,13);
  assert.deepEqual({org:f.records.orgs[0],screen:f.records.screens[0],users:f.users,devices:f.devices},original);
  assert.equal(JSON.stringify(result).includes('synthetic-secret'),false);assert.equal(JSON.stringify(result).includes('existing-preserved'),false);
@@ -43,7 +43,7 @@ test('seed adds exact demo cohort while retaining original Gridcast/Test/player 
  assert.ok(f.records.creatives.every(c=>c.approval_status==='approved'));
  assert.equal(f.records.campaigns.filter(c=>c.creative_ids.length===2).length,2);
  for(const c of f.records.campaigns){assert.equal(c.campaign_type,'network');assert.equal(c.rate_type,'per_play');assert.equal(c.screen_ids.length,12);assert.ok(c.bookings.every(b=>b.slots_per_loop===1));}
- for(const s of f.records.screens.slice(1)){assert.equal(s.network_slots,6);assert.equal(s.advertiser_slots,10);assert.equal(s.loop_length_s,600);assert.equal(s.slot_duration_s,10);assert.equal(s.has_camera,true);assert.deepEqual(s.operating_hours,{from:'09:00',to:'21:00'});}
+ for(const s of f.records.screens.slice(1)){assert.equal(s.network_slots,7);assert.equal(s.advertiser_slots,10);assert.equal(s.loop_length_s,600);assert.equal(s.slot_duration_s,10);assert.equal(s.has_camera,true);assert.deepEqual(s.operating_hours,{from:'09:00',to:'21:00'});}
  assert.ok(result.media_provenance.every(m=>m.source==='operator_declared_youtube'));
 });
 test('second run paginates and creates or changes nothing, even existing user-edited demo screens',async()=>{
@@ -66,7 +66,7 @@ test('server-verified approved uploads can be reused without creating or approvi
   f.records.creatives.push({id:slot,org_id:'gridcast-real',advertiser_id:c.advertiser,approval_status:'approved',metadata_source:'server_ffprobe',duration_s:15,assets:[{asset_id:'asset-'+slot,duration_s:15,metadata_source:'server_ffprobe'}]});m.media[slot]={creative_id:slot};
  }
  const result=await seedDemo(f.request,m);
- assert.equal(result.created.creatives,0);assert.equal(result.created.advertisers,0);assert.equal(result.cohort.creatives.length,11);
+ assert.equal(result.created.creatives,0);assert.equal(result.created.advertisers,0);assert.equal(result.cohort.creatives.length,9);
  assert.ok(result.media_provenance.every(m=>m.source==='server_ffprobe_existing_upload'));
  assert.ok(f.calls.every(c=>!c.path.startsWith('/creative')));
 });
@@ -102,9 +102,9 @@ function actualApiFixture(){
 test('complete demo seed succeeds through actual authorization/inventory/API routes and reruns without writes',async()=>{
  const f=actualApiFixture(),m=manifest(),before=f.data();
  const first=await seedDemo(f.request,m),after=f.data();
- assert.deepEqual(first.created,{orgs:3,screens:12,advertisers:6,creatives:11,campaigns:9});
+ assert.deepEqual(first.created,{orgs:3,screens:12,advertisers:7,creatives:9,campaigns:7});
  assert.deepEqual(after.users,before.users);assert.deepEqual(after.devices,before.devices);assert.deepEqual(after.screens.find(s=>s.id==='preserved-test'),before.screens[0]);
- assert.equal(after.screens.length,13);assert.equal(after.orgs.length,4);assert.equal(after.creatives.length,11);
+ assert.equal(after.screens.length,13);assert.equal(after.orgs.length,4);assert.equal(after.creatives.length,9);
  for(const c of after.campaigns){assert.equal(c.origin_org_id,'org_gridcast');assert.equal(c.participant_org_ids.length,4);assert.equal(c.bookings.length,12);assert.ok(c.bookings.every(b=>b.slots_per_loop===1&&b.econ_version&&b.rate_paise>=10));}
  const writes=f.writes(),second=await seedDemo(f.request,m);
  assert.deepEqual(second.created,{orgs:0,screens:0,advertisers:0,creatives:0,campaigns:0});assert.equal(f.writes(),writes);assert.deepEqual(f.data(),after);

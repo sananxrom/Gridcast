@@ -1,0 +1,83 @@
+[
+  {
+    "slot": "coca-cola-a",
+    "youtube_id": "gQ1b0uaFRjM",
+    "title": "Gawing Real Magic Moment Ang Break Time with Coca-Cola",
+    "duration_s": 15,
+    "reference": "https://www.youtube.com/watch?v=gQ1b0uaFRjM",
+    "metadata_checked_at": "2026-09-24T22:33:33.280163+00:00",
+    "embedding_allowed": true
+  },
+  {
+    "slot": "coca-cola-b",
+    "youtube_id": "69ddBOrCwok",
+    "title": "Coca Cola Ad, Diljit Dosanjh | Food Stylist: Bijal Jobanputra",
+    "duration_s": 15,
+    "reference": "https://www.youtube.com/watch?v=69ddBOrCwok",
+    "metadata_checked_at": "2026-09-24T22:33:33.280334+00:00",
+    "embedding_allowed": true
+  },
+  {
+    "slot": "oreo",
+    "youtube_id": "-ImKuGmNG2I",
+    "title": "OREO & BTS are calling. Join us.",
+    "duration_s": 15,
+    "reference": "https://www.youtube.com/watch?v=-ImKuGmNG2I",
+    "metadata_checked_at": "2026-09-24T22:33:33.280336+00:00",
+    "embedding_allowed": true
+  },
+  {
+    "slot": "mercedes-brand",
+    "youtube_id": "JbPBHtLstGw",
+    "title": "2024 Mercedes-AMG GT “SO. AMG.” Commercial",
+    "duration_s": 15,
+    "reference": "https://www.youtube.com/watch?v=JbPBHtLstGw",
+    "metadata_checked_at": "2026-09-24T22:33:33.280337+00:00",
+    "embedding_allowed": true
+  },
+  {
+    "slot": "mcdonalds",
+    "youtube_id": "79phlhutGLg",
+    "title": "Self Control Who I McDonald's",
+    "duration_s": 15,
+    "reference": "https://www.youtube.com/watch?v=79phlhutGLg",
+    "metadata_checked_at": "2026-09-24T22:33:33.280338+00:00",
+    "embedding_allowed": true
+  },
+  {
+    "slot": "lays-a",
+    "youtube_id": "ouLVXfte2f4",
+    "title": "Lay's Wafer Chips Himalayan Pink Salt",
+    "duration_s": 20,
+    "reference": "https://www.youtube.com/watch?v=ouLVXfte2f4",
+    "metadata_checked_at": "2026-09-24T22:33:33.280340+00:00",
+    "embedding_allowed": true
+  },
+  {
+    "slot": "lays-b",
+    "youtube_id": "fix3tKIIBjk",
+    "title": "Lay's Chili - Spice that's just right!",
+    "duration_s": 19,
+    "reference": "https://www.youtube.com/watch?v=fix3tKIIBjk",
+    "metadata_checked_at": "2026-09-24T22:33:33.280341+00:00",
+    "embedding_allowed": true
+  },
+  {
+    "slot": "cadbury",
+    "youtube_id": "mRdEnhWrptQ",
+    "title": "FOUND: NEW Cadbury Dairy Milk Oreo",
+    "duration_s": 15,
+    "reference": "https://www.youtube.com/watch?v=mRdEnhWrptQ",
+    "metadata_checked_at": "2026-09-24T22:33:33.280342+00:00",
+    "embedding_allowed": true
+  },
+  {
+    "slot": "aashirvaad",
+    "youtube_id": "G2sjEAL3EwA",
+    "title": "Duggu ka Lunchbox aise hota hai khaali! | Aashirvaad M.P. Chakki Atta",
+    "duration_s": 30,
+    "reference": "https://www.youtube.com/watch?v=G2sjEAL3EwA",
+    "metadata_checked_at": "2026-09-24T22:33:33.280343+00:00",
+    "embedding_allowed": true
+  }
+]

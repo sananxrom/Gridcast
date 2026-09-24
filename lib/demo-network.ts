@@ -8,23 +8,23 @@ export type DemoManifest = { starts_at: string; ends_at: string; media: Record<s
 const prefix = 'gridcast.demo.v1';
 const key = (kind: string, slug: string) => `${prefix}.${kind}.${slug}`;
 export const DEMO_ADVERTISERS = [
-  {slug:'coca-cola',name:'Coca-Cola India',category:'beverage'},
-  {slug:'mercedes',name:'Mercedes-Benz India',category:'automotive'},
-  {slug:'oreo',name:'Oreo India',category:'snack'},
-  {slug:'nike',name:'Nike India',category:'apparel'},
-  {slug:'amul',name:'Amul',category:'dairy'},
-  {slug:'swiggy',name:'Swiggy',category:'delivery'},
+  {slug:'coca-cola',name:'Coca-Cola',category:'beverage'},
+  {slug:'oreo',name:'Oreo',category:'snack'},
+  {slug:'mercedes',name:'Mercedes-Benz',category:'automotive'},
+  {slug:'mcdonalds',name:"McDonald's",category:'food'},
+  {slug:'lays',name:"Lay's",category:'snack'},
+  {slug:'cadbury',name:'Cadbury',category:'snack'},
+  {slug:'aashirvaad',name:'Aashirvaad',category:'food'},
 ] as const;
+// Illustrative demo economics, not a quote or a commercial agreement.
 export const DEMO_CAMPAIGNS = [
   {slug:'coca-cola-rotation',advertiser:'coca-cola',media:['coca-cola-a','coca-cola-b'],rate:.15,budget:3000},
-  {slug:'coca-cola-refresh',advertiser:'coca-cola',media:['coca-cola-refresh'],rate:.18,budget:3500},
-  {slug:'mercedes-brand',advertiser:'mercedes',media:['mercedes-brand'],rate:.3,budget:6000},
-  {slug:'mercedes-drive',advertiser:'mercedes',media:['mercedes-drive'],rate:.35,budget:7000},
   {slug:'oreo',advertiser:'oreo',media:['oreo'],rate:.12,budget:2500},
-  {slug:'nike-rotation',advertiser:'nike',media:['nike-a','nike-b'],rate:.22,budget:4500},
-  {slug:'nike-running',advertiser:'nike',media:['nike-running'],rate:.25,budget:5000},
-  {slug:'amul',advertiser:'amul',media:['amul'],rate:.1,budget:2000},
-  {slug:'swiggy',advertiser:'swiggy',media:['swiggy'],rate:.2,budget:4000},
+  {slug:'mercedes-brand',advertiser:'mercedes',media:['mercedes-brand'],rate:.3,budget:6000},
+  {slug:'mcdonalds',advertiser:'mcdonalds',media:['mcdonalds'],rate:.2,budget:4000},
+  {slug:'lays-rotation',advertiser:'lays',media:['lays-a','lays-b'],rate:.12,budget:2500},
+  {slug:'cadbury',advertiser:'cadbury',media:['cadbury'],rate:.12,budget:2500},
+  {slug:'aashirvaad',advertiser:'aashirvaad',media:['aashirvaad'],rate:.1,budget:2000},
 ] as const;
 export const DEMO_MEDIA_KEYS = DEMO_CAMPAIGNS.flatMap(c => [...c.media]);
 const operatorSpecs = [
@@ -42,7 +42,7 @@ function calendar(value: string) {
   return at;
 }
 function validateManifest(manifest: DemoManifest) {
-  if (!manifest?.media || DEMO_MEDIA_KEYS.some(k=>!manifest.media[k]) || Object.keys(manifest.media).length!==11) reject('supply all 11 real media entries before seeding');
+  if (!manifest?.media || DEMO_MEDIA_KEYS.some(k=>!manifest.media[k]) || Object.keys(manifest.media).length!==DEMO_MEDIA_KEYS.length) reject(`supply all ${DEMO_MEDIA_KEYS.length} real media entries before seeding`);
   const start=calendar(manifest.starts_at), end=calendar(manifest.ends_at);
   const today=calendar(new Date(Date.now()+330*60000).toISOString().slice(0,10));
   if (start>end || start>today || end<today) reject('flight dates must include today in India');
@@ -53,7 +53,7 @@ function validateManifest(manifest: DemoManifest) {
       if (typeof media.creative_id!=='string' || !media.creative_id.trim() || ids.has(media.creative_id)) reject(`${slot} requires a distinct existing creative`);
       ids.add(media.creative_id);continue;
     }
-    if (!/^[a-zA-Z0-9_-]{11}$/.test(media.youtube_id || '') || typeof media.duration_s!=='number' || !Number.isFinite(media.duration_s) || media.duration_s<10 || media.duration_s>20) reject(`${slot} needs a real YouTube ID and a verified 10–20 second duration`);
+    if (!/^[a-zA-Z0-9_-]{11}$/.test(media.youtube_id || '') || typeof media.duration_s!=='number' || !Number.isFinite(media.duration_s) || media.duration_s<10 || media.duration_s>30) reject(`${slot} needs a real YouTube ID and a verified 10–30 second duration`);
     if (media.approved_for_demo!==true || typeof media.verification?.reference!=='string' || !media.verification.reference.trim() || !Number.isFinite(Date.parse(media.verification?.verified_at))) reject(`${slot} needs a verification reference, timestamp and explicit demo approval`);
   }
 }
@@ -98,7 +98,7 @@ export async function seedDemo(request: DemoRequest, manifest: DemoManifest) {
     const advertiser=advertisers[campaign.advertiser];
     if(!advertiser || existing.org_id!==gridcast.id || existing.advertiser_id!==advertiser.id || existing.approval_status!=='approved') reject(`${slot} existing creative must be approved and belong to its Gridcast advertiser`);
     if('creative_id' in media) {
-      if(existing.metadata_source!=='server_ffprobe' || !existing.assets?.length || existing.assets.some((a:any)=>a.metadata_source!=='server_ffprobe' || !(a.duration_s>=10 && a.duration_s<=20)) || !(existing.duration_s>=10 && existing.duration_s<=20)) reject(`${slot} existing upload needs server-verified 10–20 second media`);
+      if(existing.metadata_source!=='server_ffprobe' || !existing.assets?.length || existing.assets.some((a:any)=>a.metadata_source!=='server_ffprobe' || !(a.duration_s>=10 && a.duration_s<=30)) || !(existing.duration_s>=10 && existing.duration_s<=30)) reject(`${slot} existing upload needs server-verified 10–30 second media`);
     } else if(existing.youtube_id!==media.youtube_id || existing.duration_s!==media.duration_s) reject(`${slot} existing media differs; it will not be overwritten`);
     creatives[slot]=existing;
   }
@@ -119,7 +119,7 @@ export async function seedDemo(request: DemoRequest, manifest: DemoManifest) {
   const screens:any[]=[];
   for(let orgIndex=0;orgIndex<orgs.length;orgIndex++)for(let n=0;n<(orgIndex===0?4:operatorSpecs[orgIndex-1].screens);n++) {
     const org=orgs[orgIndex],slug=orgIndex===0?'gridcast':operatorSpecs[orgIndex-1].slug,venue=['cafe','gym','kirana','salon'][(orgIndex+n)%4];
-    screens.push(await create('screens','/screens',{external_key:key('screen',`${slug}-${n+1}`),org_id:org.id,name:`Demo ${org.name} ${n+1}`,venue_name:`Demo ${venue} ${n+1}`,address:'Demo venue — Chandigarh Tricity',city:'Chandigarh',venue_type:venue,size_in:[32,43,50,55][(orgIndex+n)%4],orientation:'landscape',aspect:'16:9',loop_length_s:600,slot_duration_s:10,advertiser_slots:10,network_available:true,network_slots:6,has_camera:true,owner_share_pct:20,operating_hours:{from:'09:00',to:'21:00'},tags:{demo:'gridcast-v1'}}));
+    screens.push(await create('screens','/screens',{external_key:key('screen',`${slug}-${n+1}`),org_id:org.id,name:`Demo ${org.name} ${n+1}`,venue_name:`Demo ${venue} ${n+1}`,address:'Demo venue — Chandigarh Tricity',city:'Chandigarh',venue_type:venue,size_in:[32,43,50,55][(orgIndex+n)%4],orientation:'landscape',aspect:'16:9',loop_length_s:600,slot_duration_s:10,advertiser_slots:10,network_available:true,network_slots:DEMO_ADVERTISERS.length,has_camera:true,owner_share_pct:20,operating_hours:{from:'09:00',to:'21:00'},tags:{demo:'gridcast-v1'}}));
   }
   for(const spec of DEMO_ADVERTISERS)advertisers[spec.slug] ||= await create('advertisers','/advertiser',{external_key:key('advertiser',spec.slug),org_id:gridcast.id,name:spec.name,category:spec.category});
   for(const campaign of DEMO_CAMPAIGNS)for(const slot of campaign.media) {

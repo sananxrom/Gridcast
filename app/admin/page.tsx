@@ -216,6 +216,7 @@ export default function Admin() {
                    { label: 'Org', get: (s: any) => orgName(s.org_id) }]} />
       </>)}
 
+      {view==='campaigns'&&<div className="mb-3 text-right"><a className="text-sm text-primary" href="/admin/demo">Set up the brand demo →</a></div>}
       {view==='campaigns'&&<CampaignList d={{...d,orgs:orgDirectory}} orgId={orgFilter==='all'?null:orgFilter} onGo={go} onChanged={reload}/>}
 
       {view === 'approvals' && (<>
