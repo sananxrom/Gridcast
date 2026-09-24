@@ -10,10 +10,10 @@ const { issuePairing, pairingCodeHash, deviceIdFromToken, deviceRoute, revokeDev
 const MODEL = 'coco-ssd@2.2.3/lite_mobilenet_v2';
 function fixture() {
   let now = Date.parse('2026-09-24T00:00:00.000Z');
-  const db = { orgs: [{id:'org1',status:'active'},{id:'org2',status:'active'}], screens: [{id:'screen1',org_id:'org1',status:'active',has_camera:true},{id:'screen2',org_id:'org2',status:'active'}], devices: [], device_assignments: [], plays: [], presence: [], campaigns: [{id:'campaign1',org_id:'org1',advertiser_id:'advertiser1',rate_type:'per_play',rate_value:9,accrued_spend:0}] };
+  const db = { orgs: [{id:'org1',status:'active'},{id:'org2',status:'active'}], screens: [{id:'screen1',org_id:'org1',status:'active',has_camera:true},{id:'screen2',org_id:'org2',status:'active'}], devices: [], device_assignments: [], plays: [], presence: [], campaigns: [{id:'campaign1',org_id:'org1',advertiser_id:'advertiser1',rate_type:'per_play',rate_value:9,committed_budget:100000,accrued_spend:0}] };
   let config = { model:'coco-ssd', sample_interval_s:2, count_ceiling:50, camera_fail_mode:'continue' };
   const item = {campaign_id:'campaign1',creative_id:'creative1',duration_s:10,youtube_id:'example',rate_value:2};
-  const options = () => ({ now, clientKey:crypto.randomUUID(), playlist: () => ({ items:[item],config,config_version:3 }) });
+  const options = () => ({ now, playerProtocol:2, clientKey:crypto.randomUUID(), playlist: () => ({ items:[item],config,config_version:3 }) });
   const call = (method, route, body={}, token) => { const r=deviceRoute(db,method,route.split('/'),body,token,options());return {...r,status:r?.status||200}; };
   const pair = (sid='screen1') => { const screen=db.screens.find(s=>s.id===sid);const code=issuePairing(db,screen,now);const r=call('POST','pair',{code:code.code}); assert.equal(r.status,200);return r.body; };
   const paired=pair(), assignment=call('GET','playlist/screen1',{},paired.token).body.items[0];
@@ -99,7 +99,7 @@ test('fresh and cached device playlists expose only playback fields while rates 
  assert.notEqual(fresh.assignment_id,f.assignment.assignment_id,'rate changes must invalidate the prior assignment');
  const cached=f.call('GET','playlist/screen1',{},f.paired.token).body.items[0];
  assert.equal(cached.assignment_id,fresh.assignment_id,'second response exercises cached assignments');
- const allowed=['campaign_id','creative_id','youtube_id','duration_s','asset_id','asset_url','width','height','letterbox','assignment_id','valid_until'].sort();
+ const allowed=['campaign_id','creative_id','youtube_id','duration_s','asset_id','asset_url','width','height','letterbox','assignment_id','valid_until','accept_until','max_plays','media_type','kind','asset_sha256','asset_bytes','asset_mime'].sort();
  for(const served of [fresh,cached]){
   assert.deepEqual(Object.keys(served).sort(),allowed);
   assert.equal(served.asset_url,f.item.asset_url);assert.equal(served.youtube_id,'example');
@@ -112,4 +112,31 @@ test('fresh and cached device playlists expose only playback fields while rates 
  const result=f.call('POST','play',f.event({assignment_id:cached.assignment_id}),f.paired.token);
  assert.equal(result.body.billable,true);assert.equal(f.db.campaigns[0].accrued_spend,7);
  assert.equal(f.db.plays[0].rate_value,7);
+});
+
+test('old clients receive explicit reload requirement and no new paid permissions',()=>{
+ const f=fixture();const result=deviceRoute(f.db,'GET',['playlist','screen1'],{},f.paired.token,{now:Date.parse('2026-09-24T00:00:11Z'),playlist:()=>({items:[f.item],config:f.config,config_version:3})});
+ assert.equal(result.body.reload_required,true);assert.deepEqual(result.body.items,[]);
+});
+test('image completion requires decode evidence and visible display time, not a synthetic media timeline',()=>{
+ for(const patch of [{},{media_evidence:'image_decode',decoded_width:1,decoded_height:1,visible_duration_ms:10000},{media_evidence:'image_decode',decoded_width:1920,decoded_height:1080,visible_duration_ms:100},{media_evidence:'image_decode',decoded_width:0,decoded_height:1080,visible_duration_ms:10000}]){
+  const f=fixture();Object.assign(f.item,{media_type:'image',width:1920,height:1080});const item=f.call('GET','playlist/screen1',{},f.paired.token).body.items[0];
+  const r=f.call('POST','play',f.event({assignment_id:item.assignment_id,...patch}),f.paired.token);assert.equal(r.body.billable,false);assert.equal(f.db.plays[0].rendered,false);
+ }
+ const f=fixture();Object.assign(f.item,{media_type:'image',width:1920,height:1080});const item=f.call('GET','playlist/screen1',{},f.paired.token).body.items[0];
+ const body=f.event({assignment_id:item.assignment_id,media_started_s:undefined,media_ended_s:undefined,media_evidence:'image_decode',decoded_width:1920,decoded_height:1080,visible_duration_ms:10000});
+ assert.equal(f.call('POST','play',body,f.paired.token).body.billable,true);assert.equal(f.db.plays[0].media_started_s,null);
+});
+
+test('sliding 24-hour preparation horizon does not mint replacement assignments on every poll',()=>{
+ const f=fixture();Object.assign(f.item,{asset_id:'uploaded',asset_sha256:'a'.repeat(64),authorization_until:'2026-09-25T00:00:11Z'});
+ const first=f.call('GET','playlist/screen1',{},f.paired.token).body.items[0];
+ f.item.authorization_until='2026-09-25T00:00:21Z';f.advance(10000);
+ const second=f.call('GET','playlist/screen1',{},f.paired.token).body.items[0];assert.equal(second.assignment_id,first.assignment_id);assert.equal(second.valid_until,first.valid_until);
+});
+test('all acknowledged paid attempts exhausted renews an allowance without waiting for the former hour to expire',()=>{
+ const f=fixture();f.db.campaigns[0].screen_ids=Array.from({length:40000},(_,i)=>'screen'+i);f.item.rate_value=3;
+ const first=f.call('GET','playlist/screen1',{},f.paired.token).body.items[0];assert.equal(first.max_plays,1);
+ const receipt=f.call('POST','play',f.event({assignment_id:first.assignment_id,ended_reason:'error'}),f.paired.token);assert.equal(receipt.body.billable,false);
+ const next=f.call('GET','playlist/screen1',{},f.paired.token).body.items[0];assert.notEqual(next.assignment_id,first.assignment_id);assert.equal(next.max_plays,1);
 });

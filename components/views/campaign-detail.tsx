@@ -48,7 +48,7 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
   const scopedNetwork=network&&!platform;
   const mayEdit = (boot.caps ?? []).includes('sales') && (!network||platform);
   const screenPool=network ? [...(inventory?.screens??[]),...d.byScreen.map((r:any)=>r.screen)].filter((screen:any,i:number,rows:any[])=>rows.findIndex(x=>x.id===screen.id)===i).filter((s:any)=>c.screen_ids.includes(s.id)||(s.network_available===true&&s.network_slots>0&&inventory?.orgs?.some((o:any)=>o.id===s.org_id&&o.status==='active'))) : boot.screens.filter((s:any)=>s.org_id===c.org_id);
-  const slotsFor=(screen:any)=>f.bookings?.find((b:any)=>b.screen_id===screen.id)?.slots_per_loop??(network?1:defaultSlotsPerLoop(screen));
+  const slotsFor=(screen:any)=>f.bookings?.find((b:any)=>b.screen_id===screen.id)?.rotation_weight??f.bookings?.find((b:any)=>b.screen_id===screen.id)?.slots_per_loop??1;
   const mayMoney = (boot.caps ?? []).includes('money');
   const pct = c.committed_budget ? Math.round((c.accrued_spend / c.committed_budget) * 100) : 0;
   const rate = c.rate_type === 'flat'
@@ -65,7 +65,7 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
       committed_budget: Number(f.committed_budget) || 0, rate_type: f.rate_type,
       rate_value: f.rate_type === 'per_play' ? Number(f.rate_value) || 0 : 0,
       ...(mayMoney ? { invoice_status: f.invoice_status } : {}), screen_ids: f.screen_ids, creative_ids: f.creative_ids,
-      bookings:f.screen_ids.map((screenId:string)=>{const screen=screenPool.find((s:any)=>s.id===screenId);if(!screen)throw new Error('Selected screen is unavailable.');return {screen_id:screenId,slots_per_loop:Number(slotsFor(screen))};}),
+      bookings:f.screen_ids.map((screenId:string)=>{const screen=screenPool.find((s:any)=>s.id===screenId);if(!screen)throw new Error('Selected screen is unavailable.');return {screen_id:screenId,rotation_weight:Number(slotsFor(screen))};}),
     });
     setEdit(false); await load(); onChanged(); }catch(e){setErr((e as Error).message);}
   };
@@ -129,7 +129,7 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
               </label>
             ))}
           </div>
-          {screenPool.filter((s:any)=>f.screen_ids.includes(s.id)).map((s:any)=><div key={s.id} className="mb-3 flex items-center gap-3"><span className="flex-1 text-sm">{s.name}</span><Field label="Appearances per loop"><Input aria-label={`Appearances per loop for ${s.name}`} type="number" min="1" max={physicalCapacity(s)} value={slotsFor(s)} onChange={e=>setF({...f,bookings:[...(f.bookings??[]).filter((b:any)=>b.screen_id!==s.id),{screen_id:s.id,slots_per_loop:e.target.value}]})}/></Field></div>)}
+          {screenPool.filter((s:any)=>f.screen_ids.includes(s.id)).map((s:any)=><div key={s.id} className="mb-3 flex items-center gap-3"><span className="flex-1 text-sm">{s.name}</span><Field label="Turns per round"><Input aria-label={`Turns per round for ${s.name}`} type="number" min="1" max={100} value={slotsFor(s)} onChange={e=>setF({...f,bookings:[...(f.bookings??[]).filter((b:any)=>b.screen_id!==s.id),{screen_id:s.id,rotation_weight:e.target.value}]})}/></Field></div>)}
           <Label>Creatives</Label>
           <div className="mb-3 flex flex-col gap-1">
             {mine.map((cr: any) => (
@@ -165,7 +165,7 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
         cols={[
           { label: 'Screen', render: (r: any) => <><div className="font-medium">{r.screen.name}</div><div className="text-[12px] text-muted-foreground">{r.screen.address}</div></> },
           { label: 'Venue', render: (r: any) => <Badge variant="muted">{r.screen.venue_type}</Badge> },
-          {label:'Booking',render:(r:any)=>{const b=c.bookings?.find((x:any)=>x.screen_id===r.screen.id);return b?<span className="text-xs">{b.slots_per_loop} appearances / loop<br/>{b.rate_type==='per_play'&&typeof b.rate_value==='number'?`${inrRate(b.rate_value)} / play`:b.rate_type==='flat'?'Agreed flat rate':'Rate unavailable'}</span>:<span className="text-xs text-muted-foreground">Legacy booking</span>;}},
+          {label:'Booking',render:(r:any)=>{const b=c.bookings?.find((x:any)=>x.screen_id===r.screen.id);return b?<span className="text-xs">{b.rotation_weight ?? b.slots_per_loop ?? 1} turns / round<br/>{b.rate_type==='per_play'&&typeof b.rate_value==='number'?`${inrRate(b.rate_value)} / play`:b.rate_type==='flat'?'Agreed flat rate':'Rate unavailable'}</span>:<span className="text-xs text-muted-foreground">Legacy booking</span>;}},
           { label: 'Play reports', num: true, render: (r: any) => r.plays },
           { label: 'Share', num: true, render: (r: any) => { const p = d.totals.plays ? Math.round(r.plays / d.totals.plays * 100) : 0; return <div className="flex items-center justify-end gap-2">{p}%<Progress value={p} className="w-16" /></div>; } },
           { label: 'Avg people', num: true, render: (r: any) => r.avg === null ? <span className="text-muted-foreground">—</span> : <b>{r.avg.toFixed(1)}</b> },

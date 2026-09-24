@@ -66,7 +66,7 @@ async function fixture() {
       { id: 'b_owner', org_id: 'b', role: 'owner', email: 'b@example.invalid', auth_version: 0 }],
     screens: [{ id: 'sa', org_id: 'a', status: 'active' }, { id: 'sb', org_id: 'b', status: 'active' }],
     advertisers: [{ id: 'ad1', org_id: 'a' }], creatives: [{ id: 'cr1', org_id: 'a', advertiser_id: 'ad1' }],
-    campaigns: [{ id: 'c1', org_id: 'a', advertiser_id: 'ad1', screen_ids: ['sa'], creative_ids: ['cr1'], rate_type: 'per_play', rate_value: 1, accrued_spend: 0 }],
+    campaigns: [{ id: 'c1', org_id: 'a', advertiser_id: 'ad1', screen_ids: ['sa'], creative_ids: ['cr1'], committed_budget:1000000, rate_type: 'per_play', rate_value: 1, accrued_spend: 0 }],
     settings: { config_revision: 1 },
   };
   await store.provision(initial);

@@ -64,7 +64,7 @@ function rowsFixture() {
   'screens/sa':{id:'sa',org_id:'a',status:'active'},'screens/sb':{id:'sb',org_id:'b',status:'active'},
   'advertisers/ad':{id:'ad',org_id:'network',status:'active'},
   'creatives/cr':{id:'cr',org_id:'network',advertiser_id:'ad'},
-  'campaigns/cn':{id:'cn',org_id:'network',origin_org_id:'network',campaign_type:'network',participant_org_ids:['a','b'],screen_ids:['sa','sb'],creative_ids:['cr'],advertiser_id:'ad',accrued_spend:999},
+  'campaigns/cn':{id:'cn',committed_budget:1000000,org_id:'network',origin_org_id:'network',campaign_type:'network',participant_org_ids:['a','b'],screen_ids:['sa','sb'],creative_ids:['cr'],advertiser_id:'ad',accrued_spend:999},
   'campaigns/local':{id:'local',org_id:'a',screen_ids:['sa'],creative_ids:[],advertiser_id:'local-ad'},
   'campaigns/unrelated':{id:'unrelated',org_id:'b',screen_ids:['sb'],creative_ids:[],advertiser_id:'other-ad'},
   'plays/pa':{id:'pa',org_id:'a',campaign_id:'cn',screen_id:'sa',advertiser_id:'ad',ended_at:'2026-09-25T00:00:00Z'},
@@ -122,7 +122,7 @@ test('late cross-org device receipt and its monthly bucket commit once without c
  const commit=f.database.commits.find(ws=>ws.some(w=>w[1]===`settlement_buckets/${id}`));assert.ok(commit.some(w=>w[1].startsWith('plays/')));assert.ok(commit.some(w=>w[1].startsWith('presence/')));
  const play=Object.entries(f.database.rows).find(([k,p])=>k.startsWith('plays/')&&p.play_uid===f.body.play_uid)[1];
  for(const key of ['rate_version','fee_version','econ_version','owner_share_pct','platform_fee_pct']) assert.equal(play[key],f.assignment[key]);
- const queries=f.database.reads.filter(q=>typeof q==='object');assert.ok(!queries.some(q=>['plays','settlement_buckets'].includes(q.collection)),'device receipt must use direct event and bucket lookups');
+ const queries=f.database.reads.filter(q=>typeof q==='object');assert.ok(!queries.some(q=>['plays','presence'].includes(q.collection)),'device receipt must not scan play history; first budget initialization may scan bounded settlement buckets');
 });
 
 test('subsequent receipt reloads existing bucket and derives cumulative rounded totals',async()=>{
@@ -194,4 +194,67 @@ test('advertiser reporting resolves retired targets from authorized receipts and
   const publicScreen=load('access').screenView(d.screens.find(s=>s.id==='retired-bucket-only'),{role:'advertiser_viewer',org_id:'network',advertiser_id:'ad'});
   assert.equal(publicScreen.name,'Retired venue');assert.equal(Object.hasOwn(publicScreen,'owner_share_pct'),false);assert.equal(Object.hasOwn(publicScreen,'code'),false);
  }
+});
+
+test('two device transactions cannot reserve the same last paid play, and retry reuses the winning allowance',async()=>{
+ const f=deviceFixture();
+ delete f.database.rows['device_assignments/assignment'];
+ Object.assign(f.database.rows['campaigns/cn'],{committed_budget:1,accrued_spend:0});
+ for(const key of Object.keys(f.database.rows)) if(key.startsWith('settlement_buckets/')) delete f.database.rows[key];
+ const second={...f.device,id:'dev_22345678-1234-1234-1234-123456789abc',org_id:'b',screen_id:'sb'};
+ const token2=`gcp_${second.id}.`+crypto.randomBytes(32).toString('base64url');second.token_hash=crypto.createHash('sha256').update(token2).digest('hex');
+ f.database.rows[`devices/${second.id}`]=second;
+ const grant=(device,token)=>f.store.transact({method:'GET',path:['playlist',device.screen_id],deviceId:device.id},async()=>{
+  const d=await f.store.read(); const result=deviceRoute(d,'GET',['playlist',device.screen_id],{},token,{now:f.now,playerProtocol:2,playlist:()=>({items:[{campaign_id:'cn',creative_id:'cr',duration_s:10,youtube_id:'abcdefghijk',rate_type:'per_play',rate_value:1}],config:{},config_version:1})});
+  if(result.changed)await f.store.write(d); return result;
+ });
+ const [a,b]=await Promise.all([grant(f.device,f.token),grant(second,token2)]);
+ const all=[...a.body.items,...b.body.items];assert.equal(all.reduce((n,i)=>n+i.max_plays,0),1);
+ const winner=a.body.items.length?[f.device,f.token,a]:[second,token2,b];
+ assert.equal((await grant(winner[0],winner[1])).body.items[0].assignment_id,winner[2].body.items[0].assignment_id);
+ const ledger=f.database.rows['campaign_budgets/budget_cn'];assert.equal(ledger.reservations.length,1);assert.equal(ledger.spent_paise,0);
+ assert.equal(JSON.stringify(f.database.rows['campaigns/cn']),JSON.stringify({...rowsFixture()['campaigns/cn'],committed_budget:1,accrued_spend:0}));
+});
+
+test('Enterprise emulator loads approved own-org filler and records image evidence without advertiser money',{skip:process.env.FIRESTORE_EMULATOR_HOST?false:`Set FIRESTORE_EMULATOR_HOST=${EMULATOR}`,timeout:120000},async()=>{
+ assert.equal(process.env.FIRESTORE_EMULATOR_HOST,EMULATOR);
+ const {Firestore}=require('@google-cloud/firestore');const database=new Firestore({projectId:'demo-gridcast-storage',databaseId:'gridcast-filler-'+crypto.randomBytes(6).toString('hex')});
+ const f=deviceFixture(),store=createFirestoreStore(database);let now=f.now;
+ f.database.rows['creatives/house']={id:'house',org_id:'a',purpose:'filler',approval_status:'approved',media_type:'image',duration_s:20,assets:[{asset_id:'house-asset'}]};
+ f.database.rows['assets/house-asset']={id:'house-asset',org_id:'a',sha256:'a'.repeat(64),bytes:100};
+ f.database.rows['creatives/foreign-house']={id:'foreign-house',org_id:'b',purpose:'filler',approval_status:'approved'};
+ try {
+  const batch=database.batch();for(const [key,row] of Object.entries(f.database.rows))batch.create(database.doc(key),row);await batch.commit();
+  const response=await store.transact({method:'GET',path:['playlist','sa'],deviceId:f.device.id},async()=>{
+   const d=await store.read();assert.ok(d.creatives.some(c=>c.id==='house'));assert.ok(!d.creatives.some(c=>c.id==='foreign-house'));assert.ok(d.assets.some(a=>a.id==='house-asset'));
+   const r=deviceRoute(d,'GET',['playlist','sa'],{},f.token,{now,playerProtocol:2,playlist:()=>({items:[],filler_items:[{campaign_id:null,kind:'filler',creative_id:'house',media_type:'image',width:1920,height:1080,duration_s:20,asset_id:'house-asset'}],config:{},config_version:1})});if(r.changed)await store.write(d);return r;
+  });
+  assert.equal(response.body.items.length,0);assert.equal(response.body.filler_items.length,1);const item=response.body.filler_items[0];assert.ok(item.max_plays>0);
+  const body={...f.body,play_uid:'filler-image-0001',seq_no:100,assignment_id:item.assignment_id,campaign_id:null,creative_id:'house',started_at_device:new Date(now).toISOString(),ended_at_device:new Date(now+20000).toISOString(),playing_duration_ms:20000,media_evidence:'image_decode',decoded_width:1920,decoded_height:1080,visible_duration_ms:20000};now+=21000;
+  const result=await store.transact({...f.context,assignmentId:body.assignment_id,playUid:body.play_uid,seqNo:body.seq_no,startedAtDevice:body.started_at_device},async()=>{const d=await store.read();const r=deviceRoute(d,'POST',['play'],body,f.token,{now,playlist:()=>({items:[],config:{},config_version:1})});if(r.changed)await store.write(d);return r;});
+  assert.equal(result.body.billable,false);assert.ok(result.body.nonbillable_reasons.includes('filler'));
+  const p=(await database.doc('plays/'+result.body.play_id).get()).data();assert.equal(p.rendered,true);assert.equal(p.campaign_id,null);assert.equal(p.advertiser_id,null);
+  assert.equal((await database.doc('presence/'+result.body.play_id).get()).data().source,'filler_device_report');
+  assert.equal((await database.collection('campaign_budgets').get()).size,0);assert.equal((await database.collection('settlement_buckets').get()).size,3);
+ }finally{await database.terminate();}
+});
+
+test('Enterprise SDK serializes two screens reserving the final campaign rupee',{skip:process.env.FIRESTORE_EMULATOR_HOST?false:`Set FIRESTORE_EMULATOR_HOST=${EMULATOR}`,timeout:120000},async()=>{
+ assert.equal(process.env.FIRESTORE_EMULATOR_HOST,EMULATOR);const {Firestore}=require('@google-cloud/firestore');
+ const database=new Firestore({projectId:'demo-gridcast-storage',databaseId:'gridcast-budget-'+crypto.randomBytes(6).toString('hex')});
+ const f=deviceFixture(),store=createFirestoreStore(database);delete f.database.rows['device_assignments/assignment'];
+ for(const k of Object.keys(f.database.rows))if(k.startsWith('settlement_buckets/'))delete f.database.rows[k];
+ Object.assign(f.database.rows['campaigns/cn'],{committed_budget:1,accrued_spend:0});
+ const second={...f.device,id:'dev_32345678-1234-1234-1234-123456789abc',org_id:'b',screen_id:'sb'};
+ const token2=`gcp_${second.id}.`+crypto.randomBytes(32).toString('base64url');second.token_hash=crypto.createHash('sha256').update(token2).digest('hex');f.database.rows[`devices/${second.id}`]=second;
+ try{
+  const batch=database.batch();for(const [key,row] of Object.entries(f.database.rows))batch.create(database.doc(key),row);await batch.commit();
+  const grant=(device,token)=>store.transact({method:'GET',path:['playlist',device.screen_id],deviceId:device.id},async()=>{
+   const d=await store.read();const result=deviceRoute(d,'GET',['playlist',device.screen_id],{},token,{now:f.now,playerProtocol:2,playlist:()=>({items:[{campaign_id:'cn',creative_id:'cr',duration_s:10,youtube_id:'abcdefghijk',rate_type:'per_play',rate_value:1}],config:{},config_version:1})});if(result.changed)await store.write(d);return result;
+  });
+  const results=await Promise.all([grant(f.device,f.token),grant(second,token2)]);
+  assert.equal(results.flatMap(r=>r.body.items).reduce((n,i)=>n+i.max_plays,0),1);
+  const ledger=(await database.doc('campaign_budgets/budget_cn').get()).data();assert.equal(ledger.reservations.length,1);assert.equal(ledger.reservations[0].remaining_plays,1);assert.equal(ledger.spent_paise,0);
+  assert.equal((await database.collection('device_assignments').get()).size,1);
+ }finally{await database.terminate();}
 });

@@ -94,7 +94,7 @@ test('platform network builder keeps Gridcast ownership and books released cross
   for(const name of ['Alpha screen','Beta screen'])await h.page.getByText(name,{exact:true}).locator('..').locator('..').locator('input[type=checkbox]').check();
   await h.page.getByText('Network Video',{exact:false}).locator('..').locator('input[type=checkbox]').check();
   await h.page.getByRole('button',{name:'Create campaign',exact:true}).click();await h.page.waitForFunction(()=>location.hash.startsWith('#c/'));
-  const payload=h.requests.find(r=>r.path==='/campaign').body;assert.equal(payload.campaign_type,'network');assert.equal(payload.org_id,'gridcast');assert.equal(payload.advertiser_id,'network-adv');assert.equal(payload.rate_type,'per_play');assert.deepEqual(payload.bookings,[{screen_id:'screen-a',slots_per_loop:1},{screen_id:'screen-b',slots_per_loop:1}]);
+  const payload=h.requests.find(r=>r.path==='/campaign').body;assert.equal(payload.campaign_type,'network');assert.equal(payload.org_id,'gridcast');assert.equal(payload.advertiser_id,'network-adv');assert.equal(payload.rate_type,'per_play');assert.deepEqual(payload.bookings,[{screen_id:'screen-a',rotation_weight:1},{screen_id:'screen-b',rotation_weight:1}]);assert.equal(payload.scheduling_mode,undefined); // Scheduling mode is derived by the server.
  }finally{await h.browser.close();}
 });
 
@@ -136,9 +136,33 @@ test('admin opens a network campaign from an operator scope and retains withdraw
   await h.page.route('**/api/network-inventory**',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({screens:[alpha,beta],orgs:h.orgs,campaigns:[campaign],creatives:[creative]})}));
   await h.page.route('**/api/campaign/network-edit',route=>{if(route.request().method()==='POST')changes.push(route.request().postDataJSON());return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({campaign,byScreen:[{screen:alpha,plays:0,avg:null}],byCreative:[{creative,plays:0,avg:null}],totals:{plays:0,measured:0,avg:null},plays:[],settlement_buckets:[]})});});
   await h.page.goto(base+'/admin?org=a#campaigns');await h.page.reload();await h.page.getByRole('button',{name:'Network edit',exact:true}).click();await h.page.getByRole('button',{name:'Edit',exact:true}).click();
-  await h.page.getByText('Beta available',{exact:false}).first().waitFor();assert.equal(await h.page.getByLabel('Appearances per loop for Alpha screen').inputValue(),'2');
+  await h.page.getByText('Beta available',{exact:false}).first().waitFor();assert.equal(await h.page.getByLabel('Turns per round for Alpha screen').inputValue(),'2');
   await h.page.getByText('Beta available',{exact:false}).first().locator('..').locator('input[type=checkbox]').check();
   await h.page.getByRole('button',{name:'Save changes',exact:true}).click();await h.page.getByRole('button',{name:'Edit',exact:true}).waitFor();
-  assert.equal(changes.length,1);assert.deepEqual(changes[0].bookings,[{screen_id:'screen-a',slots_per_loop:2},{screen_id:'screen-b',slots_per_loop:1}]);assert.equal(changes[0].rate_type,'per_play');
+  assert.equal(changes.length,1);assert.deepEqual(changes[0].bookings,[{screen_id:'screen-a',rotation_weight:2},{screen_id:'screen-b',rotation_weight:1}]);assert.equal(changes[0].rate_type,'per_play');
+ }finally{await h.browser.close();}
+});
+
+
+test('image filler creation defaults to 20 seconds without an advertiser and supports upload',async()=>{
+ const h=await harness();try{
+  await h.nav('creatives');await h.page.getByLabel('Creative purpose',{exact:true}).selectOption('filler');
+  await h.page.getByLabel('Creative media source',{exact:true}).selectOption('image');
+  assert.equal(await h.page.getByLabel('Image display seconds',{exact:true}).inputValue(),'20');
+  assert.equal(await h.page.getByLabel('Creative advertiser',{exact:true}).count(),0);
+  await h.field('Name').fill('Venue welcome');await h.page.getByRole('button',{name:'Add creative',exact:true}).click();
+  await h.page.getByRole('button',{name:'Upload image',exact:true}).waitFor();
+  const request=h.requests.find(r=>r.path==='/creative');assert.equal(request.body.purpose,'filler');assert.equal(request.body.media_type,'image');assert.equal(request.body.duration_s,20);assert.equal(request.body.advertiser_id,undefined);
+  await h.page.getByRole('button',{name:'Upload image',exact:true}).click();
+  await h.page.getByLabel('PNG, JPEG or WebP image',{exact:true}).setInputFiles({name:'still.png',mimeType:'image/png',buffer:Buffer.from('mock image upload; real decoding covered separately')});
+  await h.page.getByRole('button',{name:'Upload selected image',exact:true}).click();await h.page.getByRole('status').waitFor();assert.ok(h.requests.some(r=>r.path==='/assets/upload'));
+ }finally{await h.browser.close();}
+});
+test('uploaded image display time stays editable and sends a timing change',async()=>{
+ const h=await harness();try{
+  h.creatives.push({id:'image-1',org_id:'a',name:'Still image',category:'general',purpose:'filler',media_type:'image',duration_s:20,approval_status:'approved',assets:[{width:32,height:24,media_type:'image'}]});
+  await h.page.goto(base+'/admin?org=a#creatives');await h.page.reload();await h.page.getByRole('heading',{name:'Creatives',exact:true}).waitFor();await h.page.getByRole('button',{name:'Edit creative Still image',exact:true}).click();
+  await h.page.getByLabel('Edit creative duration',{exact:true}).fill('12.5');await h.page.getByRole('button',{name:'Save creative',exact:true}).click();
+  await h.page.getByRole('button',{name:'Edit creative Still image',exact:true}).waitFor();assert.equal(h.requests.find(r=>r.path==='/creative/image-1').body.duration_s,12.5);
  }finally{await h.browser.close();}
 });

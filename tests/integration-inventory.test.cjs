@@ -33,7 +33,7 @@ function fixture(options = {}) {
   const media = load(path.join(root,'lib/media.ts'));
   const call = async (method, route, body = {}, token) => {
     const [p,q] = route.split('?');
-    const r = await api.handle(method,p.split('/'),new URLSearchParams(q),body,token);
+    const r = await api.handle(method,p.split('/'),new URLSearchParams(q || (p.startsWith('playlist/') ? 'protocol=2' : '')),body,token);
     return {...r,status:r.status || 200};
   };
   return { env, auth, media, call, data:()=>clone(saved), writes:()=>writes,
@@ -72,10 +72,10 @@ test('actual API pairing exchanges code once, scopes token and revokes replaceme
  expectStatus(await f.call('GET',`playlist/${screen.id}`,{},d.token),401);
 });
 
-test('booking prevents physical oversell and persists frozen agreed rate',async()=>{
+test('continuous turns replace physical loop slots and preserve frozen agreed rate',async()=>{
  const f=fixture(),{screen}=await onboard(f),c=await book(f,screen.id,{bookings:[{screen_id:screen.id,slots_per_loop:40}]});
- assert.equal(c.bookings[0].rate_value,2);assert.ok(c.bookings[0].rate_version);assert.equal(c.bookings[0].slots_per_loop,40);
- expectStatus(await f.call('POST','campaign',campaignInput(screen.id,{name:'Overbook',bookings:[{screen_id:screen.id,slots_per_loop:21}]}),f.token('u_op1')),409);
+ assert.equal(c.bookings[0].rate_value,2);assert.ok(c.bookings[0].rate_version);assert.equal(c.bookings[0].rotation_weight,40);
+ expectStatus(await f.call('POST','campaign',campaignInput(screen.id,{name:'Invalid turns',bookings:[{screen_id:screen.id,rotation_weight:101}]}),f.token('u_op1')),400);
  assert.equal(f.data().campaigns.length,1);
  const updated=expectStatus(await f.call('POST',`campaign/${c.id}`,{rate_value:99},f.token('u_op1')),200);assert.equal(updated.bookings[0].rate_value,2);
 });
@@ -87,10 +87,11 @@ test('caller cannot inject a frozen booking rate or rewrite it while changing ap
  const u=expectStatus(await f.call('POST',`campaign/${c.id}`,{rate_value:99,bookings:[{screen_id:screen.id,slots_per_loop:5}]},f.token('u_op1')),200);assert.equal(u.bookings[0].rate_value,2);
 });
 
-test('effective screen config reductions cannot oversell a frozen booking',async()=>{
+test('legacy loop configuration does not impose fixed-loop capacity on continuous bookings',async()=>{
  const f=fixture(),{screen}=await onboard(f);await book(f,screen.id,{bookings:[{screen_id:screen.id,slots_per_loop:20}]});
- const snapshot=f.data();assert.ok([400,409].includes((await f.call('POST',`screen/${screen.id}/config`,{values:{loop_length_s:60}},f.token('u_op1'))).status));assert.deepEqual(f.data(),snapshot);
- assert.ok([400,409].includes((await f.call('POST',`screen/${screen.id}`,{loop_length_s:60},f.token('u_op1'))).status));assert.deepEqual(f.data(),snapshot);
+ expectStatus(await f.call('POST',`screen/${screen.id}/config`,{values:{loop_length_s:60}},f.token('u_op1')),200);
+ expectStatus(await f.call('POST',`screen/${screen.id}`,{loop_length_s:60},f.token('u_op1')),200);
+ assert.equal(f.data().campaigns[0].bookings[0].rotation_weight,20);
 });
 
 test('existing self-reported price survives unrelated screen editing',async()=>{
@@ -107,11 +108,12 @@ test('dynamic group resolution is scoped, available to sales, and campaign selec
  expectStatus(await f.call('POST','group/resolve',{group_id:g.id},f.token('u_op2')),404);
 });
 
-test('changing group membership rechecks the effective capacity of attached configs',async()=>{
+test('changing group membership preserves continuous turn allocations',async()=>{
  const f=fixture(),{screen}=await onboard(f);await book(f,screen.id,{bookings:[{screen_id:screen.id,slots_per_loop:20}]});
  const g=expectStatus(await f.call('POST','group',{org_id:'org_sec17',name:'Empty group',group_type:'dynamic',screen_ids:[],rule_json:{min_size:1000}},f.token('u_op1')),200);
  expectStatus(await f.call('POST','config',{org_id:'org_sec17',name:'Short loops',layer:'group',target_id:g.id,values:{loop_length_s:60},status:'active'},f.token('u_op1')),200);
- const before=f.data();assert.ok([400,409].includes((await f.call('POST',`group/${g.id}`,{rule_json:{min_size:1}},f.token('u_op1'))).status));assert.deepEqual(f.data(),before);
+ expectStatus(await f.call('POST',`group/${g.id}`,{rule_json:{min_size:1}},f.token('u_op1')),200);
+ assert.equal(f.data().campaigns[0].bookings[0].rotation_weight,20);
 });
 
 test('asset metadata cannot be forged through creative body, unsigned proof, wrong purpose or different org',async()=>{
@@ -182,3 +184,17 @@ test('one real admin identity completes an empty-org commercial journey through 
  assert.ok(f.data().audit.filter(x=>x.org_id===org.id&&x.actor_kind==='human').every(x=>x.actor_id==='u_admin'));
  assert.ok(f.data().audit.some(x=>x.action==='pair'&&x.actor_kind==='device'&&x.actor_id===paired.device.id));
 });
+
+ test('image duration defaults20, uploaded evidence stays verified, changes require reapproval',async()=>{
+ const f=fixture(),t=f.token('u_op1');const cr=expectStatus(await f.call('POST','creative',{org_id:'org_sec17',advertiser_id:'adv_fitline',name:'Still image',category:'fitness',media_type:'image'},t),200);assert.equal(cr.duration_s,20);
+ const asset={id:'image_test',asset_id:'image_test',creative_id:cr.id,org_id:'org_sec17',media_type:'image',width:1920,height:1080,aspect:'1920:1080',storage_path:'media/org_sec17/image_test.png',mime:'image/png',bytes:100,sha256:'a'.repeat(64),metadata_source:'server_image'};
+ expectStatus(await f.call('POST',`creative/${cr.id}/asset`,{proof:f.media.sealMedia(asset,'upload')},t),201);
+ expectStatus(await f.call('POST',`creative/${cr.id}/approve`,{},f.token('u_admin')),200);
+ const changed=expectStatus(await f.call('POST',`creative/${cr.id}`,{duration_s:25},t),200);assert.equal(changed.duration_s,25);assert.equal(changed.approval_status,'pending');assert.equal(changed.assets[0].metadata_source,'server_image');
+ });
+ test('filler is org-owned without advertiser and cannot be sold as campaign creative',async()=>{
+ const f=fixture(),t=f.token('u_op1');const cr=expectStatus(await f.call('POST','creative',{org_id:'org_sec17',name:'Venue filler',category:'general',media_type:'image',purpose:'filler'},t),200);assert.equal(cr.advertiser_id,undefined); expectStatus(await f.call('POST',`creative/${cr.id}`,{youtube_id:'abcdefghijk'},t),400);
+ expectStatus(await f.call('POST',`creative/${cr.id}`,{duration_s:30},f.token('u_op2')),404);
+ const {screen}=await onboard(f);expectStatus(await f.call('POST','campaign',campaignInput(screen.id,{creative_ids:[cr.id]}),t),400);
+ expectStatus(await f.call('POST','creative',{org_id:'org_sec17',name:'Bad filler',purpose:'filler',youtube_id:'abcdefghijk'},t),400);
+ });

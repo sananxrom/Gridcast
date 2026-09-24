@@ -105,7 +105,7 @@ test('complete demo seed succeeds through actual authorization/inventory/API rou
  assert.deepEqual(first.created,{orgs:3,screens:12,advertisers:7,creatives:9,campaigns:7});
  assert.deepEqual(after.users,before.users);assert.deepEqual(after.devices,before.devices);assert.deepEqual(after.screens.find(s=>s.id==='preserved-test'),before.screens[0]);
  assert.equal(after.screens.length,13);assert.equal(after.orgs.length,4);assert.equal(after.creatives.length,9);
- for(const c of after.campaigns){assert.equal(c.origin_org_id,'org_gridcast');assert.equal(c.participant_org_ids.length,4);assert.equal(c.bookings.length,12);assert.ok(c.bookings.every(b=>b.slots_per_loop===1&&b.econ_version&&b.rate_paise>=10));}
+ for(const c of after.campaigns){assert.equal(c.origin_org_id,'org_gridcast');assert.equal(c.participant_org_ids.length,4);assert.equal(c.bookings.length,12);assert.ok(c.bookings.every(b=>b.rotation_weight===1&&b.econ_version&&b.rate_paise>=10));}
  const writes=f.writes(),second=await seedDemo(f.request,m);
  assert.deepEqual(second.created,{orgs:0,screens:0,advertisers:0,creatives:0,campaigns:0});assert.equal(f.writes(),writes);assert.deepEqual(f.data(),after);
 });

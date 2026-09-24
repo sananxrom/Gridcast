@@ -1,3 +1,4 @@
+import { budgetId } from './budgets';
 import { appliedOffset, settlementKey, settlementPeriod } from './settlement';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
@@ -14,7 +15,7 @@ export class StoreError extends Error {
 }
 const DOMAIN = ['orgs', 'users', 'screens', 'advertisers', 'creatives', 'campaigns', 'groups', 'devices', 'configs', 'assets'] as const;
 const EVENTS = ['plays', 'presence', 'device_assignments', 'audit', 'diagnostic_results'] as const;
-const COLLECTIONS = [...DOMAIN, ...EVENTS, 'diagnostic_assignments', 'settlement_buckets'];
+const COLLECTIONS = [...DOMAIN, ...EVENTS, 'diagnostic_assignments', 'settlement_buckets', 'campaign_budgets'];
 const DOMAIN_LIMIT = 2000;
 export const HISTORY_LIMIT = 1500;
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -46,7 +47,7 @@ function rowsByKey(collection: string, rows: any[]) {
 }
 type Session = {
   tx: Transaction; snapshot: any; original: any; dirty: boolean; provisioned: boolean;
-  allowedOrg?: string; admin: boolean; readOnly: boolean;
+  allowedOrg?: string; admin: boolean; readOnly: boolean; deviceId?: string; budgetCampaignIds?: string[];
 };
 
 /**
@@ -94,7 +95,7 @@ export function createFirestoreStore(database: Firestore) {
     const snapshot: any = blank();
     const marker = await readDoc(tx, '_meta', 'schema');
     const state: Session = { tx, snapshot, original: null, dirty: false, provisioned: !!marker,
-      admin: false, readOnly: false };
+      admin: false, readOnly: false, deviceId: context.deviceId };
     if (!marker) { state.original = clone(snapshot); return state; }
     if (marker.schema_version !== 1) throw new StoreError(503, 'Unsupported database schema');
     let actor: any = null, device: any = null, pairedScreen: any = null;
@@ -232,15 +233,30 @@ export function createFirestoreStore(database: Firestore) {
         await referenced(tx, 'device_assignments', [context.assignmentId], snapshot.device_assignments);
         const assignment = snapshot.device_assignments.find((a: any) => a.device_id === device?.id && a.org_id === orgId);
         // Offline events retain the issued campaign even if targeting changed later.
-        if (assignment && !snapshot.campaigns.some((c: any) => c.id === assignment.campaign_id)) {
+        if (assignment?.campaign_id && !snapshot.campaigns.some((c: any) => c.id === assignment.campaign_id)) {
           const campaign = await readDoc(tx, 'campaigns', assignment.campaign_id);
           if (campaign && (campaign.org_id === orgId || campaign.campaign_type === 'network')) snapshot.campaigns.push(campaign);
+        }
+      }
+      // Held assignments are immutable evidence. Load by ID for safe cache reuse, never
+      // mint fresh reservations merely because this transaction omitted prior rows.
+      if (device && context.path[0] === 'playlist') await referenced(tx,'device_assignments',device.assignment_set?.ids || [],snapshot.device_assignments);
+      if ((device && ['playlist','play'].includes(context.path[0])) || (actor && context.method === 'POST' && context.path[0] === 'campaign')) {
+        state.budgetCampaignIds = snapshot.campaigns.map((c: any) => c.id);
+        await referenced(tx,'campaign_budgets',state.budgetCampaignIds!.map(budgetId),snapshot.campaign_budgets);
+        for (const campaign of snapshot.campaigns) if (!snapshot.campaign_budgets.some((b: any) => b.campaign_id === campaign.id)) {
+          const buckets = await query(tx,'settlement_buckets',[['campaign_id','==',campaign.id]]);
+          snapshot.settlement_buckets = [...new Map([...snapshot.settlement_buckets,...buckets].map((b: any) => [b.id,b])).values()];
+          // This is a one-time conservative migration, bounded and fail-closed. Once the
+          // ledger exists, receipts and grants need only the single campaign ledger doc.
+          const old = await query(tx,'device_assignments',[['campaign_id','==',campaign.id],['accept_until','>',new Date().toISOString()]]);
+          snapshot.device_assignments = [...new Map([...snapshot.device_assignments,...old].map((a: any) => [a.id,a])).values()];
         }
       }
       if (device && context.assignmentId && context.startedAtDevice) {
         const a = snapshot.device_assignments.find((a: any) => a.id === context.assignmentId && a.device_id === device.id && a.org_id === orgId);
         const at = Date.parse(context.startedAtDevice) + appliedOffset(device,context.clockOffset);
-        if (a?.econ_version && Number.isFinite(at)) await referenced(tx,'settlement_buckets',[settlementKey(a.campaign_id,a.screen_id,settlementPeriod(at),a.econ_version)],snapshot.settlement_buckets);
+        if (a?.campaign_id && a?.econ_version && Number.isFinite(at)) await referenced(tx,'settlement_buckets',[settlementKey(a.campaign_id,a.screen_id,settlementPeriod(at),a.econ_version)],snapshot.settlement_buckets);
       }
       if (actor && context.method === 'GET' && ['bootstrap','campaign','screen'].includes(context.path[0])) {
         const filters: [string,any,any][] = actor.role === 'advertiser_viewer' ? [['advertiser_id','==',actor.advertiser_id || '__none__']] : scoped ? [['org_id','==',orgId]] : [];
@@ -250,6 +266,7 @@ export function createFirestoreStore(database: Firestore) {
         snapshot.settlement_buckets = await query(tx,'settlement_buckets',filters);
       }
       await referenced(tx, 'advertisers', snapshot.campaigns.map((c: any) => c.advertiser_id), snapshot.advertisers);
+      if (device && context.path[0] === 'playlist') snapshot.creatives.push(...await query(tx,'creatives',[['org_id','==',orgId],['purpose','==','filler'],['approval_status','==','approved']]));
       await referenced(tx, 'creatives', snapshot.campaigns.flatMap((c: any) => c.creative_ids || []), snapshot.creatives);
       await referenced(tx, 'assets', snapshot.creatives.flatMap((c: any) =>
         [...(c.assets || []), ...(c.variants || [])].map((a: any) => a.asset_id).filter(Boolean)), snapshot.assets);
@@ -310,7 +327,10 @@ export function createFirestoreStore(database: Firestore) {
         if (JSON.stringify(a) === JSON.stringify(b)) continue;
         if ((EVENTS as readonly string[]).includes(collection) && a) throw new StoreError(409, 'Recorded evidence is append-only');
         const rowOrg = collection === 'orgs' ? (b || a).id : (b || a).org_id;
-        if (!state.admin && rowOrg !== state.allowedOrg) throw new StoreError(403, 'Cross-organisation write rejected');
+        const budgetWrite = collection === 'campaign_budgets' && !!state.deviceId && !!b
+          && state.budgetCampaignIds?.includes(b.campaign_id) && b.id === budgetId(b.campaign_id)
+          && snapshot.campaigns.some((c: any) => c.id === b.campaign_id && c.org_id === b.org_id);
+        if (!state.admin && rowOrg !== state.allowedOrg && !budgetWrite) throw new StoreError(403, 'Cross-organisation write rejected');
         if (!state.admin && a?.org_id && b?.org_id !== undefined && a.org_id !== b.org_id)
           throw new StoreError(403, 'Organisation reassignment rejected');
         if (collection === 'configs' && !state.admin && (a?.layer === 'platform' || b?.layer === 'platform'))

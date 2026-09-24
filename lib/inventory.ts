@@ -1,6 +1,6 @@
 /** Inventory quantities are not measured presence. Date-only bookings use inclusive IST days.
  * Pending, active and paused campaigns hold inventory; drafts/complete/cancelled do not.
- * slots_per_loop is the number of appearances, each reserving ceil(creative seconds / slot seconds).
+ * Continuous allocation uses relative turns per round; legacy fixed loops remain readable for migration.
  */
 export class InventoryError extends Error {
   constructor(message: string, public status = 400) { super(message); this.name = 'InventoryError'; }
@@ -75,6 +75,8 @@ export function validateScreenInput(input: Row): Row {
     aspect: input.aspect ?? (input.orientation === 'portrait' ? '9:16' : '16:9'),
     loop_length_s: input.loop_length_s ?? 600, slot_duration_s: input.slot_duration_s ?? 10,
     advertiser_slots: input.advertiser_slots ?? 10,
+    min_creative_duration_s: number(input.min_creative_duration_s ?? 1, 'min_creative_duration_s', 1, 600),
+    max_creative_duration_s: number(input.max_creative_duration_s ?? 600, 'max_creative_duration_s', 1, 600),
     operating_hours: validateTimeWindow(input.operating_hours ?? { from: '09:00', to: '21:00' }),
     timezone: INVENTORY_TIMEZONE, owner_share_pct: number(input.owner_share_pct ?? 0, 'owner_share_pct', 0, 100),
     has_camera: input.has_camera ?? false, network_available: input.network_available ?? false,
@@ -92,7 +94,8 @@ export function validateScreenInput(input: Row): Row {
   if (!['prime','good','standard','peripheral'].includes(screen.location_tier)) bad('Invalid location tier');
   if (typeof screen.has_camera !== 'boolean' || typeof screen.network_available !== 'boolean') bad('Camera and network flags must be boolean');
   const capacity = physicalCapacity(screen);
-  integer(screen.advertiser_slots, 'advertiser_slots', 1, capacity);
+  integer(screen.advertiser_slots, 'advertiser_slots', 1, 1000);
+  if (screen.min_creative_duration_s > screen.max_creative_duration_s) bad('Minimum creative duration exceeds maximum');
   if (screen.network_slots > screen.advertiser_slots) bad('Network advertiser allocation exceeds advertiser slots');
   if (input.tags !== undefined) {
     if (!input.tags || typeof input.tags !== 'object' || Array.isArray(input.tags)) bad('tags must be a key-value object');
@@ -158,6 +161,10 @@ export function reverseCalculate(input: Row): Row {
   };
 }
 
+export function rotationWeight(c: Row, s: Row): number {
+  const b = c.bookings?.find((b: Row) => b.screen_id === s.id);
+  return integer(b?.rotation_weight ?? b?.slots_per_loop ?? (c.scheduling_mode === 'continuous' ? 1 : defaultSlotsPerLoop(s)), 'rotation_weight', 1, 100);
+}
 function appearances(c: Row, s: Row): number {
   const booking = c.bookings?.find((b: Row) => b.screen_id === s.id);
   return integer(booking?.slots_per_loop ?? defaultSlotsPerLoop(s), 'slots_per_loop', 1, physicalCapacity(s));
@@ -180,6 +187,10 @@ function retainedNetworkBooking(candidate: Row, screen: Row, units: number, prev
       previous.advertiser_id !== candidate.advertiser_id || !HOLD_STATUSES.has(previous.status) ||
       !HOLD_STATUSES.has(candidate.status) || !previous.screen_ids?.includes(screen.id)) return false;
   const booked = previous.bookings?.find((b: Row) => b.screen_id === screen.id);
+  if (candidate.scheduling_mode === 'continuous' && booked && typeof booked.booked_at === 'string' && Number.isFinite(Date.parse(booked.booked_at))) {
+    const [start,end] = campaignInterval(candidate), [oldStart,oldEnd] = campaignInterval(previous);
+    return start >= oldStart && end <= oldEnd && rotationWeight(candidate,screen) <= rotationWeight(previous,screen);
+  }
   if (!booked || typeof booked.booked_at !== 'string' || !Number.isFinite(Date.parse(booked.booked_at)) ||
       !Number.isInteger(booked.reserved_slot_units) || booked.reserved_slot_units < units ||
       !Number.isInteger(booked.slots_per_loop) || booked.slots_per_loop < appearances(candidate, screen)) return false;
@@ -202,9 +213,10 @@ export function validateBooking(candidate: Row, campaigns: Row[], screens: Row[]
   const bookings = candidate.screen_ids.map((id: string) => {
     const screen = screens.find(s => s.id === id && (network || s.org_id === candidate.org_id));
     if (!screen) throw new InventoryError('Screen not found',404);
-    const currentUnits = slotUnits(candidate,screen,creatives), capacity = physicalCapacity(screen);
-    const normalized = { screen_id: id, slots_per_loop: appearances(candidate, screen), reserved_slot_units: currentUnits };
-    if (currentUnits > capacity) throw new InventoryError('Campaign appearances exceed physical loop capacity',409);
+    const continuous = candidate.scheduling_mode === 'continuous';
+    const currentUnits = continuous ? rotationWeight(candidate,screen) : slotUnits(candidate,screen,creatives), capacity = physicalCapacity(screen);
+    const normalized = continuous ? {screen_id:id,rotation_weight:currentUnits} : { screen_id: id, slots_per_loop: appearances(candidate, screen), reserved_slot_units: currentUnits };
+    if (!continuous && currentUnits > capacity) throw new InventoryError('Campaign appearances exceed physical loop capacity',409);
     if (!HOLD_STATUSES.has(candidate.status)) return normalized;
     if (network && options.orgs?.find(o => o.id === screen.org_id)?.status !== 'active') throw new InventoryError('Screen organisation is not active',409);
     const retained = network && retainedNetworkBooking(candidate,screen,currentUnits,options.previous);
@@ -220,7 +232,7 @@ export function validateBooking(candidate: Row, campaigns: Row[], screens: Row[]
         const networkAdvertisers = new Set([candidate.advertiser_id, ...active.filter(c=>c.campaign_type === 'network').map(c=>c.advertiser_id)]);
         if (networkAdvertisers.size > integer(screen.network_slots ?? 0, 'network_slots', 0)) throw new InventoryError(`Network advertiser capacity exceeded for ${screen.name || id}`,409);
       }
-      if (currentUnits + active.reduce((sum,c)=>sum+slotUnits(c,screen,creatives),0) > capacity) throw new InventoryError(`Physical loop capacity exceeded for ${screen.name || id}`,409);
+      if (!continuous && currentUnits + active.reduce((sum,c)=>sum+slotUnits(c,screen,creatives),0) > capacity) throw new InventoryError(`Physical loop capacity exceeded for ${screen.name || id}`,409);
     }
     return normalized;
   });
@@ -256,8 +268,9 @@ export function eligibility({screen, screenOrg, campaign:c, creative:cr, adverti
   let start: number, end: number;
   try { [start,end] = campaignInterval(c); } catch { return result(2,'campaign_dates_invalid'); }
   if (!Number.isFinite(time) || time < start || time >= end) return result(2,'outside_campaign_dates');
-  // Budget alerts inform an operator; stopped delivery is always an explicit status action.
-  if (typeof c.committed_budget === 'number' && c.committed_budget > 0 && c.accrued_spend >= c.committed_budget * 0.8) warnings.push(c.accrued_spend >= c.committed_budget ? 'budget_exhausted_manual_action' : 'budget_80_percent');
+  // Atomic reservation in devices.ts is authoritative; this early check also explains exhausted delivery.
+  if (c.rate_type === 'per_play' && typeof c.committed_budget === 'number' && c.accrued_spend >= c.committed_budget) return result(2,'budget_exhausted');
+  if (typeof c.committed_budget === 'number' && c.committed_budget > 0 && c.accrued_spend >= c.committed_budget * 0.8) warnings.push(c.accrued_spend >= c.committed_budget ? 'budget_exhausted' : 'budget_80_percent');
   const hours = config.operating_hours ?? screen.operating_hours;
   if (hours !== undefined) {
     // Legacy numeric hours express duration, not a start/end window. Do not invent one.
@@ -268,7 +281,7 @@ export function eligibility({screen, screenOrg, campaign:c, creative:cr, adverti
     try { if (!Array.isArray(c.dayparts) || !c.dayparts.length || !c.dayparts.some((w: Row)=>withinWindow(at,w))) return result(2,'outside_campaign_daypart'); }
     catch { return result(2,'campaign_daypart_invalid'); }
   }
-  if (!cr || !c.creative_ids?.includes(cr.id) || cr.advertiser_id !== c.advertiser_id || cr.org_id !== (c.origin_org_id || c.org_id) || cr.approval_status !== 'approved') return result(3,'creative_not_approved');
+  if (!cr || cr.purpose === 'filler' || !c.creative_ids?.includes(cr.id) || cr.advertiser_id !== c.advertiser_id || cr.org_id !== (c.origin_org_id || c.org_id) || cr.approval_status !== 'approved') return result(3,'creative_not_approved');
   if ((settings.blocked_categories || settings.category_blocklist || []).includes(cr.category)) return result(4,'platform_category_block');
   if ((screen.exclusions?.categories || []).includes(cr.category)) return result(5,'screen_category_block');
   if ((screen.exclusions?.advertisers || []).includes(c.advertiser_id)) return result(6,'screen_advertiser_block');
@@ -278,10 +291,24 @@ export function eligibility({screen, screenOrg, campaign:c, creative:cr, adverti
   if (screen.exclusions?.competitive_separation === true && loopAdvertisers.some(a=>a.id !== c.advertiser_id && a.category === cr.category)) return result(8,'competitive_separation');
   const target = aspectRatio(screen.aspect);
   if (!Number.isFinite(target)) return result(9,'screen_aspect_invalid');
-  const assets: Row[] = Array.isArray(cr.assets) && cr.assets.length ? cr.assets : [{ id: cr.id, youtube_id: cr.youtube_id, uri: cr.uri, aspect: cr.aspect, duration_s: cr.duration_s }];
-  const suitable = assets.filter(a => (a.youtube_id || a.uri) && Number.isFinite(aspectRatio(a.aspect)) && typeof a.duration_s === 'number' && a.duration_s > 0)
+  let assets: Row[] = Array.isArray(cr.assets) && cr.assets.length ? cr.assets : [{ id: cr.id, youtube_id: cr.youtube_id, uri: cr.uri, aspect: cr.aspect, duration_s: cr.duration_s }];
+  assets = assets.map(a => ({...a,media_type:cr.media_type || a.media_type || 'video',duration_s:cr.media_type === 'image' ? cr.duration_s : a.duration_s}));
+  const playable = assets.filter(a => (a.youtube_id || a.uri) && Number.isFinite(aspectRatio(a.aspect)) && typeof a.duration_s === 'number' && a.duration_s > 0)
     .sort((a,b)=>Math.abs(Math.log(aspectRatio(a.aspect)/target))-Math.abs(Math.log(aspectRatio(b.aspect)/target)));
-  if (!suitable.length) return result(9,'no_playable_asset');
+  if (!playable.length) return result(9,'no_playable_asset');
+  const suitable = playable.filter(a=>a.duration_s >= (screen.min_creative_duration_s ?? 1) && a.duration_s <= (screen.max_creative_duration_s ?? 600));
+  if (!suitable.length) return result(9,'creative_duration_outside_limits');
   const asset = suitable[0];
   return result(null,'eligible',asset,Math.abs(aspectRatio(asset.aspect)-target)>0.0001);
+}
+
+/** Do not grant offline starts beyond the next known schedule boundary. Windows are minute precision. */
+export function authorizationUntil(screen: Row, campaign: Row | null, config: Row, now = Date.now()): string {
+  let end = now + 86400000;
+  if (campaign) end = Math.min(end,campaignInterval(campaign)[1]);
+  const hours = config.operating_hours ?? screen.operating_hours;
+  const open = (time: number) => (typeof hours !== 'object' || withinWindow(time,hours)) && (!campaign?.dayparts || campaign.dayparts.some((w: Row)=>withinWindow(time,w)));
+  if (!open(now)) return new Date(now).toISOString();
+  for (let time = Math.floor(now/60000)*60000+60000; time < end; time += 60000) if (!open(time)) { end=time; break; }
+  return new Date(end).toISOString();
 }

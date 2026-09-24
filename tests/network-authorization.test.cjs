@@ -110,7 +110,7 @@ test('only platform admin creates or edits network campaigns; participant orgs a
  expectStatus(await f.call('POST','campaign/network-campaign',{campaign_type:'operator'},admin),400);
  const created=expectStatus(await f.call('POST','campaign',body,admin),200);
  assert.deepEqual(new Set(created.participant_org_ids),new Set(['org_sec17','org_tricity']));assert.equal(created.org_id,'org_gridcast');assert.equal(created.origin_org_id,'org_gridcast');
- assert.ok(created.bookings.every(b=>b.econ_version&&b.fee_version&&b.booked_at&&b.reserved_slot_units===1));
+ assert.ok(created.bookings.every(b=>b.econ_version&&b.fee_version&&b.booked_at&&b.rotation_weight===1));
  expectStatus(await f.call('POST','campaign',{...body,rate_type:'flat'},admin),400);
 });
 

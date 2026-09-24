@@ -45,7 +45,7 @@ export type Setting = {
 export const GROUPS = [
   { id: 'identity', title: 'Identity', hint: 'What this config is and where it applies' },
   { id: 'screen', title: 'Screen', hint: 'The physical panel and how the picture fills it' },
-  { id: 'playback', title: 'Playback', hint: 'The loop, and what happens when something fails to load' },
+  { id: 'playback', title: 'Playback', hint: 'Continuous playback and media recovery' },
   { id: 'measurement', title: 'Measurement', hint: 'Camera, detection and what counts as a measured play' },
   { id: 'privacy', title: 'Privacy', hint: 'Fixed guarantees you can show a venue owner' },
   { id: 'connectivity', title: 'Connectivity', hint: 'Pulling content and sending back proof of play' },
@@ -92,8 +92,8 @@ export const SETTINGS: Setting[] = [
     info: 'Turns the panel itself off outside trading hours, over IP. Requires TV control.' }),
 
   // ---------------------------------------------------------------- playback
-  T('loop_length_s', 'Loop length', 'playback', 'number', 600, { common: true, unit: 's', priced: true }),
-  T('slot_duration_s', 'Slot duration', 'playback', 'number', 10, { common: true, unit: 's', priced: true,
+  T('loop_length_s', 'Legacy loop reference', 'playback', 'number', 600, { common: true, unit: 's', priced: true }),
+  T('slot_duration_s', 'Legacy slot reference', 'playback', 'number', 10, { common: true, unit: 's', priced: true,
     info: 'Also the unit of a billable play.' }),
   T('operating_hours', 'Trading hours', 'playback', 'timerange', { from: '08:00', to: '20:00' }, { common: true, priced: true,
     info: 'When the venue is open. The player sleeps outside this window, and it prices the screen.' }),
@@ -114,9 +114,9 @@ export const SETTINGS: Setting[] = [
   T('video_loop_mode', 'Video loop mode', 'playback', 'select', 'auto', { options: ['auto', 'native', 'restart'], platforms: ['android'] }),
   T('accelerate_text', 'GPU text acceleration', 'playback', 'toggle', true, {
     info: 'For scrolling or animated text.' }),
-  T('filler_behaviour', 'When the loop is not sold out', 'playback', 'select', 'house',
+  T('filler_behaviour', 'Legacy filler preference', 'playback', 'select', 'house',
     { common: true, options: [['house', 'Play house content'], ['operator', 'Operator filler'], ['black', 'Black screen'], ['compress', 'Compress the loop']],
-      info: 'Compressing the loop makes sold slots recur faster, which changes what an advertiser receives. House content keeps timing honest.' }),
+      info: 'Legacy setting. Web players repeat eligible paid ads continuously, then play approved uploaded filler when none remain.' }),
 
   // ------------------------------------------------------------- measurement
   T('camera_source', 'Camera source', 'measurement', 'select', 'usb', { common: true, options: ['builtin', 'usb', 'ip'] }),

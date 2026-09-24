@@ -26,7 +26,7 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
 
   const load = () => api(`/screen/${id}`).then(x => {
     setD(x);
-    setF({ ...x.screen, tagStr: Object.entries(x.screen.tags || {}).map(([k, v]) => `${k}:${v}`).join(', '),
+    setF({ min_creative_duration_s:1, max_creative_duration_s:600, ...x.screen, tagStr: Object.entries(x.screen.tags || {}).map(([k, v]) => `${k}:${v}`).join(', '),
       excStr: (x.screen.exclusions?.categories || []).join(', '), advExcStr:(x.screen.exclusions?.advertisers||[]).join(', '), from:x.screen.operating_hours?.from ?? x.config?.operating_hours?.value?.from ?? '09:00', to:x.screen.operating_hours?.to ?? x.config?.operating_hours?.value?.to ?? '21:00' });
   });
   useEffect(() => { load().catch(e=>setError(e.message)); /* eslint-disable-next-line */ }, [id]);
@@ -64,6 +64,7 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
       ...(mayPrice ? { venue_base: Number(f.venue_base), size_factor: Number(f.size_factor),
         location_factor: Number(f.location_factor), exposure_factor: Number(f.exposure_factor) } : {}),
       ...(mayPrice ? {advertiser_slots:Number(f.advertiser_slots) || 10, loop_length_s:Number(f.loop_length_s),slot_duration_s:Number(f.slot_duration_s),network_slots:net,network_available:net > 0} : {}),
+      min_creative_duration_s:Number(f.min_creative_duration_s),max_creative_duration_s:Number(f.max_creative_duration_s),
       operating_hours:{from:f.from,to:f.to},
       ...(mayMoney ? { owner_share_pct: Number(f.owner_share_pct) } : {}), tags,
     });
@@ -103,6 +104,8 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
             <Field label="Address"><Input value={f.address} onChange={e => setF({ ...f, address: e.target.value })} /></Field>
             <Field label="Photo URL (a picture of the screen in place)" className="w-full basis-full"><Input value={f.photo_url || ''} placeholder="https://…" onChange={e => setF({ ...f, photo_url: e.target.value })} /></Field>
           </div>
+          <div className="mb-3 flex flex-wrap gap-3">{[['min_creative_duration_s','Minimum creative seconds'],['max_creative_duration_s','Maximum creative seconds']].map(([key,label])=><Field key={key} label={label}><Input aria-label={label} type="number" min="1" max="600" step="0.1" value={f[key]} onChange={e=>setF({...f,[key]:e.target.value})}/></Field>)}</div>
+          <p className="mb-3 text-xs text-muted-foreground">Videos and image display times must fit these limits. Playback uses the creative’s duration with no slot padding. Eligible paid campaigns rotate continuously; faster rotation uses per-play budgets faster, within their reserved allowance.</p>
           <label className="my-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={!!f.has_camera} onChange={e=>setF({...f,has_camera:e.target.checked})}/>Camera available for presence measurement</label>
           <p className="mb-3 text-xs text-muted-foreground">The player will apply camera changes when it next refreshes its settings. Failed or missing measurements stay unmeasured.</p>
           {mayPrice && <><Label className="mt-4">Rate factors — value = base × size × location × exposure</Label>
@@ -112,9 +115,9 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
             ))}
           </div>
           <p className="mb-3 font-mono text-[12.5px] text-primary">→ {inr(preview)} / month · {inr(perSlot)} per advertiser per month</p></>}
-          {(mayPrice || mayMoney) && <Label className="mt-2">Loop &amp; share</Label>}
+          {(mayPrice || mayMoney) && <Label className="mt-2">Inventory &amp; share</Label>}
           <div className="mb-3 flex flex-wrap gap-3">
-            {[['loop_length_s','Loop (s)'],['slot_duration_s','Slot (s)'],['owner_share_pct','Owner share %'],['network_slots','Network advertiser limit']].filter(([k]) => k === 'owner_share_pct' ? mayMoney : mayPrice).map(([k, lbl]) => (
+            {[['owner_share_pct','Owner share %'],['network_slots','Network advertiser limit']].filter(([k]) => k === 'owner_share_pct' ? mayMoney : mayPrice).map(([k, lbl]) => (
               <Field key={k} label={lbl}><Input type="number" value={f[k]} onChange={e => setF({ ...f, [k]: e.target.value })} /></Field>
             ))}
           </div>
@@ -125,7 +128,7 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
             <Field label="Blocked categories"><Input value={f.excStr} onChange={e => setF({ ...f, excStr: e.target.value })} /></Field>
           </div>
           <div className="mt-3"><Label>Blocked advertisers</Label>{(d.advertisers||[]).length ? <div className="flex flex-wrap gap-3">{d.advertisers.map((a:any)=>{const selected=String(f.advExcStr).split(',').map(x=>x.trim()).filter(Boolean);return <label className="flex items-center gap-2 text-sm" key={a.id}><input type="checkbox" checked={selected.includes(a.id)} onChange={e=>setF({...f,advExcStr:(e.target.checked?[...selected,a.id]:selected.filter(x=>x!==a.id)).join(', ')})}/>{a.name}</label>;})}</div>:<p className="text-sm text-muted-foreground">No advertisers available to block. Existing exclusions are preserved.</p>}</div>
-          <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={!!f.exclusions?.competitive_separation} onChange={e=>setF({...f,exclusions:{...f.exclusions,competitive_separation:e.target.checked}})}/>Keep competing advertisers in the same category out of a loop</label>
+          <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={!!f.exclusions?.competitive_separation} onChange={e=>setF({...f,exclusions:{...f.exclusions,competitive_separation:e.target.checked}})}/>Keep competing advertisers in the same category out of a rotation</label>
           <div className="sticky bottom-0 -mx-5 -mb-5 mt-4 flex items-center gap-2 border-t border-border bg-card/95 px-5 py-3 backdrop-blur">
             <Button onClick={save} disabled={busy}>{busy?'Saving…':'Save screen'}</Button>
             <Button variant="outline" onClick={() => { setEdit(false); load(); }}>Cancel</Button>

@@ -62,7 +62,7 @@ export const ROUTES: { method: string; path: RegExp; caps: Cap[] }[] = [
 const ADVERTISER_EDIT = ['name','contact','email','phone','category','notes','exclusions'];
 const SCREEN_EDIT = ['name','venue_name','venue_type','address','photo_url','size_in','orientation','aspect',
   'venue_base','size_factor','location_factor','location_tier','exposure_factor','exposure_source','advertiser_slots',
-  'loop_length_s','slot_duration_s','operating_hours','owner_share_pct','network_slots','network_available',
+  'loop_length_s','slot_duration_s','min_creative_duration_s','max_creative_duration_s','operating_hours','owner_share_pct','network_slots','network_available',
   'tags','has_camera','status','geo_lat','geo_lng'];
 const CAMPAIGN_EDIT = ['name','starts_at','ends_at','committed_budget','rate_type','rate_value','status','invoice_status','screen_ids','creative_ids','bookings','dayparts'];
 const CONFIG_EDIT = ['name','description','tags','layer','target_id','priority','target_platform','values','status'];
@@ -133,7 +133,7 @@ function campaignRelations(db: any, c: any, actor: any) {
   }
   for (const id of ids(c.creative_ids)) {
     const cr = db.creatives.find((x: any) => x.id === id);
-    if (!cr || cr.org_id !== sourceOrg || cr.advertiser_id !== adv.id) fail(400, 'Creative does not belong to this advertiser');
+    if (!cr || cr.org_id !== sourceOrg || cr.advertiser_id !== adv.id || cr.purpose === 'filler') fail(400, 'Creative does not belong to this advertiser');
   }
 }
 
@@ -184,10 +184,10 @@ export function authorize(db: any, actor: any, method: string, seg: string[], in
   }
   if ((path === 'creative' || path === 'advertiser') && method === 'POST') {
     const orgId = body.org_id || actor.org_id; org(db, orgId, actor);
-    const allowed = path === 'creative' ? ['org_id','advertiser_id','name','category','youtube_id','duration_s','aspect']
+    const allowed = path === 'creative' ? ['org_id','advertiser_id','name','category','youtube_id','duration_s','aspect','media_type','purpose']
       : ['org_id', ...ADVERTISER_EDIT];
     rejectUnknown(body, allowed);
-    if (path === 'creative') {
+    if (path === 'creative' && body.purpose !== 'filler') {
       const a = own(db.advertisers, body.advertiser_id, actor);
       if (a.org_id !== orgId) fail(400, 'Advertiser must belong to the creative organisation');
       if (a.status === 'archived') fail(409, 'Restore this advertiser before adding creatives');
@@ -209,7 +209,7 @@ export function authorize(db: any, actor: any, method: string, seg: string[], in
     const creative = own(db.creatives, id, actor);
     if (method === 'POST' && !action) {
       rejectUnknown(body, ['name','category','youtube_id','duration_s']);
-      if (creative.assets?.length && ('youtube_id' in body || 'duration_s' in body)) fail(400, 'Uploaded video metadata cannot be edited; upload a new variation instead');
+      if (creative.assets?.length && ('youtube_id' in body || ('duration_s' in body && creative.media_type !== 'image'))) fail(400, 'Uploaded video metadata cannot be edited; upload a new variation instead');
     }
     if (method === 'POST' && db.advertisers.some((a: any) => a.id === creative.advertiser_id && a.status === 'archived')) fail(409, 'Restore this advertiser before changing creatives');
     if (action === 'asset' && method === 'POST') rejectUnknown(body,['proof']);
@@ -393,7 +393,7 @@ export function campaignView(db: any, c: any, actor: any, orgId?: string | null)
     for (const key of ['committed_budget','rate_type','rate_value','invoice_status','platform_fee_pct','fee_basis','participant_org_ids']) delete out[key];
     out.reporting_scope = 'organisation';
   }
-  if (actor.role === ADVERTISER) out.bookings = (out.bookings || []).map((b: any) => pick(b,['screen_id','slots_per_loop','rate_type','rate_value','rate_version','booked_at']));
+  if (actor.role === ADVERTISER) out.bookings = (out.bookings || []).map((b: any) => pick(b,['screen_id','slots_per_loop','rotation_weight','rate_type','rate_value','rate_version','booked_at']));
   return out;
 }
 export function bootstrap(db: any, actor: any, screenStatus: (s: any) => any, orgId?: string | null) {

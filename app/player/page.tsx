@@ -5,17 +5,18 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { BrandLogo } from '@/components/ui/brand-mark';
 import { pendingDiagnostic, saveDiagnostic, flushDiagnostic } from '@/lib/player-diagnostics';
+import { cacheMedia, cachedMediaUrl, saveReadySchedule, readySchedule, reserveLocalPlay, clearReadySchedule } from '@/lib/player-media-cache';
 import { cameraConstraints, cameraError, frameSize } from '@/lib/player-vision';
 
 declare global { interface Window { YT: any; onYouTubeIframeAPIReady: () => void; cocoSsd: any; tf: any } }
-const APP_VERSION = 'gridcast-web/0.3.1';
+const APP_VERSION = 'gridcast-web/0.4.0';
 const MODEL_VERSION = 'coco-ssd@2.2.3/lite_mobilenet_v2';
 type Credential = { token: string; device_id: string; screen_id: string };
-type Item = { kind?: 'diagnostic'; diagnostic_has_camera?: boolean; assignment_id: string; valid_until: string; campaign_id: string; creative_id: string;
-  youtube_id?: string; asset_url?: string; asset_id?: string; asset_mime?: string; width?: number; height?: number; duration_s: number };
-type Playlist = { screen: any; config: Record<string, any>; config_version: string | number; server_time: string; items: Item[]; readiness?: {message:string}; diagnostic?: {assignment_id:string;status:string;message:string} | null };
+type Item = { kind?: 'diagnostic' | 'paid' | 'filler'; diagnostic_has_camera?: boolean; assignment_id: string; valid_until: string; campaign_id: string | null; creative_id: string;
+  max_plays?: number; media_type?: 'video' | 'image'; youtube_id?: string; asset_url?: string; asset_id?: string; asset_sha256?: string; asset_bytes?: number; asset_mime?: string; width?: number; height?: number; duration_s: number };
+type Playlist = { screen: any; config: Record<string, any>; config_version: string | number; server_time: string; items: Item[]; filler_items?: Item[]; scheduling_mode?: string; readiness?: {message:string}; diagnostic?: {assignment_id:string;status:string;message:string} | null };
 type Slot = { item: Item; uid: string; started: number; startedPlaying: boolean; accumulated: number; segmentStart: number | null;
-  mediaStart: number; samples: number[]; cameraHealthy: boolean; config: Record<string, any>; version: string | number; offset: number; done: boolean; diagnosticRun?: string };
+  mediaStart: number; samples: number[]; cameraHealthy: boolean; config: Record<string, any>; version: string | number; offset: number; done: boolean; diagnosticRun?: string; decodedWidth?: number; decodedHeight?: number };
 function script(src: string, ready: () => boolean) {
   return new Promise<void>((resolve, reject) => {
     if (ready()) { resolve(); return; }
@@ -39,8 +40,9 @@ export default function Player() {
   const [queue, setQueue] = useState({ pending: 0, blocked: 0, total: 0 });
   const [visionStatus, setVisionStatus] = useState('Waiting for screen settings'), [visionRetry, setVisionRetry] = useState(false);
   const [diagnosticStatus, setDiagnosticStatus] = useState('');
+  const [surface, setSurface] = useState(0), [imageSource, setImageSource] = useState(''), [offlineStatus, setOfflineStatus] = useState('');
   const retryCamera = useRef<() => void>(() => {});
-  const camera = useRef<HTMLVideoElement>(null), canvas = useRef<HTMLCanvasElement>(null), media = useRef<HTMLVideoElement>(null), youtubeMount = useRef<HTMLDivElement>(null);
+  const camera = useRef<HTMLVideoElement>(null), canvas = useRef<HTMLCanvasElement>(null), media = useRef<HTMLVideoElement>(null), standbyMedia = useRef<HTMLVideoElement>(null), imageSurface = useRef<HTMLImageElement>(null), youtubeMount = useRef<HTMLDivElement>(null);
   useEffect(() => {
     try { const c = JSON.parse(localStorage.getItem('gc_device') || 'null'); if (c?.token && c?.device_id && c?.screen_id) setCredential(c); }
     catch { setErr('Saved pairing could not be read. Pair this player again.'); }
@@ -50,7 +52,15 @@ export default function Player() {
     if (!credential) return;
     const paired = credential;
     let disposed = false, currentSlot: Slot | null = null, playlist: Playlist | null = null, pending: Playlist | null = null;
-    let cycleItems: Item[] = [], cycleIndex = 0, cycleActive = false, loopEnds = 0, nextSlotAt = 0, waitingEmpty = false, lastBoundaryAttempt = 0;
+    let cycleItems: Item[] = [], cycleIndex = 0, fillerIndex = 0, waitingEmpty = false;
+    let activeMedia = media.current, activeSurface = 0, prepared: { id: string; video: HTMLVideoElement; url: string } | null = null;
+    const urlByAsset = new Map<string, string>(), objectUrls = new Set<string>(), exhausted = new Set<string>(), failedUntil = new Map<string, number>();
+    let preparing = false, retiring = false;
+    const preparedImages = new Map<string, Promise<{ image: HTMLImageElement; url: string }>>();
+    const prepareImage = (item: Item) => {
+      if (!preparedImages.has(item.assignment_id)) preparedImages.set(item.assignment_id, (async () => { const url = await mediaUrl(item), image = new Image(); image.src = url; await image.decode(); return { image, url }; })().catch(error => { preparedImages.delete(item.assignment_id); throw error; }));
+      return preparedImages.get(item.assignment_id)!;
+    };
     let yt: any = null, ytReady = false, detector: any = null, stream: MediaStream | null = null, cameraOK = false;
     let startup = false, pulling = false, flushing = false, heartbeatBusy = false, fatal = false, actualOffset = 0;
     let diagnosticFlushing = false, lastSampleAt: string | null = null;
@@ -66,13 +76,13 @@ export default function Player() {
     const authRequest = async (path: string, body?: any) => {
       const reply = await request(path, paired.token, body);
       if (reply.status === 401 && !disposed) {
-        fatal = true; stopMedia(); state('Pairing revoked or expired. Pair this player again.');
+        fatal = true; void clearReadySchedule(paired.device_id); stopMedia(); state('Pairing revoked or expired. Pair this player again.');
         setErr('This device needs a fresh pairing code. Buffered records remain on this browser.');
       }
       if (reply.status >= 400) throw new Error(reply.value.error || `Request failed (${reply.status})`);
       return reply.value;
     };
-    function mediaTime() { try { return currentSlot?.item.asset_url ? media.current?.currentTime || 0 : Number(yt?.getCurrentTime?.()) || 0; } catch { return 0; } }
+    function mediaTime() { try { if (currentSlot?.item.media_type === 'image') return 0; return currentSlot?.item.asset_url ? activeMedia?.currentTime || 0 : Number(yt?.getCurrentTime?.()) || 0; } catch { return 0; } }
     function segment(playing: boolean) {
       const s = currentSlot; if (!s || s.done) return;
       if (playing && s.segmentStart === null) {
@@ -104,7 +114,7 @@ export default function Player() {
         setVisionStatus('Ready · counts update during playback'); setVisionRetry(false);
       }
     }
-    function stopMedia() { try { media.current?.pause(); yt?.stopVideo?.(); } catch {} }
+    function stopMedia() { try { activeMedia?.pause(); yt?.stopVideo?.(); } catch {} }
     function vision() { return { camera_state: !playlist?.screen.has_camera ? 'disabled' : cameraStarting ? 'starting' : cameraHealthyNow() ? 'ready' : 'unavailable', model_state: detectorBroken ? 'error' : detector ? 'ready' : cameraStarting ? 'loading' : 'not_loaded', model_ver: detector && !detectorBroken ? MODEL_VERSION : null, last_sample_at: lastSampleAt }; }
     async function flushTest() {
       if (diagnosticFlushing || disposed || fatal) return;
@@ -128,17 +138,21 @@ export default function Player() {
     }
     async function finish(reason: 'ended' | 'duration_observed' | 'error' | 'timeout' | 'interrupted') {
       const s = currentSlot; if (!s || s.done) return;
-      segment(false); const mediaEnd = mediaTime(); s.done = true; currentSlot = null; stopMedia(); clearDetection(); if (!disposed) setCurrent(null);
+      segment(false); const mediaEnd = mediaTime(); s.done = true; currentSlot = null; retiring = true; stopMedia(); clearDetection();
+      if (reason === 'error' || reason === 'timeout') failedUntil.set(s.item.assignment_id, Date.now() + 30000);
       const measured = s.cameraHealthy && cameraHealthyNow() && s.samples.length > 0;
       const avg = measured ? s.samples.reduce((a, b) => a + b, 0) / s.samples.length : null;
       const event = { play_uid: s.uid, assignment_id: s.item.assignment_id, campaign_id: s.item.campaign_id, creative_id: s.item.creative_id,
         config_version: s.version, started_at_device: new Date(s.started).toISOString(), ended_at_device: new Date().toISOString(),
+        kind: s.item.kind === 'filler' ? 'filler' : 'paid',
+        media_evidence: s.item.media_type === 'image' ? 'image_decode' : 'media_timeline',
+        ...(s.item.media_type === 'image' ? { decoded_width: s.decodedWidth || 0, decoded_height: s.decodedHeight || 0, visible_duration_ms: Math.round(s.accumulated) } : {}),
         playing_duration_ms: Math.round(s.accumulated), media_started_s: s.mediaStart, media_ended_s: mediaEnd, ended_reason: reason,
         server_clock_offset_ms: s.offset, measured, avg_persons: avg, sample_count: measured ? s.samples.length : 0, model_ver: measured ? MODEL_VERSION : null };
       if (s.diagnosticRun) {
         try { saveDiagnostic(paired.device_id, { ...event, run_uid: s.diagnosticRun, camera_state: vision().camera_state, model_state: vision().model_state }); void flushTest(); }
         catch (e: any) { if (!disposed) setDiagnosticStatus(e.message || 'Could not save diagnostic result'); }
-        if (!disposed && !fatal) later(() => { void startNext(); }, 300);
+        retiring = false; if (!disposed && !fatal) void startNext();
         return;
       }
       try {
@@ -146,21 +160,23 @@ export default function Player() {
         if (!disposed) { setRecorded(v => v + 1); setAverage(avg === null ? '—' : avg.toFixed(1)); setQueue(await queueStatus(paired.device_id)); }
         void flush();
       } catch (e: any) { fatal = true; state(e.message || 'Could not preserve delivery record. Playback stopped.'); }
-      if (!disposed && !fatal) later(() => { void startNext(); }, 300);
+      retiring = false; if (!disposed && !fatal) void startNext();
     }
     async function pull() {
       if (pulling || fatal || disposed) return;
       pulling = true; lastPull = Date.now();
       try {
-        const started = Date.now(), d: Playlist = await authRequest('/playlist/' + paired.screen_id);
+        const started = Date.now(), d: Playlist = await authRequest('/playlist/' + paired.screen_id + '?protocol=2');
+        if (!d.config || !Array.isArray(d.items)) throw new Error('Player update required. Reload this page.');
         const received = Date.now(); actualOffset = Date.parse(d.server_time) - ((started + received) / 2);
         if (!Number.isFinite(actualOffset)) actualOffset = 0;
         pending = d; void initCamera();
+        void saveReadySchedule(paired.device_id, d, actualOffset).then(ready => { if (!disposed) setOfflineStatus(ready ? d.items.some(i => i.youtube_id) ? 'Uploaded media ready offline · YouTube requires internet' : 'Schedule and uploaded media ready offline' : d.items.some(i => i.youtube_id) ? 'YouTube playback requires internet' : 'Preparing uploaded media for offline playback'); }).catch(() => { if (!disposed) setOfflineStatus('Offline media unavailable; online playback only'); });
         if (currentSlot?.diagnosticRun && d.diagnostic?.assignment_id === currentSlot.item.assignment_id && d.diagnostic.status === 'revoked') void finish('interrupted');
         lastPull = Date.now(); if (!disposed) setScreen(d.screen);
         if (d.diagnostic && !currentSlot) setDiagnosticStatus(d.diagnostic.message);
         if (!currentSlot) void startNext();
-      } catch (e: any) { if (!currentSlot) state(e.message || 'Waiting for connection'); }
+      } catch (e: any) { if (!playlist) waitingEmpty = true; if (!currentSlot) state(e.message || 'Waiting for connection'); }
       finally { pulling = false; }
     }
     async function ensureYouTube() {
@@ -201,54 +217,88 @@ export default function Player() {
       currentSlot = { item, uid, diagnosticRun: uid, started: Date.now(), startedPlaying: false, accumulated: 0, segmentStart: null,
         mediaStart: 0, samples: [], cameraHealthy: !!item.diagnostic_has_camera && cameraHealthyNow() && !!detector && reply.config.model === 'coco-ssd', config: reply.config, version: reply.config_version, offset: actualOffset, done: false };
       setCurrent(item); setDiagnosticStatus('Diagnostic sample · excluded from campaign presence and billing'); state('Loading diagnostic clip');
-      if (!media.current) { void finish('error'); return true; }
-      media.current.src = item.asset_url!; media.current.load();
-      try { await media.current.play(); } catch { void finish('error'); }
+      activeMedia = media.current; activeSurface = 0; setSurface(0);
+      if (!activeMedia) { void finish('error'); return true; }
+      activeMedia.src = item.asset_url!; activeMedia.load();
+      try { await activeMedia.play(); } catch { void finish('error'); }
       return true;
     }
+    const eligible = (item: Item) => !exhausted.has(item.assignment_id) && (failedUntil.get(item.assignment_id) || 0) <= Date.now()
+      && Date.parse(item.valid_until) >= Date.now() + actualOffset + item.duration_s * 1000;
+    async function mediaUrl(item: Item) {
+      const key = item.asset_id + ':' + item.asset_sha256;
+      if (urlByAsset.has(key)) return urlByAsset.get(key)!;
+      const url = await cachedMediaUrl(item).catch(() => null);
+      if (url) { objectUrls.add(url); urlByAsset.set(key, url); return url; }
+      return item.asset_url!;
+    }
+    async function prepareNext() {
+      if (preparing || disposed || !playlist) return;
+      const candidate = [...cycleItems.slice(cycleIndex), ...cycleItems.slice(0, cycleIndex)].find(eligible)
+        || playlist.filler_items?.find(eligible);
+      if (!candidate?.asset_url) return;
+      if (candidate.media_type === 'image') { void cacheMedia(candidate).catch(() => false); void prepareImage(candidate).catch(() => {}); return; }
+      if (prepared?.id === candidate.assignment_id) return;
+      preparing = true;
+      try {
+        void cacheMedia(candidate).catch(() => false);
+        const target = activeMedia === media.current ? standbyMedia.current : media.current;
+        if (!target) return;
+        const url = await mediaUrl(candidate);
+        if (disposed || target === activeMedia) return;
+        target.src = url; target.load(); prepared = { id: candidate.assignment_id, video: target, url };
+      } finally { preparing = false; }
+    }
     async function startNext() {
-      if (startup || currentSlot || fatal || disposed || document.hidden) return;
+      if (startup || retiring || currentSlot || fatal || disposed || document.hidden) return;
       startup = true;
       try {
-        const clock = performance.now();
-        const waitUntil = cycleActive && cycleIndex >= cycleItems.length ? Math.max(loopEnds, nextSlotAt) : nextSlotAt;
-        if (clock < waitUntil) { setCurrent(null); state(`Reserved loop time · next slot in ${Math.ceil((waitUntil - clock) / 1000)}s`); return; }
-        if (cycleActive && cycleIndex >= cycleItems.length) cycleActive = false;
-        if (!cycleActive) {
-          if (waitingEmpty && !pending) return;
-          // Apply changes only between complete loops. A refresh must never grant
-          // additional appearances by restarting a partially completed loop.
-          if (!pending || Date.now() + actualOffset - Date.parse(pending.server_time) > 5000) {
-            if (pulling || Date.now() - lastBoundaryAttempt < 5000) return;
-            lastBoundaryAttempt = Date.now(); await pull();
-            if (pending) lastBoundaryAttempt = 0;
-          }
-          if (!pending) { state('Waiting for a fresh playlist'); return; }
-          playlist = pending; pending = null;
+        // Apply refreshed authorizations at a creative boundary, preserving round order.
+        if (pending) {
+          const nextId = cycleItems[cycleIndex % Math.max(1, cycleItems.length)]?.assignment_id;
+          playlist = pending; pending = null; cycleItems = playlist.items;
+          const at = cycleItems.findIndex(i => i.assignment_id === nextId); cycleIndex = at >= 0 ? at : 0;
           void initCamera();
-          cycleItems = playlist.items.filter(i => Date.parse(i.valid_until) > Date.now() + actualOffset);
-          if (!cycleItems.length) { waitingEmpty = true; setCurrent(null); if (await startDiagnostic()) return; state(playlist.items.length ? 'Playlist expired. Waiting for connection.' : playlist.readiness?.message || 'Waiting for an eligible campaign'); return; }
-          waitingEmpty = false; cycleIndex = 0; cycleActive = true; nextSlotAt = performance.now();
-          loopEnds = nextSlotAt + Math.max(1, Number(playlist.config.loop_length_s) || Number(playlist.screen.loop_length_s) || 600) * 1000;
         }
-        if (!playlist) return;
+        if (!playlist) { state('Waiting for an authorised playlist'); return; }
         if (!(await queueCapacity(paired.device_id, Number(playlist.config.offline_buffer_plays) || 5000))) { state('Delivery queue full. Reconnect or export saved records for review.'); return; }
-        const item = cycleItems[cycleIndex++];
-        if (Date.parse(item.valid_until) <= Date.now() + actualOffset) { state('Playlist assignment expired. Waiting for a fresh loop.'); return; }
-        const baseSlot = Math.max(1, Number(playlist.config.slot_duration_s) || 10);
-        const reservedSeconds = Math.ceil(item.duration_s / baseSlot) * baseSlot;
-        nextSlotAt = Math.max(performance.now(), nextSlotAt) + reservedSeconds * 1000;
-        loopEnds = Math.max(loopEnds, nextSlotAt);
+        let item: Item | undefined;
+        // Entries repeated by the server represent explicit relative turns/weights.
+        for (let attempt = 0; attempt < cycleItems.length; attempt++) {
+          const candidate = cycleItems[cycleIndex++ % cycleItems.length]; cycleIndex %= cycleItems.length;
+          if (eligible(candidate) && await reserveLocalPlay(paired.device_id, candidate, Date.now() + actualOffset)) { item = candidate; break; }
+          if (eligible(candidate)) exhausted.add(candidate.assignment_id);
+        }
+        if (!item) for (let attempt = 0; attempt < (playlist.filler_items || []).length; attempt++) {
+          const candidate = playlist.filler_items![fillerIndex++ % playlist.filler_items!.length];
+          if (eligible(candidate) && await reserveLocalPlay(paired.device_id, candidate, Date.now() + actualOffset)) { item = candidate; break; }
+          if (eligible(candidate)) exhausted.add(candidate.assignment_id);
+        }
+        waitingEmpty = !item;
+        if (!item) { setCurrent(null); if (await startDiagnostic()) return; state(playlist.readiness?.message || 'No authorised playable content. Waiting for a refreshed schedule.'); return; }
         if (!item.asset_url) await ensureYouTube();
         if (disposed || fatal) return;
         currentSlot = { item, uid: crypto.randomUUID(), started: Date.now(), startedPlaying: false, accumulated: 0, segmentStart: null,
           mediaStart: 0, samples: [], cameraHealthy: cameraHealthyNow() && !!detector && playlist.config.model === 'coco-ssd', config: { ...playlist.config }, version: playlist.config_version, offset: actualOffset, done: false };
-        setCurrent(item); state('Loading media');
-        if (item.asset_url) {
-          if (!media.current) throw new Error('Video surface unavailable');
-          media.current.src = item.asset_url; media.current.load();
-          try { await media.current.play(); } catch { void finish('error'); }
-        } else { yt.loadVideoById({ videoId: item.youtube_id, startSeconds: 0 }); yt.playVideo(); }
+        state('Preparing media');
+        if (item.asset_url && item.media_type === 'image') {
+          const { url, image: decoded } = await prepareImage(item);
+          if (!currentSlot || currentSlot.item !== item || disposed || document.hidden) { if (currentSlot) void finish('interrupted'); return; }
+          if (!decoded.naturalWidth || !decoded.naturalHeight || item.width && item.width !== decoded.naturalWidth || item.height && item.height !== decoded.naturalHeight) throw new Error('Image dimensions do not match');
+          currentSlot.decodedWidth = decoded.naturalWidth; currentSlot.decodedHeight = decoded.naturalHeight;
+          setImageSource(url); setCurrent(item);
+          // Start evidence only after React commits the decoded image to the visible surface.
+          requestAnimationFrame(() => requestAnimationFrame(() => {
+            if (currentSlot?.item === item && !document.hidden && imageSurface.current?.complete && imageSurface.current.naturalWidth > 0) segment(true);
+          }));
+        } else if (item.asset_url) {
+          if (prepared?.id === item.assignment_id) { activeMedia = prepared.video; prepared = null; }
+          else { activeMedia = activeMedia === media.current ? standbyMedia.current : media.current; if (!activeMedia) throw new Error('Video surface unavailable'); activeMedia.src = await mediaUrl(item); activeMedia.load(); }
+          if (activeMedia.readyState >= 1 && (!Number.isFinite(activeMedia.duration) || Math.abs(activeMedia.duration - item.duration_s) > 1 || item.width && item.width !== activeMedia.videoWidth || item.height && item.height !== activeMedia.videoHeight)) throw new Error('Video metadata does not match');
+          activeSurface = activeMedia === media.current ? 0 : 1; setSurface(activeSurface); setCurrent(item);
+          try { await activeMedia.play(); } catch { void finish('error'); }
+        } else { setCurrent(item); yt.loadVideoById({ videoId: item.youtube_id, startSeconds: 0 }); yt.playVideo(); }
+        void prepareNext();
       } catch (e: any) { state(e.message || 'Playback could not start'); if (currentSlot) void finish('error'); }
       finally { startup = false; }
     }
@@ -356,17 +406,19 @@ export default function Player() {
     const cameraRecoveries = ['loadeddata', 'playing'] as const;
     cameraFailures.forEach(event => cameraVideo?.addEventListener(event, cameraLost));
     cameraRecoveries.forEach(event => cameraVideo?.addEventListener(event, cameraRecovered));
-    const native = media.current;
-    const nativePlaying = () => { if (currentSlot?.item.asset_url) segment(true); };
-    const nativePause = () => { if (currentSlot?.item.asset_url) segment(false); };
-    const nativeEnd = () => { if (currentSlot?.item.asset_url && currentSlot.startedPlaying) void finish('ended'); };
-    const nativeError = () => { if (currentSlot?.item.asset_url) void finish('error'); };
-    const metadata = () => {
-      const item = currentSlot?.item; if (!native || !item?.asset_url) return;
+    const natives = [media.current, standbyMedia.current];
+    const nativePlaying = (e: Event) => { if (e.target === activeMedia && currentSlot?.item.asset_url && currentSlot.item.media_type !== 'image') segment(true); };
+    const nativePause = (e: Event) => { if (e.target === activeMedia && currentSlot?.item.asset_url && currentSlot.item.media_type !== 'image') segment(false); };
+    const nativeEnd = (e: Event) => { if (e.target === activeMedia && currentSlot?.item.asset_url && currentSlot.startedPlaying) void finish('ended'); };
+    const nativeError = (e: Event) => { if (e.target === activeMedia && currentSlot?.item.asset_url && currentSlot.item.media_type !== 'image') void finish('error'); };
+    const metadata = (e: Event) => {
+      const native = e.target as HTMLVideoElement, item = currentSlot?.item; if (native !== activeMedia || !item?.asset_url || item.media_type === 'image') return;
       if (!Number.isFinite(native.duration) || Math.abs(native.duration - item.duration_s) > 1 || (item.width && item.width !== native.videoWidth) || (item.height && item.height !== native.videoHeight)) void finish('error');
     };
-    native?.addEventListener('playing', nativePlaying); native?.addEventListener('pause', nativePause); native?.addEventListener('waiting', nativePause);
-    native?.addEventListener('ended', nativeEnd); native?.addEventListener('error', nativeError); native?.addEventListener('loadedmetadata', metadata);
+    for (const native of natives) {
+      native?.addEventListener('playing', nativePlaying); native?.addEventListener('pause', nativePause); native?.addEventListener('waiting', nativePause);
+      native?.addEventListener('ended', nativeEnd); native?.addEventListener('error', nativeError); native?.addEventListener('loadedmetadata', metadata);
+    }
     const visibility = () => { if (document.hidden) { clearDetection(); void finish('interrupted'); } else void startNext(); };
     const online = () => { void flush(); void pull(); };
     document.addEventListener('visibilitychange', visibility); window.addEventListener('online', online);
@@ -375,8 +427,8 @@ export default function Player() {
       const s = currentSlot;
       if (s) {
         const played = s.accumulated + (s.segmentStart === null ? 0 : performance.now() - s.segmentStart), elapsed = Date.now() - s.started;
-        if (s.segmentStart !== null && mediaTime() - s.mediaStart >= s.item.duration_s && played >= s.item.duration_s * 1000 - 500) void finish('duration_observed');
-        else if (s.diagnosticRun && (Date.now() + actualOffset >= Date.parse(s.item.valid_until) || elapsed > 15000)) void finish('timeout');
+        if (s.segmentStart !== null && (s.item.media_type === 'image' ? played >= s.item.duration_s * 1000 : mediaTime() - s.mediaStart >= s.item.duration_s && played >= s.item.duration_s * 1000 - 500)) void finish('duration_observed');
+        else if (Date.now() + actualOffset >= Date.parse(s.item.valid_until) || s.diagnosticRun && elapsed > 15000) void finish('timeout');
         else if (elapsed > Math.max(30000, s.item.duration_s * 3000 + 10000)) void finish('timeout');
       } else void startNext();
       void initCamera();
@@ -387,11 +439,14 @@ export default function Player() {
     const flusher = setInterval(() => { void flush(); void flushTest(); }, 5000);
     void flushTest();
     void queueStatus(paired.device_id).then(s => { if (!disposed) setQueue(s); }).catch(() => { fatal = true; state('This browser cannot persist delivery records. Playback stopped.'); });
+    void readySchedule(paired.device_id).then(saved => { if (!disposed && !playlist && !pending && saved) { actualOffset = saved.offset; pending = saved.playlist; setScreen(saved.playlist.screen); setOfflineStatus('Using verified offline media and saved authorisations'); void startNext(); } }).catch(() => {});
     void pull();
+    if ('serviceWorker' in navigator) void navigator.serviceWorker.register('/player-sw.js', { scope: '/player' }).then(reg => { const worker = reg.active || reg.installing || reg.waiting; worker?.postMessage({ type: 'PREPARE_PLAYER', urls: performance.getEntriesByType('resource').map(r => r.name).filter(u => u.startsWith(location.origin + '/_next/static/')) }); }).catch(() => {});
     return () => {
       disposed = true; if (currentSlot) void finish('interrupted'); clearInterval(ticker); clearInterval(flusher); timers.forEach(clearTimeout);
-      native?.removeEventListener('playing', nativePlaying); native?.removeEventListener('pause', nativePause); native?.removeEventListener('waiting', nativePause);
-      native?.removeEventListener('ended', nativeEnd); native?.removeEventListener('error', nativeError); native?.removeEventListener('loadedmetadata', metadata);
+      for (const native of natives) { native?.removeEventListener('playing', nativePlaying); native?.removeEventListener('pause', nativePause); native?.removeEventListener('waiting', nativePause);
+      native?.removeEventListener('ended', nativeEnd); native?.removeEventListener('error', nativeError); native?.removeEventListener('loadedmetadata', metadata); }
+      objectUrls.forEach(url => URL.revokeObjectURL(url));
       document.removeEventListener('visibilitychange', visibility); window.removeEventListener('online', online);
       cameraFailures.forEach(event => cameraVideo?.removeEventListener(event, cameraLost));
       cameraRecoveries.forEach(event => cameraVideo?.removeEventListener(event, cameraRecovered));
@@ -425,13 +480,15 @@ export default function Player() {
   </div></div>;
   return <div className="fixed inset-0 bg-black text-white">
     <div ref={youtubeMount} className={`absolute inset-0 h-full w-full ${!current || current.asset_url ? 'hidden' : ''}`} />
-    <video ref={media} muted playsInline className={`absolute inset-0 h-full w-full object-contain ${current?.asset_url ? '' : 'hidden'}`} />
+    <video data-role="creative" data-active={surface === 0} ref={media} muted playsInline preload="auto" className={`absolute inset-0 h-full w-full object-contain ${current?.asset_url && current.media_type !== 'image' && surface === 0 ? '' : 'hidden'}`} />
+    <video data-role="creative" data-active={surface === 1} ref={standbyMedia} muted playsInline preload="auto" className={`absolute inset-0 h-full w-full object-contain ${current?.asset_url && current.media_type !== 'image' && surface === 1 ? '' : 'hidden'}`} />
+    <img ref={imageSurface} src={imageSource || undefined} alt="" className={`absolute inset-0 h-full w-full object-contain ${current?.media_type === 'image' ? '' : 'hidden'}`} />
     <div className="pointer-events-none absolute inset-0 z-[2]" />
-    <div className="fixed left-3 top-3 z-10 rounded bg-black/80 p-3 text-xs"><b>{screen?.name || 'Gridcast'}</b> · {current ? current.kind === 'diagnostic' ? 'Screen test' : 'Media playback' : 'Waiting'}<br />{status}
+    <div className="fixed left-3 top-3 z-10 rounded bg-black/80 p-3 text-xs"><b>{screen?.name || 'Gridcast'}</b> · {current ? current.kind === 'diagnostic' ? 'Screen test' : 'Media playback' : 'Waiting'}<br />{status}{offlineStatus && <p className="mt-1">{offlineStatus}</p>}
       {err && <p className="mt-1 text-amber-300">{err}</p>}
       <button className="mt-2 underline" onClick={() => { localStorage.removeItem('gc_device'); setCredential(null); }}>Enter a new pairing code</button>
     </div>
-    <div className="fixed bottom-3 right-3 z-10 w-[170px]"><div className="relative"><video ref={camera} autoPlay muted playsInline className="w-full rounded bg-neutral-900" /><canvas ref={canvas} className="pointer-events-none absolute inset-0 h-full w-full" /></div><p className="mt-1 text-[10px] text-white/60">Local camera preview · never uploaded</p><p className="mt-1 text-xs" role="status">{visionStatus}</p>{visionRetry && <button className="mt-2 text-xs underline" onClick={() => retryCamera.current()}>Retry camera</button>}</div>
+    <div className="fixed bottom-3 right-3 z-10 w-[170px]"><div className="relative"><video data-role="camera" ref={camera} autoPlay muted playsInline className="w-full rounded bg-neutral-900" /><canvas ref={canvas} className="pointer-events-none absolute inset-0 h-full w-full" /></div><p className="mt-1 text-[10px] text-white/60">Local camera preview · never uploaded</p><p className="mt-1 text-xs" role="status">{visionStatus}</p>{visionRetry && <button className="mt-2 text-xs underline" onClick={() => retryCamera.current()}>Retry camera</button>}</div>
     <div className="fixed bottom-3 left-3 z-10 rounded bg-black/80 p-3 text-xs">{current?.kind === 'diagnostic' ? 'Diagnostic sample' : 'People now'}: {count ?? '—'} · Last play average: {average}<br />Recorded this session: {recorded} · Pending delivery: {queue.pending}
       {diagnosticStatus && <p className="mt-1 text-amber-200">{diagnosticStatus}</p>}
       {diagnosticStatus && <button className="mt-2 block underline" onClick={() => { localStorage.removeItem('gc_diagnostic_result:' + credential.device_id); setDiagnosticStatus('Saved diagnostic report cleared on this device.'); }}>Clear saved diagnostic report</button>}

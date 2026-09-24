@@ -10,12 +10,12 @@ test('simulated 72h: assignment rotation, 48h report backlog, ACK loss and month
  const HOUR=3600e3, start=Date.parse('2026-09-29T00:00:00Z');let now=start,seq=0,lastRequestAt=start;
  const org={id:'operator',status:'active',platform_fee_pct:10,fee_basis:'gross'};
  const screen={id:'screen-endurance',org_id:org.id,status:'active',has_camera:true,owner_share_pct:25,rate_version:'rate-v1'};
- const campaign={id:'network-endurance',org_id:'gridcast',advertiser_id:'brand',campaign_type:'network',rate_type:'per_play',rate_value:0.93,accrued_spend:0};
+ const campaign={id:'network-endurance',org_id:'gridcast',advertiser_id:'brand',campaign_type:'network',committed_budget:1000000000,rate_type:'per_play',rate_value:0.93,accrued_spend:0};
  const terms=freezeEconomics(campaign,screen,org);
  const db={orgs:[org,{id:'gridcast',status:'active'}],screens:[screen],campaigns:[campaign],devices:[],device_assignments:[],plays:[],presence:[],settlement_buckets:[]};
  const creatives=['creative-a','creative-b'];
  const playlist=(s,_device,index=0)=>({items:[{...terms,campaign_id:campaign.id,creative_id:creatives[creativeRotationIndex(s.id,index,0,2)],youtube_id:'synthetic-fixture',duration_s:10}],config:{model:'coco-ssd',sample_interval_s:2,count_ceiling:50,camera_fail_mode:'continue'},config_version:1,rotation_version:'stable-content-v1'});
- const call=(method,path,body={},token)=>{assert.ok(now>=lastRequestAt,'server time never rewinds');lastRequestAt=now;const r=deviceRoute(db,method,path.split('/'),body,token,{now,playlist,clientKey:'endurance-fixture'});assert.ok(r);return {...r,status:r.status??200};};
+ const call=(method,path,body={},token)=>{assert.ok(now>=lastRequestAt,'server time never rewinds');lastRequestAt=now;const r=deviceRoute(db,method,path.split('/'),body,token,{now,playerProtocol:2,playlist,clientKey:'endurance-fixture'});assert.ok(r);return {...r,status:r.status??200};};
  const ok=r=>{assert.equal(r.status,200,JSON.stringify(r.body));return r.body;};
  const paired=ok(call('POST','pair',issuePairing(db,screen,now)));
  const pending=[],issued=[],accepted=[];let duplicateCount=0;

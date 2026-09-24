@@ -1,0 +1,33 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const http = require('node:http');
+const crypto = require('node:crypto');
+const ts = require('typescript');
+const {chromium} = require('playwright');
+const executablePath = [process.env.GC_TEST_BROWSER_PATH,chromium.executablePath(),'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome','/usr/bin/chromium'].filter(Boolean).find(fs.existsSync);
+test('offline media is checksum verified, schedule atomic, and allowance shared across tabs/restarts', {skip:!executablePath}, async()=>{
+ const source = ts.transpileModule(fs.readFileSync(path.join(__dirname,'../lib/player-media-cache.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText;
+ const bytes=Buffer.from('verified media fixture'); let downloads=0;
+ const server=http.createServer((req,res)=>{if(req.url==='/media'){downloads++;res.writeHead(200,{'Content-Type':'video/mp4'});res.end(bytes);}else{res.writeHead(200,{'Content-Type':'text/html'});res.end('<!doctype html><title>Offline player test</title>');}});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
+ try {
+  browser=await chromium.launch({executablePath,headless:true});const context=await browser.newContext();const page=await context.newPage(),other=await context.newPage();const url=`http://127.0.0.1:${server.address().port}`;
+  const init=async p=>{await p.goto(url);await p.evaluate(source=>{const m={exports:{}};new Function('module','exports',source)(m,m.exports);window.cache=m.exports;},source);};
+  await Promise.all([init(page),init(other)]);
+  const item={assignment_id:'a1',valid_until:new Date(Date.now()+3600e3).toISOString(),duration_s:20,max_plays:2,asset_id:'asset1',asset_url:url+'/media',asset_bytes:bytes.length,asset_sha256:crypto.createHash('sha256').update(bytes).digest('hex'),asset_mime:'video/mp4'};
+  const claims=await Promise.all([page.evaluate(i=>window.cache.reserveLocalPlay('d1',i,Date.now()),item),other.evaluate(i=>window.cache.reserveLocalPlay('d1',i,Date.now()),item)]);
+  assert.deepEqual(claims,[true,true]);await init(page);assert.equal(await page.evaluate(i=>window.cache.reserveLocalPlay('d1',i,Date.now()),item),false);
+  assert.equal(await page.evaluate(i=>window.cache.reserveLocalPlay('d1',{...i,assignment_id:'no-cap',max_plays:undefined},Date.now()),item),false);
+  const schedule={items:[item],config:{},server_time:new Date().toISOString()};
+  assert.equal(await page.evaluate(s=>window.cache.saveReadySchedule('d1',s,0),schedule),true);assert.equal(downloads,1);
+  assert.equal(await page.evaluate(async s=>{try{await window.cache.saveReadySchedule('d1',{...s,items:[{...s.items[0],asset_id:'bad',asset_sha256:'0'.repeat(64)}]},0);return false;}catch{return true;}},schedule),true);
+  assert.equal((await page.evaluate(()=>window.cache.readySchedule('d1'))).playlist.items[0].asset_id,'asset1');
+  assert.equal(await page.evaluate(s=>window.cache.saveReadySchedule('d1',{...s,items:[{...s.items[0],youtube_id:'abcdefghijk'}]},0),schedule),false);
+  assert.equal(await page.evaluate(s=>window.cache.saveReadySchedule('d1',{...s,items:[...s.items,{...s.items[0],youtube_id:'abcdefghijk'}]},0),schedule),true);
+  assert.equal((await page.evaluate(()=>window.cache.readySchedule('d1'))).playlist.items.length,1);
+  await context.setOffline(true);assert.equal(await page.evaluate(async i=>{const url=await window.cache.cachedMediaUrl(i);const result=await fetch(url);return result.ok&&(await result.blob()).size===i.asset_bytes;},item),true);
+  await page.evaluate(()=>{const original=Date.now;Date.now=()=>original()+7200e3;});assert.equal(await page.evaluate(()=>window.cache.readySchedule('d1')),null);
+ }finally{await browser?.close();await new Promise(r=>server.close(r));}
+});

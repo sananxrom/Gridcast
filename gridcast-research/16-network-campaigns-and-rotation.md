@@ -1,3 +1,5 @@
+> Scheduling update —25September2026: the fixed-loop timing and slot-unit capacity sections below are superseded by [continuous playback and offline media](19-continuous-playback-and-offline-media.md). Distinct advertiser ceilings, tenancy and frozen economic terms remain in force.
+
 # Network campaigns, creative rotation, and the demo network
 
 **Written:** 25 Sep 2026 · **Base:** `93eb350` · live `build-2026-09-24-007` (`5b18cae`)

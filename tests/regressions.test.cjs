@@ -106,10 +106,10 @@ function deviceFixture() {
   const db = { orgs: [{ id:'org1', status:'active' }],
     screens: [{ id:'screen1', org_id:'org1', status:'active', has_camera:true }],
     devices: [], device_assignments: [], plays: [], presence: [],
-    campaigns: [{ id:'campaign1', org_id:'org1', advertiser_id:'adv1', rate_type:'per_play', rate_value:9, accrued_spend:0 }] };
+    campaigns: [{ id:'campaign1', org_id:'org1', advertiser_id:'adv1', committed_budget:1000000000,rate_type:'per_play', rate_value:9, accrued_spend:0 }] };
   const config = { model:'coco-ssd', sample_interval_s:2, count_ceiling:50, camera_fail_mode:'continue' };
   let plan = { items:[{ campaign_id:'campaign1', creative_id:'creative1', duration_s:10, youtube_id:'x', rate_value:9 }], config, config_version:3 };
-  const options = () => ({ now, clientKey: crypto.randomUUID(), playlist: () => JSON.parse(JSON.stringify(plan)) });
+  const options = () => ({ now, playerProtocol:2, clientKey: crypto.randomUUID(), playlist: () => JSON.parse(JSON.stringify(plan)) });
   const call = (method, route, body={}, token) => { const r = deviceRoute(db, method, route.split('/'), body, token, options()); return { ...r, status: r?.status || 200 }; };
   const code = issuePairing(db, db.screens[0], now);
   const paired = call('POST','pair',{ code: code.code }).body;

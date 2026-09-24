@@ -44,10 +44,10 @@ export function CampaignBuilder({ boot, user, orgId, onGo, onDone }: {
   const advertisers=[...availableAdvertisers,...addedAdvertisers];
   const [daypart,setDaypart]=useState({enabled:false,from:'09:00',to:'21:00'});
   const ownScreens = network ? (networkInventory?.screens ?? []).filter((s:any)=>s.network_available===true && s.network_slots>0 && networkInventory.orgs.some((o:any)=>o.id===s.org_id && o.status==='active')) : boot.screens.filter((s:any)=>s.org_id===selectedOrg);
-  const slotsFor=(s:any)=>bookingSlots[s.id] ?? String(network ? 1 : defaultSlotsPerLoop(s));
+  const slotsFor=(s:any)=>bookingSlots[s.id] ?? '1';
   const orgName=(id:string)=>(networkInventory?.orgs ?? boot.orgs ?? []).find((o:any)=>o.id===id)?.name ?? id;
 
-  const pool = [...boot.creatives, ...local].filter((c: any) => c.advertiser_id === advId);
+  const pool = [...boot.creatives, ...local].filter((c: any) => c.advertiser_id === advId && c.purpose !== 'filler');
   const total = ownScreens.filter((s: any) => screens.includes(s.id)).reduce((a: number, b: any) => a + b.slot_price_month, 0);
   const tick = (arr: string[], v: string, set: (x: string[]) => void) => set(arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v]);
 
@@ -86,7 +86,7 @@ export function CampaignBuilder({ boot, user, orgId, onGo, onDone }: {
         const a = await api('/advertiser', { org_id: selectedOrg, name: newAdv.name, contact: newAdv.contact, category: 'general' });
         adv = a.id; setAdvId(adv);
       }
-      const bookings=screens.map(id=>{const s=ownScreens.find((x:any)=>x.id===id);if(!s) throw new Error('Selected screen is no longer available for this campaign.');const n=Number(slotsFor(s));if(!Number.isInteger(n)||n<1) throw new Error('Appearances per loop must be a positive whole number.');return {screen_id:id,slots_per_loop:n};});
+      const bookings=screens.map(id=>{const s=ownScreens.find((x:any)=>x.id===id);if(!s) throw new Error('Selected screen is no longer available for this campaign.');const n=Number(slotsFor(s));if(!Number.isInteger(n)||n<1) throw new Error('Turns per round must be a positive whole number.');return {screen_id:id,rotation_weight:n};});
       const c = await api('/campaign', {
         org_id: selectedOrg, advertiser_id: adv, name: f.name, campaign_type: campaignType,
         starts_at: f.starts_at, ends_at: f.ends_at, committed_budget: budget,
@@ -133,7 +133,7 @@ export function CampaignBuilder({ boot, user, orgId, onGo, onDone }: {
       </Card>
 
       <Card className="mb-4 p-5">
-        <h3 className="mb-3 text-[14px] font-semibold">2 · Rate &amp; budget</h3>
+        <h3 className="mb-3 text-[14px] font-semibold">2 · Rate &amp; budget</h3><p className="mb-3 text-sm text-muted-foreground">Ads repeat continuously. Fewer competing ads mean more plays and faster spending. Per-play delivery is capped by the budget, with allowances reserved across screens. Turns are relative frequency, not a guaranteed hourly count.</p>
         <div className="flex flex-wrap gap-3">
           <Field label="Rate type">
             <Select aria-label="Campaign rate type" disabled={network} value={f.rate_type} onChange={e => setF({ ...f, rate_type: e.target.value })}>
@@ -166,7 +166,7 @@ export function CampaignBuilder({ boot, user, orgId, onGo, onDone }: {
         )}
         {network && !networkInventory && !inventoryError && <p role="status" className="mb-3 text-sm">Loading released network screens…</p>}
         {inventoryError && <div role="alert" className="mb-3 text-sm text-destructive">{inventoryError}<Button variant="outline" size="sm" onClick={()=>setInventoryAttempt(n=>n+1)}>Retry inventory</Button></div>}
-        {network && networkInventory && <p className="mb-3 text-sm text-muted-foreground">{ownScreens.length} screens released for new network bookings. Network limits count distinct advertisers; appearances per loop reserve airtime separately. Existing commitments are checked when you save.</p>}
+        {network && networkInventory && <p className="mb-3 text-sm text-muted-foreground">{ownScreens.length} screens released for new network bookings. Network limits count distinct advertisers; relative turns control rotation frequency. Existing commitments are checked when you save.</p>}
         <div className="max-h-64 overflow-y-auto rounded-lg border border-border/60">
           {ownScreens.map((s: any) => (
             <label key={s.id} className="flex cursor-pointer items-center gap-3 border-b border-border/50 px-3 py-2.5 text-[13px] last:border-0 hover:bg-black/[0.02]">
@@ -181,7 +181,7 @@ export function CampaignBuilder({ boot, user, orgId, onGo, onDone }: {
         <p className="mt-3 text-[12.5px] text-muted-foreground">
           {screens.length ? <><b>{screens.length}</b> screen{screens.length === 1 ? '' : 's'} selected · combined list price <b>{inr(total)}</b> / month per advertiser allocation</> : 'No screens selected'}
         </p>
-        {ownScreens.filter((s:any)=>screens.includes(s.id)).map((s:any)=><div key={s.id} className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-border p-3"><span className="flex-1 text-sm">{s.name}<br/><span className="text-xs text-muted-foreground">{physicalCapacity(s)} base slots per loop. Longer creatives reserve additional slots.</span></span><Field label="Appearances per loop" className="max-w-[180px]"><Input aria-label={`Appearances per loop for ${s.name}`} type="number" min="1" max={physicalCapacity(s)} step="1" value={slotsFor(s)} onChange={e=>setBookingSlots({...bookingSlots,[s.id]:e.target.value})}/></Field></div>)}
+        {ownScreens.filter((s:any)=>screens.includes(s.id)).map((s:any)=><div key={s.id} className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-border p-3"><span className="flex-1 text-sm">{s.name}<br/><span className="text-xs text-muted-foreground">Continuous rotation; longer creatives occupy their actual duration.</span></span><Field label="Turns per round" className="max-w-[180px]"><Input aria-label={`Turns per round for ${s.name}`} type="number" min="1" max={100} step="1" value={slotsFor(s)} onChange={e=>setBookingSlots({...bookingSlots,[s.id]:e.target.value})}/></Field></div>)}
         <p className="mt-3 text-xs text-muted-foreground">Availability is checked across the full date range when saved. Paused and pending campaigns retain their booking; drafts do not reserve inventory. Group selection takes a snapshot and does not add future screens automatically.</p>
 
       </Card>

@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
+const crypto = require('node:crypto');
 const {execFileSync} = require('node:child_process');
 const ts = require('typescript');
 const {chromium} = require('playwright');
@@ -14,11 +15,13 @@ const compile = file=>ts.transpileModule(fs.readFileSync(path.join(root,file),'u
 const deviceModule={exports:{}};new Function('require','module','exports',compile('lib/devices.ts'))(name=>name.startsWith('.')?require('./load-lib.cjs')(name.slice(2)):require(name),deviceModule,deviceModule.exports);
 const {issuePairing,deviceRoute}=deviceModule.exports;
 const bundle=()=>`const q={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-queue.ts'))})(q,q.exports);
+const cache={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-media-cache.ts'))})(cache,cache.exports);
 const diagnostic={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-diagnostics.ts'))})(diagnostic,diagnostic.exports);
 const vision={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-vision.ts'))})(vision,vision.exports);
 const player={exports:{}};const fixtureRequire=name=>{
  if(name==='react')return React;
  if(name==='@/lib/player-queue')return q.exports;
+ if(name==='@/lib/player-media-cache')return cache.exports;
  if(name==='@/lib/player-diagnostics')return diagnostic.exports;
  if(name==='@/lib/player-vision')return vision.exports;
  if(name==='@/components/ui/brand-mark')return {BrandLogo:()=>React.createElement('span',null,'Gridcast')};
@@ -32,7 +35,7 @@ const player={exports:{}};const fixtureRequire=name=>{
    if(!window.fixtureModelWorking)throw new Error('Fixture model unavailable');
    const real=window.fixtureRealModel ? await window.cocoSsd.load(config) : null;
    return {detect:async(v,maxBoxes,minScore)=>{
-     window.fixtureFrame=v;window.fixtureDetectCalls??=[];window.fixtureDetectCalls.push({maxBoxes,minScore,width:v.width,height:v.height,at:Date.now(),playing:!document.querySelector('video').paused});
+     window.fixtureFrame=v;window.fixtureDetectCalls??=[];window.fixtureDetectCalls.push({maxBoxes,minScore,width:v.width,height:v.height,at:Date.now(),playing:!document.querySelector('video[data-role="creative"][data-active="true"]').paused});
      if(window.fixtureDetectWait)await new Promise(resolve=>window.fixtureReleaseDetect=resolve);
      return real ? real.detect(v,maxBoxes,minScore) : [{class:'person',score:.46,bbox:[50,50,100,100]}];
    },dispose(){window.fixtureDisposed=(window.fixtureDisposed||0)+1;real?.dispose();}};
@@ -40,27 +43,30 @@ const player={exports:{}};const fixtureRequire=name=>{
  throw new Error('Unmapped browser test dependency '+name);
 };
 new Function('require','module','exports',${JSON.stringify(compile('app/player/page.tsx'))})(fixtureRequire,player,player.exports);
-window.fixtureQueue=q.exports;
+window.fixtureQueue=q.exports;window.fixtureCache=cache.exports;
 ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(player.exports.default));`;
 async function harness(options={}) {
  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'gridcast-playback-test-'));
  execFileSync(ffmpeg,['-v','error','-f','lavfi','-i','color=c=blue:s=128x72:r=25','-t','2','-an','-c:v','libvpx','-y',path.join(temp,'fixture.webm')]);
  const video=fs.readFileSync(path.join(temp,'fixture.webm'));
- const db={orgs:[{id:'org1',status:'active'}],screens:[{id:'screen1',org_id:'org1',status:'active',has_camera:true}],devices:[],device_assignments:[],plays:[],presence:[],campaigns:[{id:'campaign1',org_id:'org1',advertiser_id:'advertiser1',rate_type:'per_play',rate_value:2,accrued_spend:0}]};
+ execFileSync(ffmpeg,['-v','error','-i',path.join(temp,'fixture.webm'),'-frames:v','1','-y',path.join(temp,'fixture.png')]);
+ const picture=fs.readFileSync(path.join(temp,'fixture.png'));
+ const db={orgs:[{id:'org1',status:'active'}],screens:[{id:'screen1',org_id:'org1',status:'active',has_camera:true}],devices:[],device_assignments:[],plays:[],presence:[],campaigns:[{id:'campaign1',org_id:'org1',advertiser_id:'advertiser1',rate_type:'per_play',rate_value:2,accrued_spend:0,committed_budget:10000}]};
  const requests=[],bodies=[],replies=[];let failedAck=false,base='',stopItems=false,playlistFailed=false;
  const config={model:'coco-ssd',sample_interval_s:options.modelWorking?.5:2,loop_length_s:4,slot_duration_s:2,count_ceiling:50,camera_fail_mode:'continue',heartbeat_s:10,sync_interval_min:1,offline_buffer_plays:5000,telemetry_batch:25,telemetry_retry_h:72,...options.config};
- const callback=()=>({config,config_version:7,items:(stopItems||options.empty)?[]:[{campaign_id:'campaign1',creative_id:'creative1',creative_name:'Browser fixture',duration_s:2,rate_value:2,rate_type:'per_play',asset_url:base+'/fixture.webm',asset_id:'fixture',asset_mime:'video/webm',width:128,height:72}]});
- const code=issuePairing(db,db.screens[0]);const paired=deviceRoute(db,'POST',['pair'],{code:code.code},null,{playlist:callback}).body;
+ const callback=()=>({config,config_version:7,items:[],[options.filler?'filler_items':'items']:(stopItems||options.empty)?[]:[{campaign_id:'campaign1',creative_id:'creative1',creative_name:'Browser fixture',duration_s:2,rate_value:2,rate_type:'per_play',asset_url:base+(options.image?'/fixture.png':'/fixture.webm'),media_type:options.image?'image':'video',asset_id:'fixture',asset_mime:options.image?'image/png':'video/webm',width:128,height:72,...(options.offline?{asset_bytes:(options.image?picture:video).length,asset_sha256:crypto.createHash('sha256').update(options.image?picture:video).digest('hex')}:{})}]});
+ const code=issuePairing(db,db.screens[0]);const paired=deviceRoute(db,'POST',['pair'],{code:code.code},null,{playlist:callback,playerProtocol:2}).body;
  if(options.diagnostic){db.campaigns=[];require('./load-lib.cjs')('diagnostics').requestDiagnostic(db,db.screens[0],{id:'admin'},{config,config_version:7});}
  const server=http.createServer(async(req,res)=>{
-  const u=new URL(req.url,'http://localhost');requests.push({method:req.method,path:u.pathname});
+  const u=new URL(req.url,'http://localhost');if(u.pathname.startsWith('/_next/static/'))u.pathname=u.pathname.replace('/_next/static/','/');requests.push({method:req.method,path:u.pathname});
+  if(u.pathname==='/player-sw.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(root,'public/player-sw.js')));return;}
   if(u.pathname.startsWith('/api/playlist/')&&options.failFirstPlaylist&&!playlistFailed){playlistFailed=true;res.writeHead(503,{'Content-Type':'application/json'});res.end('{"error":"Fixture connection failed"}');return;}
   if(u.pathname.startsWith('/models/coco-ssd/')){res.setHeader('Content-Type',u.pathname.endsWith('.json')?'application/json':'application/octet-stream');res.end(fs.readFileSync(path.join(root,'public',u.pathname)));return;}
   if(u.pathname==='/tf.js'||u.pathname==='/coco.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(root,u.pathname==='/tf.js'?'node_modules/@tensorflow/tfjs/dist/tf.min.js':'node_modules/@tensorflow-models/coco-ssd/dist/coco-ssd.min.js')));return;}
   if(u.pathname.startsWith('/api/')){
    let data='';for await(const part of req)data+=part;
    const body=data?JSON.parse(data):{},token=req.headers.authorization?.replace(/^Bearer /,'');
-   const result=deviceRoute(db,req.method,u.pathname.slice(5).split('/'),body,token,{playlist:callback});
+   const result=deviceRoute(db,req.method,u.pathname.slice(5).split('/'),body,token,{playlist:callback,playerProtocol:2});
    if(u.pathname==='/api/diagnostic/result'&&options.loseFirstDiagnosticAck&&!failedAck){failedAck=true;res.writeHead(503,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'Diagnostic accepted; acknowledgement lost'}));return;}
    if(u.pathname==='/api/play'){
     bodies.push(body);replies.push(result);stopItems=!options.continuous;
@@ -69,11 +75,12 @@ async function harness(options={}) {
    res.writeHead(result?.status||200,{'Content-Type':'application/json'});res.end(JSON.stringify(result?.body||{}));return;
   }
   if(u.pathname==='/diagnostics/screen-test.mp4'){const clip=fs.readFileSync(path.join(root,'public/diagnostics/screen-test.mp4'));res.writeHead(200,{'Content-Type':'video/mp4','Content-Length':clip.length});res.end(clip);return;}
+  if(u.pathname==='/fixture.png'){res.writeHead(200,{'Content-Type':'image/png','Content-Length':picture.length});res.end(picture);return;}
   if(u.pathname==='/fixture.webm'){res.writeHead(200,{'Content-Type':'video/webm','Content-Length':video.length});res.end(video);return;}
   if(u.pathname==='/react.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(root,'node_modules/react/umd/react.development.js')));return;}
   if(u.pathname==='/react-dom.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(root,'node_modules/react-dom/umd/react-dom.development.js')));return;}
   if(u.pathname==='/player.js'){res.setHeader('Content-Type','application/javascript');res.end(bundle());return;}
-  res.setHeader('Content-Type','text/html');res.end('<!doctype html><html><head><meta charset="utf-8"><title>Gridcast player integration fixture</title></head><body><div id="root"></div><script src="/react.js"></script><script src="/react-dom.js"></script>'+(options.realModel?'<script src="/tf.js"></script><script src="/coco.js"></script>':'')+'<script src="/player.js"></script></body></html>');
+  res.setHeader('Content-Type','text/html');res.end('<!doctype html><html><head><meta charset="utf-8"><title>Gridcast player integration fixture</title></head><body><div id="root"></div><script src="/_next/static/react.js"></script><script src="/_next/static/react-dom.js"></script>'+(options.realModel?'<script src="/tf.js"></script><script src="/coco.js"></script>':'')+'<script src="/_next/static/player.js"></script></body></html>');
  });
  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});base=`http://127.0.0.1:${server.address().port}`;
  let browser;
@@ -93,7 +100,7 @@ async function harness(options={}) {
       const result=await original({audio:false,video:{width:640,height:480}});window.fixtureStream=result;return result;
     };
   },{credential:{token:paired.token,device_id:paired.device.id,screen_id:'screen1'},options});
-  await Promise.race([pageFailure,(async()=>{await page.goto(base);if(!options.empty)await page.waitForFunction(()=>{const v=document.querySelector('video');return v&&!v.paused&&v.currentTime>.1;},{},{timeout:15000});})()]);
+  await Promise.race([pageFailure,(async()=>{await page.goto(base+'/player');if(options.image)await page.waitForFunction(()=>document.querySelector('img')?.naturalWidth>0);else if(!options.empty)await page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.1;},{},{timeout:15000});})()]);
   return {page,db,requests,bodies,replies,paired,pageErrors,cleanup:async()=>{await browser.close();await new Promise(r=>server.close(r));fs.rmSync(temp,{recursive:true,force:true});assert.deepEqual(pageErrors,[],'Player fixture must not have uncaught browser errors');}};
  }catch(e){await browser?.close();await new Promise(r=>server.close(r));fs.rmSync(temp,{recursive:true,force:true});throw e;}
 }
@@ -102,12 +109,12 @@ test('actual native media excludes paused/waiting time, emits one delivery, and 
  const h=await harness();try{
   assert.ok((await h.page.locator('body').innerText()).includes('Media playback'));
   assert.ok(!(await h.page.locator('body').innerText()).includes('Browser fixture'));
-  await h.page.evaluate(()=>{const v=document.querySelector('video');v.pause();v.dispatchEvent(new Event('waiting'));});
+  await h.page.evaluate(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');window.fixtureFirstVideo=v;v.pause();v.dispatchEvent(new Event('waiting'));});
   await new Promise(r=>setTimeout(r,1200));
-  await h.page.evaluate(()=>document.querySelector('video').play());
+  await h.page.evaluate(()=>document.querySelector('video[data-role="creative"][data-active="true"]').play());
   await waitFor(()=>h.bodies.length>0);
   // The slot already finalized. Late duplicate browser end notifications cannot append it again.
-  await h.page.evaluate(()=>{const v=document.querySelector('video');v.dispatchEvent(new Event('ended'));v.dispatchEvent(new Event('ended'));});
+  await h.page.evaluate(()=>{const v=window.fixtureFirstVideo;v.dispatchEvent(new Event('ended'));v.dispatchEvent(new Event('ended'));});
   await new Promise(r=>setTimeout(r,100));
   assert.equal(h.bodies.length,1);assert.equal(h.db.plays.length,1);
   const body=h.bodies[0];assert.ok(body.playing_duration_ms>=1800&&body.playing_duration_ms<=2200,JSON.stringify(body));
@@ -139,13 +146,12 @@ test('fake camera and deterministic detector carry the actual model version and 
  }finally{await h.cleanup();}
 });
 
-test('underfilled four-second loop pads idle time without billing or replaying the two-second ad early', {skip:!executablePath||!ffmpeg}, async()=>{
+test('continuous rotation restarts the two-second ad without waiting for the old four-second loop', {skip:!executablePath||!ffmpeg}, async()=>{
  const h=await harness({continuous:true});try{
   await waitFor(()=>h.bodies.length===1);const first=h.bodies[0];
-  await new Promise(r=>setTimeout(r,1000));assert.equal(h.bodies.length,1);
-  assert.ok(await h.page.getByText(/Reserved loop time/).count());
+  assert.equal(await h.page.getByText(/Reserved loop time/).count(),0);
   await waitFor(()=>h.bodies.length===2,10000);const second=h.bodies[1];
-  assert.ok(Date.parse(second.started_at_device)-Date.parse(first.started_at_device)>=3800);
+  assert.ok(Date.parse(second.started_at_device)-Date.parse(first.started_at_device)<2800, 'No fixed loop padding or intentional 300ms pause');
   assert.equal(h.db.plays.length,2);assert.equal(h.db.campaigns[0].accrued_spend,4);
  }finally{await h.cleanup();}
 });
@@ -154,8 +160,8 @@ test('camera track ending mid-play invalidates earlier samples and following pla
  const h=await harness({modelWorking:true,continuous:true});try{
   await waitFor(()=>h.bodies.length>=1);
   // Wait for a later play that begins with a healthy camera and captures a sample.
-  await h.page.waitForFunction(()=>{const v=document.querySelector('video');return v&&!v.paused&&v.currentTime>.7&&v.currentTime<1.5;});
-  await h.page.evaluate(()=>{const camera=document.querySelectorAll('video')[1];camera.srcObject.getVideoTracks().forEach(t=>{t.stop();t.dispatchEvent(new Event('ended'));});});
+  await h.page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.7&&v.currentTime<1.5;});
+  await h.page.evaluate(()=>{const camera=document.querySelector('video[data-role="camera"]');camera.srcObject.getVideoTracks().forEach(t=>{t.stop();t.dispatchEvent(new Event('ended'));});});
   await waitFor(()=>h.bodies.length>=2);
   const failed=h.bodies[1];assert.equal(failed.measured,false);assert.equal(failed.avg_persons,null);assert.equal(failed.sample_count,0);assert.equal(failed.model_ver,null);
   await waitFor(()=>h.bodies.length>=3,15000);assert.equal(h.bodies[2].measured,false);assert.equal(h.bodies[2].avg_persons,null);
@@ -164,10 +170,10 @@ test('camera track ending mid-play invalidates earlier samples and following pla
 test('camera recovery does not relabel the interrupted play but restores measurement for a later play', {skip:!executablePath||!ffmpeg}, async()=>{
  const h=await harness({modelWorking:true,continuous:true});try{
   await waitFor(()=>h.bodies.length>=1);
-  await h.page.waitForFunction(()=>{const v=document.querySelector('video');return v&&!v.paused&&v.currentTime>.7&&v.currentTime<1.5;});
-  await h.page.evaluate(()=>document.querySelectorAll('video')[1].pause());
+  await h.page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.7&&v.currentTime<1.5;});
+  await h.page.evaluate(()=>document.querySelector('video[data-role="camera"]').pause());
   await new Promise(r=>setTimeout(r,150));
-  await h.page.evaluate(()=>document.querySelectorAll('video')[1].play());
+  await h.page.evaluate(()=>document.querySelector('video[data-role="camera"]').play());
   await waitFor(()=>h.bodies.length>=2);assert.equal(h.bodies[1].measured,false);assert.equal(h.bodies[1].avg_persons,null);
   await waitFor(()=>h.bodies.length>=3,15000);assert.equal(h.bodies[2].measured,true);assert.equal(h.bodies[2].avg_persons,1);
  }finally{await h.cleanup();}
@@ -200,9 +206,9 @@ test('recovered first playlist initializes camera, applies capture settings and 
   assert.equal(constraints.video.deviceId.exact,'chosen-camera');assert.equal(constraints.video.width.ideal,320);assert.equal(constraints.video.frameRate.ideal,15);
   await new Promise(r=>setTimeout(r,1200));assert.equal(await h.page.evaluate(()=>window.fixtureDetectCalls?.length||0),0);
   assert.equal(h.bodies.length,0);
-  await h.page.evaluate(()=>document.querySelectorAll('video')[1].pause());
+  await h.page.evaluate(()=>document.querySelector('video[data-role="camera"]').pause());
   await h.page.getByText(/Camera interrupted/).waitFor();
-  await h.page.evaluate(()=>document.querySelectorAll('video')[1].play());
+  await h.page.evaluate(()=>document.querySelector('video[data-role="camera"]').play());
   await h.page.getByText(/Ready · counts update/).waitFor();
  }finally{await h.cleanup();}
 });
@@ -211,12 +217,12 @@ test('inference uses bounded frames and a delayed result cannot cross a pause/re
   await waitFor(()=>h.bodies.length>=1);
   await h.page.evaluate(()=>{window.fixtureDetectWait=true;window.fixtureDetectCalls=[];});
   await h.page.waitForFunction(()=>!!window.fixtureReleaseDetect);
-  await h.page.evaluate(async()=>{const v=document.querySelector('video');v.pause();await v.play();window.fixtureReleaseDetect();});
+  await h.page.evaluate(async()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');v.pause();await v.play();window.fixtureReleaseDetect();});
   await h.page.waitForFunction(()=>window.fixtureFrame.getContext('2d').getImageData(0,0,1,1).data[3]===0);
-  await h.page.evaluate(()=>document.querySelector('video').pause());
+  await h.page.evaluate(()=>document.querySelector('video[data-role="creative"][data-active="true"]').pause());
   await new Promise(r=>setTimeout(r,700));
   assert.equal(await h.page.evaluate(()=>window.fixtureDetectCalls.length),1,'No repeated inference while paused');
-  await h.page.evaluate(()=>{window.fixtureDetectWait=false;document.querySelector('video').dispatchEvent(new Event('ended'));});
+  await h.page.evaluate(()=>{window.fixtureDetectWait=false;document.querySelector('video[data-role="creative"][data-active="true"]').dispatchEvent(new Event('ended'));});
   await waitFor(()=>h.bodies.length>=2);
   assert.equal(h.bodies[1].sample_count,0);assert.equal(h.bodies[1].measured,false);
   const calls=await h.page.evaluate(()=>window.fixtureDetectCalls);assert.equal(calls[0].width,320);assert.equal(calls[0].height,240);assert.ok(calls.every(c=>c.playing));
@@ -265,5 +271,46 @@ test('diagnostic native playback requires no campaign, keeps commercial storage 
   await new Promise(r=>setTimeout(r,1500));
   assert.equal(h.requests.filter(r=>r.path==='/api/diagnostic/start').length,1);
   assert.equal(h.db.diagnostic_results.length,1);
+ }finally{await h.cleanup();}
+});
+
+
+test('uploaded image waits for decode and reports visible duration with no video timeline claim', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({image:true,continuous:true});try{
+  await waitFor(()=>h.bodies.length>0);
+  const body=h.bodies[0];assert.equal(body.media_evidence,'image_decode');assert.equal(body.decoded_width,128);assert.equal(body.decoded_height,72);
+  assert.ok(body.visible_duration_ms>=2000);assert.equal(body.media_ended_s,0);assert.equal(body.ended_reason,'duration_observed');assert.equal(h.replies[0].body.billable,true);
+ }finally{await h.cleanup();}
+});
+
+
+test('uploaded media and player shell restart offline with saved allowances and buffered receipts', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({offline:true,continuous:true});try{
+  await h.page.waitForFunction(async()=>!!navigator.serviceWorker.controller && !!(await window.fixtureCache.readySchedule(JSON.parse(localStorage.getItem('gc_device')).device_id)));
+  await h.page.waitForFunction(async()=>{const c=await caches.open('gridcast-player-shell-v1');return !!(await c.match('/_next/static/player.js'))&&!!(await c.match('/_next/static/react.js'))&&!!(await c.match('/_next/static/react-dom.js'))});
+  await h.page.context().setOffline(true);await h.page.reload();
+  await h.page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.1;});
+  await h.page.waitForFunction(async id=>(await window.fixtureQueue.queueStatus(id)).pending>=1,h.paired.device.id);
+  assert.ok((await h.page.locator('body').innerText()).includes('saved authorisations'));
+  await h.page.context().setOffline(false);await waitFor(()=>h.bodies.length>0);
+ }finally{await h.cleanup();}
+});
+
+
+test('filler rotates without attributing a campaign or charging an advertiser', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({filler:true,continuous:true});try{
+  await waitFor(()=>h.bodies.length>=2);
+  assert.ok(h.bodies.every(b=>b.kind==='filler'&&b.campaign_id===null));
+  assert.ok(h.db.plays.every(p=>p.kind==='filler'&&!p.billable&&p.campaign_id===null));
+  assert.equal(h.db.campaigns[0].accrued_spend,0);
+ }finally{await h.cleanup();}
+});
+
+test('hiding an image interrupts display evidence and cannot bill its remaining timer', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({image:true,continuous:true});try{
+  await h.page.waitForFunction(()=>document.body.innerText.includes('Playing'));
+  await h.page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});document.dispatchEvent(new Event('visibilitychange'));});
+  await waitFor(()=>h.bodies.length>0);
+  assert.equal(h.bodies[0].ended_reason,'interrupted');assert.ok(h.bodies[0].visible_duration_ms<2000);assert.equal(h.replies[0].body.billable,false);
  }finally{await h.cleanup();}
 });

@@ -1,3 +1,4 @@
+import { reserveBudget, budgetReceipt, physicalPlays } from './budgets';
 import { accrueSettlement, appliedOffset, economics } from './settlement';
 import crypto from 'crypto';
 import { playerReadiness } from './readiness';
@@ -8,11 +9,13 @@ const iso = (n: number) => new Date(n).toISOString();
 const safeScreen = (s: any) => ({ id: s.id, name: s.name, has_camera: !!s.has_camera, loop_length_s: s.loop_length_s });
 // Only playback inputs cross the device boundary. Pricing, client labels and future internal
 // item fields stay server-side; assignment signatures and frozen billing rows use the original item.
-function playbackItem(item: any, assignmentId: string, validUntil: string) {
+function playbackItem(item: any, assignment: any) {
   return { campaign_id: item.campaign_id, creative_id: item.creative_id, youtube_id: item.youtube_id,
     duration_s: item.duration_s, asset_id: item.asset_id, asset_url: item.asset_url,
     width: item.width, height: item.height, letterbox: item.letterbox,
-    assignment_id: assignmentId, valid_until: validUntil };
+    kind: item.kind === 'filler' ? 'filler' : 'paid', media_type: item.media_type || 'video',
+    asset_sha256: item.asset_sha256, asset_bytes: item.asset_bytes, asset_mime: item.asset_mime,
+    assignment_id: assignment.id, valid_until: assignment.valid_until, accept_until: assignment.accept_until, max_plays: assignment.max_plays };
 }
 export const pairingCodeHash = (code: string) => hash(code.trim().toUpperCase());
 export const playRecordId = (deviceId: string, playUid: string) => 'play_' + hash(deviceId + '\0' + playUid);
@@ -45,8 +48,8 @@ function canonical(v: any): string {
   if (v && typeof v === 'object') return '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + canonical(v[k])).join(',') + '}';
   return JSON.stringify(v);
 }
-type Playlist = { items: any[]; config: Record<string, any>; config_version: string | number; rotation_version?: string; readiness?: { ready: boolean; code: string; message: string; warnings: string[] } };
-type Options = { playlist: (screen: any, device: any, rotationIndex?: number) => Playlist; now?: number; clientKey?: string };
+type Playlist = { items: any[]; filler_items?: any[]; config: Record<string, any>; config_version: string | number; rotation_version?: string; readiness?: { ready: boolean; code: string; message: string; warnings: string[] } };
+type Options = { playlist: (screen: any, device: any, rotationIndex?: number) => Playlist; now?: number; clientKey?: string; playerProtocol?: number };
 type Result = { status?: number; body: any; changed: boolean };
 const fail = (status: number, error: string): Result => ({ status, body: { error }, changed: false });
 const attempts = new Map<string, { at: number; count: number }>();
@@ -95,11 +98,14 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
     return { changed: true, body: { ok: true, server_time: iso(now), config_version: options.playlist(screen, device).config_version } };
   }
   if (seg[0] === 'playlist') {
+    if ((options.playerProtocol || 0) < 2) return {changed:false,body:{screen:safeScreen(screen),items:[],filler_items:[],reload_required:true,server_time:iso(now)}};
     const held = device.assignment_set;
     const heldIndex = Number.isSafeInteger(held?.rotation_index) && held.rotation_index >= 0 ? held.rotation_index : 0;
     let rotationIndex = heldIndex;
-    let p = options.playlist(screen, device, rotationIndex);
-    const until = now + ASSIGNMENT_TTL;
+    const playlistAt = (index: number) => { const p = options.playlist(screen,device,index); return {...p,items:[...p.items,...(p.filler_items || []).map((i: any) => ({...i,kind:'filler',campaign_id:null}))]}; };
+    let p = playlistAt(rotationIndex);
+    const until = Math.min(now + (p.items.every((i: any) => i.asset_id) ? 24 * 3600e3 : ASSIGNMENT_TTL),
+      ...p.items.map((i: any) => Number.isFinite(Date.parse(i.authorization_until)) ? Date.parse(i.authorization_until) : Infinity));
     db.device_assignments ||= [];
     // Re-issuing identical assignments on every poll is what made the usage ledger unbounded, and an
     // unbounded ledger is one that has to evict — which hands back allowances that were already spent.
@@ -112,7 +118,7 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
       const frozen = p.items.map((item: any) => {
       const c = db.campaigns.find((x: any) => x.id === item.campaign_id);
       return [item.campaign_id, c?.advertiser_id || null, item.creative_id, item.youtube_id || null, item.asset_id || null,
-        economics(item), item.duration_s, item.rate_type ?? c?.rate_type ?? 'flat', Number(item.rate_value ?? c?.rate_value) || 0,
+        economics(item), item.duration_s, item.media_type || 'video', item.width || null, item.height || null, item.kind || 'paid', item.asset_sha256 || null, item.rate_type ?? c?.rate_type ?? 'flat', Number(item.rate_value ?? c?.rate_value) || 0, c?.committed_budget ?? null,
         p.config_version, p.config.camera_fail_mode || 'continue', p.config.model || null,
         Number(p.config.sample_interval_s) || 2, Number(p.config.count_ceiling) || 50];
     });
@@ -120,33 +126,43 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
     };
     let signature = playlistSignature(p);
     if (held && held.signature === signature && Date.parse(held.valid_until) > now + 60e3
-      && Array.isArray(held.ids) && held.ids.length === p.items.length) {
-      const items = p.items.map((item: any, i: number) => playbackItem(item, held.ids[i], held.valid_until));
-      return { changed: true, body: { screen: safeScreen(screen), items, config: p.config, config_version: p.config_version, server_time: iso(now), readiness: playerReadiness(p.readiness), diagnostic: diagnosticOffer(db, screen, device, now), valid_until: held.valid_until } };
+      && Array.isArray(held.ids)
+      && (!held.ids.some((id: string) => db.device_assignments.find((a: any) => a.id === id)?.kind !== 'filler')
+        || held.ids.some((id: string) => { const a = db.device_assignments.find((a: any) => a.id === id); return a && a.kind !== 'filler' && (Number(device.assignment_uses?.find((u: any) => u.id === id)?.n) || 0) < a.max_plays; }))
+      && held.ids.every((id: string) => db.device_assignments.some((a: any) => a.id === id && Number.isSafeInteger(a.max_plays)))) {
+      const items = held.ids.flatMap((id: string) => {
+        const a = db.device_assignments.find((a: any) => a.id === id);
+        const item = p.items.find((i: any) => i.campaign_id === a.campaign_id && i.creative_id === a.creative_id);
+        return item ? [playbackItem(item,a)] : [];
+      });
+      return { changed: true, body: { screen: safeScreen(screen), scheduling_mode:'continuous', budget_state: items.filter((i: any) => i.kind !== 'filler').length < p.items.filter((i: any) => i.kind !== 'filler').length ? 'reserved_elsewhere_or_exhausted' : 'available', items: items.filter((i: any) => i.kind !== 'filler'), filler_items: items.filter((i: any) => i.kind === 'filler'), config: p.config, config_version: p.config_version, server_time: iso(now), readiness: playerReadiness(p.readiness), diagnostic: diagnosticOffer(db, screen, device, now), valid_until: held.valid_until } };
     }
     // Advance only when this transaction actually mints a replacement set. Retries and calendar
     // boundaries use the persisted phase above; final-minute renewal advances exactly once.
     if (held) {
       rotationIndex = heldIndex < Number.MAX_SAFE_INTEGER ? heldIndex + 1 : 0;
-      p = options.playlist(screen, device, rotationIndex);
+      p = playlistAt(rotationIndex);
       signature = playlistSignature(p);
     }
-    const items = p.items.map((item: any) => {
+    const items = p.items.flatMap((item: any) => {
       const c = db.campaigns.find((c: any) => c.id === item.campaign_id);
       const a = { ...economics(item), id: 'assignment_' + crypto.randomUUID(), device_id: device.id, org_id: screen.org_id, screen_id: screen.id,
+        kind: item.kind === 'filler' ? 'filler' : 'paid', media_type: item.media_type || 'video', width:item.width ?? null, height:item.height ?? null, max_plays: 0,
         campaign_id: item.campaign_id, advertiser_id: c?.advertiser_id || null, creative_id: item.creative_id, youtube_id: item.youtube_id || null, asset_id: item.asset_id || null,
         duration_s: item.duration_s, rate_type: item.rate_type ?? c?.rate_type ?? 'flat', rate_value: Number(item.rate_value ?? c?.rate_value) || 0,
         issued_at: iso(now), valid_until: iso(until), accept_until: iso(now + BACKLOG_TTL), config_version: p.config_version,
         camera_fail_mode: p.config.camera_fail_mode || 'continue', model_configured: p.config.model || null, sample_interval_s: Number(p.config.sample_interval_s) || 2, count_ceiling: Number(p.config.count_ceiling) || 50 };
-      db.device_assignments.push(a); return playbackItem(item, a.id, a.valid_until);
+      const max = a.kind === 'filler' ? physicalPlays(a) : c ? reserveBudget(db,c,a,physicalPlays(a),now) : 0;
+      if (!max) return []; a.max_plays = max;
+      db.device_assignments.push(a); return [playbackItem(item, a)];
     });
     device.assignment_set = { signature, rotation_index: rotationIndex, valid_until: iso(until), ids: items.map((i: any) => i.assignment_id) };
-    return { changed: true, body: { screen: safeScreen(screen), items, config: p.config, config_version: p.config_version, server_time: iso(now), readiness: playerReadiness(p.readiness), diagnostic: diagnosticOffer(db, screen, device, now), valid_until: iso(until) } };
+    return { changed: true, body: { screen: safeScreen(screen), scheduling_mode:'continuous', budget_state: items.filter((i: any) => i.kind !== 'filler').length < p.items.filter((i: any) => i.kind !== 'filler').length ? 'reserved_elsewhere_or_exhausted' : 'available', items: items.filter((i: any) => i.kind !== 'filler'), filler_items: items.filter((i: any) => i.kind === 'filler'), config: p.config, config_version: p.config_version, server_time: iso(now), readiness: playerReadiness(p.readiness), diagnostic: diagnosticOffer(db, screen, device, now), valid_until: iso(until) } };
   }
   const assignment = (db.device_assignments || []).find((a: any) => a.id === body.assignment_id && a.device_id === device.id && a.screen_id === screen.id);
   if (path === 'nowplaying') {
     if (!assignment || Date.parse(assignment.valid_until) < now) return fail(409, 'Playlist assignment expired');
-    device.now_playing = { campaign_id: assignment.campaign_id, creative_id: assignment.creative_id, duration_s: assignment.duration_s, started_at: iso(now) };
+    device.now_playing = { kind:assignment.kind || 'paid', media_type:assignment.media_type || 'video', campaign_id: assignment.campaign_id, creative_id: assignment.creative_id, duration_s: assignment.duration_s, started_at: iso(now) };
     return { changed: true, body: { ok: true } };
   }
   if (typeof body.play_uid !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(body.play_uid) || !Number.isSafeInteger(body.seq_no) || body.seq_no < 1) return fail(400, 'Invalid play identity');
@@ -171,14 +187,22 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
   // same way. Real skew beyond a few minutes is a fault to surface, not a billing window to grant.
   const OFFSET_LIMIT = 300e3, clamp = (v: number) => Math.max(-OFFSET_LIMIT, Math.min(OFFSET_LIMIT, v));
   const offset = appliedOffset(device,claimedOffset);
-  const timestampValid = start + offset >= Date.parse(assignment.issued_at) - 60e3 && start + offset <= Date.parse(assignment.valid_until) && end + offset <= now + 60e3;
+  const timestampValid = start + offset >= Date.parse(assignment.issued_at) - 60e3 && start + offset <= Date.parse(assignment.valid_until) && end + offset <= now + 60e3
+    && (!assignment.budget_version || end + offset <= Date.parse(assignment.valid_until) + 1000);
   const expected = Number(assignment.duration_s) * 1000, mediaStart = body.media_started_s, mediaEnd = body.media_ended_s;
-  if (!Number.isFinite(mediaStart) || !Number.isFinite(mediaEnd) || mediaStart < 0 || mediaEnd < 0) return fail(400, 'Invalid media progress');
-  const mediaValid = mediaStart <= 1 && mediaEnd >= mediaStart && (mediaEnd - mediaStart) * 1000 >= expected - Math.min(1000, expected * .05);
+  if (assignment.media_type !== 'image' && (!Number.isFinite(mediaStart) || !Number.isFinite(mediaEnd) || mediaStart < 0 || mediaEnd < 0)) return fail(400, 'Invalid media progress');
+  const image = assignment.media_type === 'image';
+  const imageValid = body.media_evidence === 'image_decode' && Number.isSafeInteger(body.decoded_width) && body.decoded_width > 0
+    && Number.isSafeInteger(body.decoded_height) && body.decoded_height > 0
+    && Number.isSafeInteger(assignment.width) && Number.isSafeInteger(assignment.height)
+    && body.decoded_width === assignment.width && body.decoded_height === assignment.height && Number.isFinite(body.visible_duration_ms)
+    && body.visible_duration_ms >= expected - Math.min(1000, expected * .05) && body.visible_duration_ms <= played + 1000;
+  const mediaValid = image ? imageValid : (body.media_evidence === undefined || body.media_evidence === 'media_timeline')
+    && mediaStart <= 1 && mediaEnd >= mediaStart && (mediaEnd - mediaStart) * 1000 >= expected - Math.min(1000, expected * .05);
   const durationValid = expected > 0 && played > 0 && played >= expected - Math.min(1000, expected * .05) && played <= expected + 5000;
   const completed = ['ended','duration_observed'].includes(body.ended_reason), cameraAllowed = body.measured || assignment.camera_fail_mode !== 'skip';
-  // An assignment is a slot in a loop, not a licence to bill: it can back only as many plays as its own
-  // validity window physically has room for, and a device can never claim more airtime than wall-clock time.
+  // An assignment grants a finite number of attempts within its validity window.
+  // Budget reservations cap paid attempts; physical throughput independently bounds claimed airtime.
   //
   // Both counters live on the DEVICE document, not on scanned play history and not on the assignment row.
   // The production snapshot deliberately hands device requests no play history (see firestore-store.ts),
@@ -187,7 +211,7 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
   // written in the same transaction as the play, which is exactly what this needs.
   const slotMs = Math.max(1000, Number(assignment.duration_s) * 1000);
   const assignmentWindow = Math.max(slotMs, Date.parse(assignment.valid_until) - Date.parse(assignment.issued_at));
-  const assignmentCap = Math.floor(assignmentWindow / slotMs) + 1;
+  const assignmentCap = Number.isSafeInteger(assignment.max_plays) ? assignment.max_plays : Math.floor(assignmentWindow / slotMs) + 1;
   // Kept only while the assignment can still be played into; entries are dropped by expiry, never by age,
   // so evicting one can never hand back an allowance that was already spent.
   const uses: any[] = (Array.isArray(device.assignment_uses) ? device.assignment_uses : [])
@@ -208,24 +232,31 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
   // Rendered, measured and billable are three different questions. A slot can play in full and still be
   // unbillable on clock, quota or camera policy; that is not the same as never having reached the screen.
   const rendered = completed && durationValid && mediaValid;
-  const billable = rendered && timestampValid && cameraAllowed && withinAssignment && withinThroughput;
-  const reasons = [!timestampValid && 'clock_or_assignment_window', !durationValid && 'incomplete_playing_duration', !mediaValid && 'incomplete_media_progress', !completed && body.ended_reason, !cameraAllowed && 'camera_required', !withinAssignment && 'assignment_replay_cap', !withinThroughput && 'device_throughput_exceeded'].filter(Boolean);
+  const paid = assignment.kind !== 'filler';
+  const candidateBillable = rendered && timestampValid && cameraAllowed && withinAssignment && withinThroughput && paid;
+  const campaign = db.campaigns.find((c: any) => c.id === assignment.campaign_id);
+  const budgetAllowed = paid ? budgetReceipt(db,campaign,assignment,true,candidateBillable,now) : true;
+  const billable = candidateBillable && budgetAllowed;
+  const reasons = [!paid && 'filler', !budgetAllowed && 'budget_allowance_exhausted', !timestampValid && 'clock_or_assignment_window', !durationValid && 'incomplete_playing_duration', !mediaValid && 'incomplete_media_progress', !completed && body.ended_reason, !cameraAllowed && 'camera_required', !withinAssignment && 'assignment_replay_cap', !withinThroughput && 'device_throughput_exceeded'].filter(Boolean);
   const play = { ...economics(assignment), id, play_uid: body.play_uid, seq_no: body.seq_no, device_id: device.id, org_id: screen.org_id, screen_id: screen.id,
     assignment_id: assignment.id, campaign_id: assignment.campaign_id, advertiser_id: assignment.advertiser_id, creative_id: assignment.creative_id, config_version: assignment.config_version,
     started_at: body.started_at_device, ended_at: body.ended_at_device, started_at_device: body.started_at_device, ended_at_device: body.ended_at_device,
-    duration_ms: played, playing_duration_ms: played, media_started_s: mediaStart, media_ended_s: mediaEnd, ended_reason: body.ended_reason,
+    kind: assignment.kind || 'paid', media_type: assignment.media_type || 'video',
+    duration_ms: played, playing_duration_ms: played, media_started_s: image ? null : mediaStart, media_ended_s: image ? null : mediaEnd,
+    media_evidence: image ? 'image_decode' : 'media_timeline', decoded_width: image ? body.decoded_width ?? null : null,
+    decoded_height: image ? body.decoded_height ?? null : null, visible_duration_ms: image ? body.visible_duration_ms ?? null : null, ended_reason: body.ended_reason,
     server_received_at: iso(now), delivery_lag_ms: now - (end + offset), server_clock_offset_ms: claimedOffset, applied_clock_offset_ms: offset,
     timestamp_valid: timestampValid, rendered, clock_offset_difference_ms: Number.isFinite(device.clock_offset_estimate_ms) ? claimedOffset - device.clock_offset_estimate_ms : null, billable, nonbillable_reasons: reasons, payload_hash: payloadHash, source: 'device_report', rate_type: assignment.rate_type, rate_value: assignment.rate_value };
   db.plays ||= []; db.presence ||= []; db.plays.push(play);
   db.presence.push({ id, play_id: id, advertiser_id: assignment.advertiser_id, device_id: device.id, org_id: screen.org_id, screen_id: screen.id,
     measured: body.measured, avg_persons: body.measured ? body.avg_persons : null, sample_count: body.sample_count,
     model_ver: body.measured ? body.model_ver : null, model_configured: assignment.model_configured, config_version: assignment.config_version,
-    at: body.ended_at_device, server_received_at: iso(now), source: 'device_report' });
-  // Only playback that actually rendered consumes quota, so a flood of malformed reports cannot burn
-  // through a screen's own legitimate allowance.
-  if (rendered) {
-    device.assignment_uses = [{ id: assignment.id, n: used + 1, exp: Date.parse(assignment.accept_until) || now + BACKLOG_TTL },
+    at: body.ended_at_device, server_received_at: iso(now), source: paid ? 'device_report' : 'filler_device_report' });
+  // Every accepted attempt consumes its local allowance, including an acknowledged load failure.
+  // Malformed reports returned above consume nothing; airtime still requires actual rendering.
+  device.assignment_uses = [{ id: assignment.id, n: used + 1, exp: Date.parse(assignment.accept_until) || now + BACKLOG_TTL },
       ...uses.filter((u: any) => u.id !== assignment.id)];
+  if (rendered) {
     device.airtime_buckets = [{ h: bucketKey, ms: spent + played }, ...buckets.filter((b: any) => b.h !== bucketKey)];
   }
   device.last_seq_no = Math.max(device.last_seq_no || 0, body.seq_no);

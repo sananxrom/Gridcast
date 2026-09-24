@@ -1,7 +1,7 @@
 'use client';
 import React, { useState } from 'react';
 import { api } from '@/lib/client';
-import { reverseCalculate, validateScreenInput, physicalCapacity, defaultSlotsPerLoop } from '@/lib/inventory';
+import { reverseCalculate, validateScreenInput } from '@/lib/inventory';
 import { inr } from '@/lib/utils';
 import { PageHead } from '@/components/ui/app-shell';
 import { Card } from '@/components/ui/card';
@@ -22,7 +22,7 @@ export function PairingCode({ pairing, onClose }: { pairing: {code:string;expire
 
 export function ScreenOnboarding({ user, boot, orgId, onGo, onDone }: { user:any; boot:any; orgId?:string|null; onGo:(g:string)=>void; onDone:(s:any)=>void }) {
   const mayPrice = boot.caps?.includes('sales'), mayMoney = boot.caps?.includes('money');
-  const [f,setF] = useState<any>({org_id:orgId??(user.role==='platform_admin'?'':user.org_id),name:'',venue_name:'',address:'',venue_type:'cafe',size_in:'43',orientation:'landscape',location_tier:'standard',loop_length_s:'600',slot_duration_s:'10',advertiser_slots:'10',from:'09:00',to:'21:00',owner_share_pct:'0',has_camera:false,tags:'',city:'Chandigarh',area:''});
+  const [f,setF] = useState<any>({org_id:orgId??(user.role==='platform_admin'?'':user.org_id),name:'',venue_name:'',address:'',venue_type:'cafe',size_in:'43',orientation:'landscape',location_tier:'standard',loop_length_s:'600',slot_duration_s:'10',min_creative_duration_s:'1',max_creative_duration_s:'600',advertiser_slots:'10',from:'09:00',to:'21:00',owner_share_pct:'0',has_camera:false,tags:'',city:'Chandigarh',area:''});
   const [seed,setSeed] = useState(false), [r,setR] = useState({monthly_revenue:'12000',client_count:'6',fill_percent:'60'});
   const [error,setError] = useState(''), [busy,setBusy] = useState(false), [created,setCreated] = useState<any>(null), [pairing,setPairing] = useState<any>(null);
   const change = (k:string,v:any)=>setF({...f,[k]:v});
@@ -30,7 +30,7 @@ export function ScreenOnboarding({ user, boot, orgId, onGo, onDone }: { user:any
   const tags=Object.fromEntries(String(f.tags).split(',').map((p:string)=>p.trim()).filter(Boolean).map((p:string)=>{const i=p.indexOf(':');return [i<0?p:p.slice(0,i).trim(),i<0?'':p.slice(i+1).trim()];}));
   try {
     // Placeholder names only permit a live price preview; submission validates actual required identity.
-    normalized=validateScreenInput({...f,name:f.name||'Preview',venue_name:f.venue_name||'Preview',address:f.address||'Preview',tags,loop_length_s:Number(f.loop_length_s),slot_duration_s:Number(f.slot_duration_s),advertiser_slots:Number(f.advertiser_slots),owner_share_pct:Number(f.owner_share_pct),operating_hours:{from:f.from,to:f.to}});
+    normalized=validateScreenInput({...f,name:f.name||'Preview',venue_name:f.venue_name||'Preview',address:f.address||'Preview',tags,min_creative_duration_s:Number(f.min_creative_duration_s),max_creative_duration_s:Number(f.max_creative_duration_s),loop_length_s:Number(f.loop_length_s),slot_duration_s:Number(f.slot_duration_s),advertiser_slots:Number(f.advertiser_slots),owner_share_pct:Number(f.owner_share_pct),operating_hours:{from:f.from,to:f.to}});
     if(seed) {
       const [fh,fm]=f.from.split(':').map(Number),[th,tm]=f.to.split(':').map(Number);
       const minutes=(th*60+tm-fh*60-fm+1440)%1440||1440;
@@ -42,7 +42,7 @@ export function ScreenOnboarding({ user, boot, orgId, onGo, onDone }: { user:any
     try {
       if(!f.org_id) throw new Error('Select an organisation first.');
       const s=validateScreenInput({...normalized,name:f.name,venue_name:f.venue_name,address:f.address});
-      const body:any={org_id:f.org_id,name:s.name,venue_name:s.venue_name,address:s.address,venue_type:s.venue_type,size_in:s.size_in,orientation:s.orientation,aspect:s.aspect,location_tier:s.location_tier,city:f.city,area:f.area,tags:s.tags,loop_length_s:s.loop_length_s,slot_duration_s:s.slot_duration_s,advertiser_slots:quote?.advertiser_slots??s.advertiser_slots,operating_hours:s.operating_hours,has_camera:s.has_camera};
+      const body:any={org_id:f.org_id,name:s.name,venue_name:s.venue_name,address:s.address,venue_type:s.venue_type,size_in:s.size_in,orientation:s.orientation,aspect:s.aspect,location_tier:s.location_tier,city:f.city,area:f.area,tags:s.tags,min_creative_duration_s:s.min_creative_duration_s,max_creative_duration_s:s.max_creative_duration_s,loop_length_s:s.loop_length_s,slot_duration_s:s.slot_duration_s,advertiser_slots:quote?.advertiser_slots??s.advertiser_slots,operating_hours:s.operating_hours,has_camera:s.has_camera};
       if(mayMoney) body.owner_share_pct=s.owner_share_pct;
       if(seed && mayPrice) {
         if(!quote) throw new Error(previewError||'Check the existing-price inputs.');
@@ -64,12 +64,13 @@ export function ScreenOnboarding({ user, boot, orgId, onGo, onDone }: { user:any
       <Field label="Location tier"><Select value={f.location_tier} onChange={e=>change('location_tier',e.target.value)}>{['prime','good','standard','peripheral'].map(v=><option key={v}>{v}</option>)}</Select></Field>
       <Field label="Custom tags (key:value, comma separated)"><Input value={f.tags} onChange={e=>change('tags',e.target.value)} placeholder="chain:local, floor:ground" /></Field>
     </div><label className="mt-4 flex items-center gap-2 text-sm"><input type="checkbox" checked={f.has_camera} onChange={e=>change('has_camera',e.target.checked)} />Camera available for presence measurement</label><p className="mt-2 text-xs text-muted-foreground">Presence stays unmeasured until the device actually reports valid samples.</p></Card>
-    <Card className="mb-4 p-5"><h3 className="mb-3 font-semibold">Loop and trading hours</h3><div className="grid gap-3 sm:grid-cols-3">
-      {[['loop_length_s','Loop length (seconds)'],['slot_duration_s','Base slot (seconds)'],['advertiser_slots','Distinct advertiser limit'],...(mayMoney?[['owner_share_pct','Owner share (%)']]:[])].map(([k,label])=><Field key={k} label={label}><Input type="number" value={f[k]} onChange={e=>change(k,e.target.value)} /></Field>)}
+    <Card className="mb-4 p-5"><h3 className="mb-3 font-semibold">Playback and trading hours</h3><div className="grid gap-3 sm:grid-cols-3">
+      {[['advertiser_slots','Distinct advertiser limit'],...(mayMoney?[['owner_share_pct','Owner share (%)']]:[])].map(([k,label])=><Field key={k} label={label}><Input type="number" value={f[k]} onChange={e=>change(k,e.target.value)} /></Field>)}
+      {[['min_creative_duration_s','Minimum creative seconds'],['max_creative_duration_s','Maximum creative seconds']].map(([key,label])=><Field key={key} label={label}><Input aria-label={label} type="number" min="1" max="600" step="0.1" value={f[key]} onChange={e=>change(key,e.target.value)}/></Field>)}
       <Field label="Opens (IST)"><Input type="time" value={f.from} onChange={e=>change('from',e.target.value)} /></Field><Field label="Closes (IST)"><Input type="time" value={f.to} onChange={e=>change('to',e.target.value)} /></Field>
-    </div>{normalized && <p className="mt-3 text-sm text-muted-foreground">{physicalCapacity(normalized)} physical base slots per loop · suggested {defaultSlotsPerLoop(normalized)} appearances per advertiser. Longer creative durations consume more capacity. Matching open/close times means 24 hours.</p>}</Card>
+    </div>{normalized && <p className="mt-3 text-sm text-muted-foreground">Continuous rotation uses each creative’s actual duration. Campaign weights set relative turns per round. With fewer campaigns, per-play budgets can be spent faster, within their reserved allowance. Matching open/close times means 24 hours.</p>}</Card>
     {mayPrice && <Card className="mb-4 p-5"><h3 className="mb-3 font-semibold">Starting price</h3><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={seed} onChange={e=>setSeed(e.target.checked)} />This screen already earns revenue — preserve its current price</label>
-      {seed ? <><div className="mt-4 grid gap-3 sm:grid-cols-3">{[['monthly_revenue','Monthly revenue (₹)'],['client_count','Current clients'],['fill_percent','Current fill (%)']].map(([k,label])=><Field key={k} label={label}><Input type="number" value={(r as any)[k]} onChange={e=>setR({...r,[k]:e.target.value})} /></Field>)}</div>{quote && <div className="mt-3 text-sm"><p><b>{inr(quote.seed_slot_price_month)}</b> per advertiser / month · {quote.advertiser_slots} advertisers at full capacity.</p><p className="mt-1 text-muted-foreground">{quote.entitlement.slots_per_loop} planned appearances per loop; derived quote {inr(quote.entitlement.per_play)} per play. Uses a 30-day month and your trading hours. Revenue is self-reported; delivery is not measured or guaranteed.</p>{quote.warnings.map((w:string)=><p className="mt-2 text-warn" key={w}>{w}</p>)}</div>}</> : normalized && <p className="mt-3 text-sm">Illustrative suggested price: <b>{inr(normalized.slot_price_month)}</b> per advertiser / month. Derived from venue, screen size and estimated location/exposure factors.</p>}
+      {seed ? <><div className="mt-4 grid gap-3 sm:grid-cols-3">{[['monthly_revenue','Monthly revenue (₹)'],['client_count','Current clients'],['fill_percent','Current fill (%)']].map(([k,label])=><Field key={k} label={label}><Input type="number" value={(r as any)[k]} onChange={e=>setR({...r,[k]:e.target.value})} /></Field>)}</div>{quote && <div className="mt-3 text-sm"><p><b>{inr(quote.seed_slot_price_month)}</b> per advertiser / month · {quote.advertiser_slots} advertisers at full capacity.</p><p className="mt-1 text-muted-foreground">This preserves your self-reported monthly price as a reference. Continuous rotation does not promise a fixed number of appearances. Set per-play rates and budgets explicitly on campaigns.</p>{quote.warnings.map((w:string)=><p className="mt-2 text-warn" key={w}>{w}</p>)}</div>}</> : normalized && <p className="mt-3 text-sm">Illustrative suggested price: <b>{inr(normalized.slot_price_month)}</b> per advertiser / month. Derived from venue, screen size and estimated location/exposure factors.</p>}
     </Card>}
     {previewError && <p className="mb-3 text-sm text-destructive" role="alert">{previewError}</p>}{error && <p className="mb-3 text-sm text-destructive" role="alert">{error}</p>}
     <div className="flex gap-2"><Button onClick={save} disabled={busy||!!previewError||!!created}>{busy?'Creating…':'Create screen'}</Button><Button variant="outline" onClick={()=>onGo('screens')}>Cancel</Button></div>

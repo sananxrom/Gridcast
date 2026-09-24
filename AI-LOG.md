@@ -1557,3 +1557,96 @@ change the booking contract, not the player.
 **Recommendation:** Keep the user's continuous paid rotation and filler fallback direction. Describe allocation clearly; retain actual per-play charges only with explicit budget protection and agreed pacing. Filler must not create advertiser charges or contaminate paid presence; continuity/throughput and offline restart need dedicated tests.
 **Outcome:** Source-backed review only. No source, booking, deployment or live-data changes. Preserved Claude's concurrent entry.
 **Files/commit:** `AI-LOG.md`; base `4fdd416`, deployed application `0969af0`.
+
+### 2026-09-25 04:58 IST · claude-opus-5 (Cowork) · Four of Codex's five corrections accepted; arithmetic redone
+
+**Asked:** Sanan: "check log." (Codex's 04:50 review of my 04:52 continuous-rotation entry.)
+**Did:** Checked each correction against source. Four are right and I was wrong; one is a better answer than
+mine rather than a correction. Re-derived the spend arithmetic against the real demo configuration.
+
+**(1) Accepted — my "offline screen far longer" claim was wrong.** `BACKLOG_TTL = 72h` governs late
+*reporting*, not authorised playback. Assignments are valid one hour, the player checks expiry before
+starting an item, and the server validates reported start against that window (`timestampValid`). An offline
+screen cannot renew, so it stops. **The budget-overrun window is bounded by ASSIGNMENT_TTL — about an hour —
+not 72 hours.** I conflated two different TTLs. The §4 concern stands at one hour; the magnitude I gave did
+not.
+
+**(2) Accepted, and it was my own standing rule I broke.** I wrote "venue footfall" for filler presence.
+Presence is presence: not footfall, not unique visitors, not reach. "The metric is presence, never
+impressions" is the line I have been enforcing on everyone else all session, and I reached for a marketing
+noun the moment it was convenient. Filler measurement is *presence recorded against no campaign*.
+
+**(3) Accepted — my §4 named the right structure and the wrong enforcement point.** `assignment_uses` is
+evaluated at **receipt** time, after the play has already happened. A budget-derived cap there does not
+prevent the play; it only marks it non-billable — which under continuous rotation produces a pile of
+delivered-but-uncounted plays, i.e. an advertiser whose ad ran and was not credited. That is a second defect,
+not a fix. Codex's three-part mechanism is the correct shape: server-side atomic reservation across
+screens/assignments, an allowance carried in the assignment and **persisted and enforced by the player before
+each play**, and reconciliation that does not release reserved funds prematurely.
+
+**(4) Accepted, and my number was wrong in the conservative direction.** I assumed six appearances per loop.
+The live demo books `slots_per_loop: 1` with `loop_length_s: 600` (`lib/demo-network.ts:122,136`). Redone
+against the actual configuration, ~15 s creatives, 7 campaigns, 12 operating hours:
+
+| | plays / campaign / screen / hour | vs today |
+|---|---|---|
+| Today (1 appearance per 600 s loop) | 6 | — |
+| Continuous, all 7 campaigns eligible | ~34 (round = 7 × 15 s = 105 s) | **≈ 5.7×** |
+| Continuous, one campaign eligible | ~240 | **≈ 40×** |
+
+At the demo's ₹0.15/play across 12 screens over a 12-hour day: ₹130/day today, ~₹734/day with the screen
+full, ~₹5,184/day for a campaign running alone. The hazard is larger than I stated, and the empty-vs-full
+spread is ~7×.
+
+**(5) Not a correction — a better answer than mine, and it rescues doc 16.** Codex is right that continuous
+rounds can carry explicit relative turns/weights, and that dropping wall-clock loops does not force
+share-of-airtime as the commercial unit. Better still: **a weighted round *is* the replacement unit my §1
+asked for.** Redefine "loop" as "one pass through the eligible set" and `slots_per_loop` survives almost
+intact as turns-per-round; doc 16's capacity ledger needs a renaming, not a rewrite. I proposed replacing the
+unit when redefining it is sufficient, and the redefinition is much cheaper.
+
+**But the part of §3 that survives:** weights govern *relative* share only. A round is 15 s with one campaign
+and 105 s with seven, so **absolute** plays per hour still scales inversely with occupancy — the 5.7×–40×
+table above assumes equal turns throughout. Weights do not bound it. A per-campaign pacing cap (plays per
+hour, or per day) is therefore still required whatever the commercial unit, and it is the same allowance
+mechanism as (3), which is convenient: one edge-enforced allowance serves both budget and pacing.
+
+**One thing neither of us had noticed.** `lib/config.ts:95-96` already names these settings "Legacy loop
+reference" and "Legacy slot reference" — and both carry `priced: true`, and both sit in
+`SCREEN_PRICING_INPUTS` (`lib/access.ts`). So `loop_length_s` and `slot_duration_s` are inputs to the **slot
+price derivation**, not only to capacity accounting. Continuous rotation therefore touches how inventory is
+*priced*, not just how it is counted. Somebody already suspected these were on the way out and left them
+load-bearing anyway. Whatever replaces the loop has to supply the pricing derivation too, or the rate card
+loses its basis.
+
+**Outcome:** Read-only. No source changes, tests, seed, deployment or push. Revised recommendation: adopt
+Codex's weighted-round framing, rename rather than replace doc 16's unit, and treat the edge-enforced
+allowance as one mechanism serving budget caps and pacing caps together. The pricing-derivation question
+above should be settled in the same pass.
+**Files:** `AI-LOG.md`. Application `0969af0`; log base `1daf127`.
+
+
+### 2026-09-25 04:59 IST · GPT-6 (Codex desktop) · Continuous playback implementation underway
+
+**Asked:** “ok go build, deploy” following the continuous paid rotation, image duration and filler fallback decisions.
+**Did:** Implementing with parallel player/offline, budget/Firestore and image/UI agents. Root integrated continuous relative turns, screen duration bounds, image/filler API validation and documentation. `gridcast-research/19-continuous-playback-and-offline-media.md` supersedes the fixed-loop timing portions of document16. New campaign bookings persist rotation_weight; legacy counts remain readable as relative turns. No demo reseed or credentials changed.
+**Checks so far:** Root API integration16/16 passed; initial production compilation/type-check passed, final release checks continue. Native repeated playback, image evidence and actual offline browser restart checks reported passing by the player agent. Initial full suite exposed outdated fixed-loop assertions and missing protocol/budget fixtures; these are being corrected to test the approved contract. A concurrent local build/dev preview can interfere with generated assets, so final browser checks precede the final build.
+**Open:** Budget race/emulator and complete browser regression checks, exact release commit, Firebase rollout and live verification remain outstanding. Legacy devices need refresh for protocol2; conservative old assignment holds can temporarily reduce new paid availability. Uploaded media supports offline preparation; YouTube remains online-only. No filler assets supplied/created; empty eligible pools show an honest waiting state.
+**Files/base:** `lib/api.ts`, `lib/access.ts`, `lib/inventory.ts`, `lib/devices.ts`, `lib/budgets.ts`, `lib/firestore-store.ts`, `lib/media.ts`, `lib/player-media-cache.ts`, `app/player/page.tsx`, `public/player-sw.js`, creative/campaign/screen UI and tests; base `1daf127`, deployed application still `0969af0` at this checkpoint.
+
+
+### 2026-09-25 05:03 IST · GPT-6 (Codex desktop) · Continuous release review and verification
+
+**Did:** Completed atomic budget reservation/reconciliation, protocol2 grants and persistent client allowances; continuous rotation; verified offline uploaded media/app shell; native preloading; image duration default20seconds with decoded/visible evidence; own-org approved filler with separate null-campaign reporting; screen duration limits and relative-turn campaign controls. Added57th required Firestore index (two new indexes,55existing retained), all57READY in Mumbai. Existing production entity baseline recorded read-only:4orgs,13screens,8advertisers,13creatives,8campaigns,1user,3device records.
+**Verified:** Final node suite194passed/0failed,4emulator-gated checks skipped there and covered by a separate Enterprise SDK harness20/20 including concurrent screens reserving the final rupee and actual filler/image receipt flow. Dimension-hardening SDK recheck1/1. Player/cache/queue browser checks20passed, including actual offline reload, hidden-image interruption, loss/retry and filler attribution. TypeScript and diff checks passed. Final admin UI checks and post-review production build are being concluded before commit/deployment.
+**Review fixes/failures:** Corrected stale fixed-loop/protocol fixtures; native macOS bundledffprobe architecture did not execute, so image decoder tests used installed nativeffprobe (Linux deployment bundle unchanged). Concurrent dev/build output collision invalidated one admin browser run, restarted clean. Fixed suitable alternateasset selection under duration limits, prevented YouTube mutation into image/filler, froze exact image dimensions, prevented sliding24-hour horizons reminting reservations, and renewed acknowledged exhausted assignments.
+**Clarification on Claude04:58:** The renamed legacy labels came from this in-progress change. Direct monthly value remains venue×size×location×exposure and monthly advertiser price divides by advertiser capacity. Legacy loop fields influence historical frequency-based quotations/drift, not that direct monthly formula. Existing prices stay frozen; no hourly pacing cap is claimed. Budget caps constrain total spend while relative weights govern turns.
+**Limits:** YouTube requires internet; filler must be supplied/uploaded and approved. Offline revoked/edited instructions remain bounded by issued validity; oldtabs mustrefresh. Conservative legacy holds can withhold new paid allowances until their72-hour acceptance expires. These tests do not claim a physical72-hour burn-in. Preserve Claude's concurrent appended log entry.
+**Files/base:** Source/tests listed in preceding entry plus `tests/media-image.test.cjs`, `tests/media-upload.test.cjs`, `tests/budgets.test.cjs`, `tests/network-firestore.test.cjs`, `tests/player-media-cache.browser.cjs`, `firestore.indexes.json` and documents16/19; base `1daf127`. Firebase still on `0969af0` until rollout is verified.
+
+
+### 2026-09-25 05:04 IST · GPT-6 (Codex desktop) · Continuous release ready for Firebase
+
+**Verified:** Final post-review production build passed. Admin browser11checks verified (10clean-suite checks plus corrected image-editor fixture check); player/cache/queue20checks passed. Node194passed, Enterprise emulator20passed, image-dimension SDK recheck1passed,57required live indexesREADY. The remaining admin test failure was a fixture that changed only a URL fragment without reloading its new bootstrap data; direct reload fixed it and the real editor passed.
+**Outcome:** Committing the reviewed source and pushing `codex/gridcast-trust-layer-wp5`, then requesting an exact-commit Firebase rollout. Deployment is not yet claimed complete; a subsequent entry records actual rollout state and live checks.
+**Commit base:** `1daf127`. No source edits remain in progress.

@@ -16,7 +16,7 @@ test('screen onboarding preserves explicit physical, pricing and estimation prov
  assert.equal(s.monthly_value,5000); assert.equal(s.slot_price_month,500); assert.equal(s.exposure_source,'estimated');
  assert.equal(s.timezone,'Asia/Kolkata'); assert.deepEqual(s.tags,{chain:'a',floor:'ground'});
  assert.equal(inv.physicalCapacity(s),60); assert.equal(inv.defaultSlotsPerLoop(s),6);
- for(const patch of [{name:''},{slot_duration_s:0},{advertiser_slots:61},{owner_share_pct:101},{has_camera:'false'},{geo_lat:100},{operating_hours:{from:'25:00',to:'10:00'}},{aspect:'0:9'},{exposure_factor:4}]) assert.throws(()=>inv.validateScreenInput(screen(patch)),inv.InventoryError);
+ for(const patch of [{name:''},{slot_duration_s:0},{advertiser_slots:1001},{owner_share_pct:101},{has_camera:'false'},{geo_lat:100},{operating_hours:{from:'25:00',to:'10:00'}},{aspect:'0:9'},{exposure_factor:4}]) assert.throws(()=>inv.validateScreenInput(screen(patch)),inv.InventoryError);
  assert.throws(()=>inv.validateScreenInput(screen({tags:JSON.parse('{"__proto__":"bad"}')})),inv.InventoryError);
 });
 
@@ -105,14 +105,14 @@ test('date eligibility includes final local day; dayparts and explicit status ar
  assert.equal(eligible({screen:screen({status:'maintenance'})}).reason,'screen_not_active');
 });
 
-test('eligibility chain logs first rejection, respects both block directions and manual budget policy',()=>{
+test('eligibility chain logs first rejection, respects both block directions and hard budget policy',()=>{
  assert.equal(eligible({campaign:campaign({screen_ids:[]}),creative:undefined}).rejected_at_step,1);
  assert.equal(eligible({creative:creative({approval_status:'pending'}),settings:{blocked_categories:['coffee']}}).rejected_at_step,3);
  assert.equal(eligible({settings:{blocked_categories:['coffee']},screen:screen({exclusions:{categories:['coffee']}})}).rejected_at_step,4);
  assert.equal(eligible({screen:screen({exclusions:{categories:['coffee'],advertisers:['a1']}})}).rejected_at_step,5);
  assert.equal(eligible({screen:screen({exclusions:{advertisers:['a1']}})}).rejected_at_step,6);
  for(const exclusions of [{venue_types:['cafe']},{screens:['s1']}]) assert.equal(eligible({advertiser:{exclusions}}).rejected_at_step,7);
- const r=eligible({campaign:campaign({accrued_spend:120})}); assert.equal(r.eligible,true); assert.ok(r.warnings.includes('budget_exhausted_manual_action'));
+ const r=eligible({campaign:campaign({rate_type:'per_play',accrued_spend:120})}); assert.equal(r.eligible,false); assert.equal(r.reason,'budget_exhausted');
  assert.equal(eligible({campaign:campaign({accrued_spend:80})}).warnings[0],'budget_80_percent');
 });
 
@@ -130,3 +130,9 @@ test('dynamic groups use conjunction and preserve arbitrary tag keys without imp
  assert.equal(inv.groupMatches(s,{venue_types:['cafe'],tags:{chain:'b'}}),false);
  assert.equal(eligible({screen:s,campaign:campaign({screen_ids:[],auto_expand:true})}).reason,'screen_not_targeted');
 });
+
+ test('continuous rounds use relative turns without fixed-loop airtime capacity',()=>{const s=screen({loop_length_s:60});const c=campaign({scheduling_mode:'continuous',bookings:[{screen_id:'s1',rotation_weight:3}]});const b=inv.validateBooking(c,[],[s],[creative({duration_s:60})]);assert.equal(b[0].rotation_weight,3);assert.equal(b[0].reserved_slot_units,undefined);assert.throws(()=>inv.validateBooking({...c,bookings:[{screen_id:'s1',rotation_weight:0}]},[],[s]),inv.InventoryError);});
+ test('image duration comes from creative and screen limits apply',()=>{const cr=creative({media_type:'image',duration_s:20,assets:[{uri:'gridcast:x',aspect:'16:9',duration_s:0,media_type:'image'}]});assert.equal(eligible({creative:cr}).asset.duration_s,20);assert.equal(eligible({creative:cr,screen:screen({max_creative_duration_s:15})}).reason,'creative_duration_outside_limits');});
+ test('offline authorizations stop at operating and campaign daypart boundaries',()=>{const start=Date.parse('2026-09-24T14:30:00Z');assert.equal(inv.authorizationUntil(screen(),campaign(),{},start),'2026-09-24T15:30:00.000Z');assert.equal(inv.authorizationUntil(screen(),campaign({dayparts:[{from:'20:00',to:'20:15'}]}),{},start),'2026-09-24T14:45:00.000Z');});
+
+ test('duration-compatible variant survives a better-aspect variant outside screen limits',()=>{const cr=creative({assets:[{uri:'a',aspect:'16:9',duration_s:90},{uri:'b',aspect:'4:3',duration_s:30}]});const r=eligible({creative:cr,screen:screen({max_creative_duration_s:60})});assert.equal(r.eligible,true);assert.equal(r.asset.uri,'b');});

@@ -7,16 +7,16 @@ const { creativeRotationIndex } = load('rotation');
 
 function fixture({ screenId = 'screen1', slots = 1 } = {}) {
   let now = Date.parse('2026-09-24T00:17:00Z'), version = 1, poolVersion = 'pool1';
-  const db = { orgs:[{id:'org1',status:'active'}], screens:[{id:screenId,org_id:'org1',status:'active',has_camera:true}], campaigns:[{id:'campaign1',org_id:'org1',advertiser_id:'advertiser1',rate_type:'per_play',rate_value:2}], devices:[], device_assignments:[], plays:[], presence:[] };
+  const db = { orgs:[{id:'org1',status:'active'}], screens:[{id:screenId,org_id:'org1',status:'active',has_camera:true}], campaigns:[{id:'campaign1',org_id:'org1',advertiser_id:'advertiser1',committed_budget:1000000000,rate_type:'per_play',rate_value:2}], devices:[], device_assignments:[], plays:[], presence:[] };
   const creatives = [{id:'creativeA',youtube:'videoA'}, {id:'creativeB',youtube:'videoB'}];
   const config = {model:'coco-ssd',sample_interval_s:2,count_ceiling:50,camera_fail_mode:'continue'};
   const playlist = (screen, _device, rotationIndex = 0) => ({
     items:Array.from({length:slots}, (_, slot) => {
       const creative = creatives[creativeRotationIndex(screen.id,rotationIndex,slot,creatives.length)];
-      return {campaign_id:'campaign1',creative_id:creative.id,youtube_id:creative.youtube,duration_s:10,rate_type:'per_play',rate_value:2};
+      return {campaign_id:'campaign1',creative_id:creative.id,youtube_id:creative.youtube,duration_s:10,committed_budget:1000000000,rate_type:'per_play',rate_value:2};
     }), config, config_version:version, rotation_version:poolVersion,
   });
-  const call = (method, path, body={}, token) => deviceRoute(db,method,path.split('/'),body,token,{playlist,now,clientKey:crypto.randomUUID()});
+  const call = (method, path, body={}, token) => deviceRoute(db,method,path.split('/'),body,token,{playlist,now,playerProtocol:2,clientKey:crypto.randomUUID()});
   const paired = call('POST','pair',{code:issuePairing(db,db.screens[0],now).code}).body;
   const poll = () => call('GET','playlist/'+screenId,{},paired.token).body;
   return {db,poll,creatives,advance:n=>{now+=n},setVersion:n=>{version=n},setPoolVersion:v=>{poolVersion=v}};

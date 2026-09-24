@@ -1,3 +1,4 @@
+import { ensureBudget, validateBudgetEdit } from './budgets';
 import { createHash } from 'node:crypto';
 import { creativeRotationIndex } from './rotation';
 import { economics, freezeEconomics } from './settlement';
@@ -10,7 +11,7 @@ import { AccessError, authorize, bootstrap, publicUser, orgView, screenView, adv
 import { seed, uid, nowISO, code6 } from './seed';
 import * as cfg from './config';
 import { deviceRoute, deviceIdFromToken, pairingCodeHash, issuePairing, revokeDevices } from './devices';
-import { InventoryError, validateScreenInput, reverseCalculate, validateBooking, eligibility, groupMatches, defaultSlotsPerLoop } from './inventory';
+import { InventoryError, validateScreenInput, reverseCalculate, validateBooking, eligibility, groupMatches, defaultSlotsPerLoop, rotationWeight, authorizationUntil } from './inventory';
 import { can, ROLES, PLATFORM_ADMIN, ADVERTISER, tabFor } from './roles';
 import { hashPassword, verifyPassword, issueToken, readToken, tempPassword, throttled, noteFailure, clearFailures, assertAuthConfigured, type Claims } from './auth';
 
@@ -33,6 +34,9 @@ const creationId = (prefix: string, body: any) => body.external_key ? prefix + '
 const bumpConfig = () => { db.settings ||= {}; db.settings.config_revision = (db.settings.config_revision || 0) + 1; };
 function freezeBookings(c: any, previousCampaign?: any) {
   const old = previousCampaign?.bookings || [];
+  if (previousCampaign) { ensureBudget(db,previousCampaign,Date.now()); if (c.committed_budget !== previousCampaign.committed_budget) validateBudgetEdit(db,c); }
+  if (previousCampaign && !previousCampaign.scheduling_mode) c.bookings = (c.screen_ids || []).map((id: string) => { const b = (c.bookings || []).find((x: any)=>x.screen_id === id); const s = db.screens.find((x: any)=>x.id === id); return b || {screen_id:id,rotation_weight:s ? rotationWeight(previousCampaign,s) : 1}; });
+  c.scheduling_mode = 'continuous';
   assertNoDiagnosticLease(db, [...(c.screen_ids || []), ...old.map((b: any) => b.screen_id)]);
   if (typeof c.name !== 'string' || !c.name.trim()) throw new AccessError(400, 'Campaign name is required');
   if (!['per_play','flat'].includes(c.rate_type) || typeof c.rate_value !== 'number' || !Number.isFinite(c.rate_value) || c.rate_value < 0 || typeof c.committed_budget !== 'number' || !Number.isFinite(c.committed_budget) || c.committed_budget < 0) throw new AccessError(400, 'Enter a valid campaign price and budget');
@@ -48,7 +52,7 @@ function validateInventory() {
   const screens = inventoryScreens(), ids = new Set(screens.map((s: any) => s.id));
   for (const c of db.campaigns) {
     const candidate = {...c,screen_ids:(c.screen_ids || []).filter((id: string) => ids.has(id)),bookings:c.bookings?.filter((b: any) => ids.has(b.screen_id))};
-    if (candidate.screen_ids.length) validateBooking(candidate,db.campaigns,screens,db.creatives,{previous:c,orgs:db.orgs});
+    if (candidate.screen_ids.length) validateBooking({...candidate,scheduling_mode:'continuous'},db.campaigns,screens,db.creatives,{previous:c,orgs:db.orgs});
   }
 }
 function playlistFor(screen: any, _device?: any, rotationIndex = 0) {
@@ -65,13 +69,22 @@ function playlistFor(screen: any, _device?: any, rotationIndex = 0) {
     }
     rotationPool.push([campaign.id,eligible.map(({creative,result}: any) => [creative.id,result.asset.asset_id || result.asset.youtube_id,result.asset.duration_s])]);
     const booking = campaign.bookings?.find((b: any) => b.screen_id === screen.id);
-    for (let n = 0; eligible.length && n < (booking?.slots_per_loop ?? defaultSlotsPerLoop(screen)); n++) {
+    for (let n = 0; eligible.length && n < rotationWeight(campaign,screen); n++) {
       const { result, creative } = eligible[creativeRotationIndex(screen.id,rotationIndex,n,eligible.length)], asset = result.asset;
-      items.push({ ...economics(booking), campaign_id: campaign.id, campaign_name: campaign.name, creative_id: creative.id, creative_name: creative.name, advertiser: advertiser?.name || '—', youtube_id: asset.youtube_id, duration_s: asset.duration_s, rate_value: booking?.rate_value ?? campaign.rate_value, rate_type: booking?.rate_type ?? campaign.rate_type, letterbox: result.letterbox, asset_id: asset.asset_id, asset_url: asset.storage_path ? mediaUrl(asset) : undefined, width: asset.width, height: asset.height });
+      items.push({ ...economics(booking), kind:'paid', media_type:asset.media_type || 'video', authorization_until:authorizationUntil(screen,campaign,config), asset_sha256:asset.sha256, asset_bytes:asset.bytes, asset_mime:asset.mime, campaign_id: campaign.id, campaign_name: campaign.name, creative_id: creative.id, creative_name: creative.name, advertiser: advertiser?.name || '—', youtube_id: asset.youtube_id, duration_s: asset.duration_s, rate_value: booking?.rate_value ?? campaign.rate_value, rate_type: booking?.rate_type ?? campaign.rate_type, letterbox: result.letterbox, asset_id: asset.asset_id, asset_url: asset.storage_path ? mediaUrl(asset) : undefined, width: asset.width, height: asset.height });
     }
     if (eligible.length && advertiser) loopAdvertisers.push(advertiser);
   }
-  return { items, rotation_version:createHash('sha256').update(JSON.stringify(rotationPool)).digest('hex'), config, config_version: db.settings?.config_revision || 1, decisions, readiness: summarizeReadiness(screen, db.campaigns.filter((c: any) => c.screen_ids?.includes(screen.id)), decisions, items.length) };
+  const filler_items: any[] = [];
+  if (screen.status === 'active' && db.orgs.find((o: any)=>o.id === screen.org_id)?.status === 'active') {
+    for (const cr of db.creatives.filter((c: any)=>c.org_id === screen.org_id && c.purpose === 'filler' && c.approval_status === 'approved')) {
+      if ((db.settings?.blocked_categories || db.settings?.category_blocklist || []).includes(cr.category) || (screen.exclusions?.categories || []).includes(cr.category)) continue;
+      const asset = (cr.assets || []).find((a: any)=>a.storage_path && (cr.media_type === 'image' ? cr.duration_s : a.duration_s) >= (screen.min_creative_duration_s ?? 1) && (cr.media_type === 'image' ? cr.duration_s : a.duration_s) <= (screen.max_creative_duration_s ?? 600));
+      if (!asset) continue;
+      filler_items.push({kind:'filler',campaign_id:null,creative_id:cr.id,creative_name:cr.name,media_type:cr.media_type || 'video',duration_s:cr.media_type === 'image' ? cr.duration_s : asset.duration_s,asset_id:asset.asset_id || asset.id,asset_url:mediaUrl(asset),asset_sha256:asset.sha256,asset_bytes:asset.bytes,asset_mime:asset.mime,width:asset.width,height:asset.height,authorization_until:authorizationUntil(screen,null,config)});
+    }
+  }
+  return { items, filler_items, scheduling_mode:'continuous', rotation_version:createHash('sha256').update(JSON.stringify([rotationPool,screen.operating_hours,config.operating_hours,screen.min_creative_duration_s,screen.max_creative_duration_s,db.campaigns.filter((c:any)=>c.screen_ids?.includes(screen.id)).map((c:any)=>[c.id,c.starts_at,c.ends_at,c.dayparts])])).digest('hex'), config, config_version: db.settings?.config_revision || 1, decisions, readiness: summarizeReadiness(screen, db.campaigns.filter((c: any) => c.screen_ids?.includes(screen.id)), decisions, items.length) };
 }
 const scope = (rows: any[], orgId: string, isAdmin: boolean) => (isAdmin ? rows : rows.filter(r => r.org_id === orgId));
 
@@ -148,7 +161,7 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     claims!.ver === (candidate.auth_version || 0) &&
     db.orgs.some((o: any) => o.id === candidate.org_id && o.status !== 'disabled') ? candidate : null;
   const pairingAudit = method === 'POST' && p === 'pair' ? auditSnapshot(db) : null;
-  const transport = deviceRoute(db, method, seg, body, token, { playlist: playlistFor, clientKey: clientKey || undefined });
+  const transport = deviceRoute(db, method, seg, body, token, { playlist: playlistFor, playerProtocol: Number(q.get('protocol') || 0), clientKey: clientKey || undefined });
   if (transport) {
     if (transport.changed) {
       if (pairingAudit && transport.body.device?.id) {
@@ -412,11 +425,12 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     if (method === 'GET') return { body: { org_id: creative.org_id } };
     const asset = openMedia(body.proof || '', 'upload');
     if (!asset || asset.creative_id !== creative.id || asset.org_id !== creative.org_id) throw new AccessError(400, 'Invalid verified asset');
-    if ((creative.assets || []).length >= 8) throw new AccessError(400,'A creative may have up to eight video variants');
+    if ((asset.media_type || 'video') !== (creative.media_type || 'video')) throw new AccessError(400,'Upload the media type selected for this creative');
+    if ((creative.assets || []).length >= 8) throw new AccessError(400,'A creative may have up to eight media variants');
     db.assets ||= []; db.assets.push(asset);
     creative.assets ||= []; creative.assets.push({ ...asset, uri: 'gridcast:' + asset.id });
-    creative.duration_s = Math.max(...creative.assets.map((a: any) => a.duration_s));
-    creative.aspect = asset.aspect; creative.approval_status = 'pending'; creative.metadata_source = 'server_ffprobe';
+    if (creative.media_type !== 'image') creative.duration_s = Math.max(...creative.assets.map((a: any) => a.duration_s));
+    creative.aspect = asset.aspect; creative.approval_status = 'pending'; creative.metadata_source = creative.media_type === 'image' ? 'server_image' : 'server_ffprobe';
     validateInventory(); await save(); return { status: 201, body: { creative, asset } };
   }
   if (method === 'POST' && seg[0] === 'creative' && seg[1] && !seg[2]) {
@@ -427,12 +441,14 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
       patch[key] = body[key].trim();
     }
     if ('youtube_id' in body) {
+      if (c.media_type === 'image' || c.purpose === 'filler') throw new AccessError(400,'Images and filler require uploaded media');
       if (typeof body.youtube_id !== 'string' || !/^[a-zA-Z0-9_-]{11}$/.test(body.youtube_id)) throw new AccessError(400, 'Enter a valid YouTube video ID');
       patch.youtube_id = body.youtube_id;
     }
     if ('duration_s' in body) {
       if (typeof body.duration_s !== 'number' || !Number.isFinite(body.duration_s) || body.duration_s <= 0 || body.duration_s > 86400) throw new AccessError(400, 'Duration must be between 0 and 86400 seconds');
-      if (!(patch.youtube_id || c.youtube_id)) throw new AccessError(400, 'Duration can only be edited for YouTube videos');
+      if (c.media_type !== 'image' && !(patch.youtube_id || c.youtube_id)) throw new AccessError(400, 'Duration can only be edited for images and YouTube videos');
+      if (c.media_type === 'image' && (body.duration_s < 1 || body.duration_s > 600)) throw new AccessError(400,'Image duration must be 1–600 seconds');
       patch.duration_s = body.duration_s;
     }
     if (patch.youtube_id && !(patch.duration_s || c.duration_s)) throw new AccessError(400, 'Enter the expected video duration');
@@ -440,12 +456,15 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     if (!changed.length) return {body:c};
     for (const key of changed) c[key] = patch[key];
     if (changed.some(key => key !== 'name')) { c.approval_status = 'pending'; delete c.approved_at; }
-    if ('youtube_id' in patch || 'duration_s' in patch) { c.metadata_source = 'operator_declared'; c.aspect ||= '16:9'; }
+    if ('youtube_id' in patch || 'duration_s' in patch) { c.metadata_source = c.media_type === 'image' && c.assets?.length ? 'server_image' : 'operator_declared'; c.aspect ||= '16:9'; }
     c.updated_at = nowISO();
     validateInventory(); await save(); return {body:c};
   }
   if (method === 'POST' && p === 'creative') {
-    const c = { metadata_source: 'operator_declared', id: creationId('cr',body), created_at: nowISO(), approval_status: 'pending', content_source: 'advertiser', ...body };
+    if (!['paid','filler'].includes(body.purpose || 'paid') || !['video','image'].includes(body.media_type || 'video')) throw new AccessError(400,'Choose a valid creative type and purpose');
+    if (body.purpose === 'filler' && (body.advertiser_id || body.youtube_id)) throw new AccessError(400,'Filler must use uploaded media and has no advertiser');
+    if (body.media_type === 'image') { body.duration_s ??= 20; if (body.youtube_id || typeof body.duration_s !== 'number' || !Number.isFinite(body.duration_s) || body.duration_s < 1 || body.duration_s > 600) throw new AccessError(400,'Enter an image duration between 1 and 600 seconds'); }
+    const c = { purpose:'paid',media_type:'video', metadata_source: 'operator_declared', id: creationId('cr',body), created_at: nowISO(), approval_status: 'pending', content_source: 'advertiser', ...body };
     db.creatives.push(c); await save(); return { body: c };
   }
   if (method === 'POST' && p === 'advertiser') {
