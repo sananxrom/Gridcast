@@ -140,3 +140,40 @@ test('all acknowledged paid attempts exhausted renews an allowance without waiti
  const receipt=f.call('POST','play',f.event({assignment_id:first.assignment_id,ended_reason:'error'}),f.paired.token);assert.equal(receipt.body.billable,false);
  const next=f.call('GET','playlist/screen1',{},f.paired.token).body.items[0];assert.notEqual(next.assignment_id,first.assignment_id);assert.equal(next.max_plays,1);
 });
+
+test('a partially exhausted paid set replenishes only that campaign and preserves other reservations',()=>{
+ const f=fixture();f.db.campaigns[0].screen_ids=Array.from({length:40000},(_,i)=>'s'+i);
+ f.db.campaigns.push({id:'campaign2',org_id:'org1',advertiser_id:'advertiser2',rate_type:'per_play',rate_value:1,committed_budget:100,accrued_spend:0});
+ const items=[{...f.item,rate_value:3},{campaign_id:'campaign2',creative_id:'creative2',duration_s:10,youtube_id:'abcdefghijk',rate_value:1}];
+ const get=()=>deviceRoute(f.db,'GET',['playlist','screen1'],{},f.paired.token,{now:Date.parse('2026-09-24T00:00:11Z'),playerProtocol:2,playlist:()=>({items,config:f.config,config_version:3})}).body;
+ const before=get();assert.equal(before.items[0].max_plays,1);assert.ok(before.items[1].max_plays>1);
+ assert.equal(f.call('POST','play',f.event({assignment_id:before.items[0].assignment_id}),f.paired.token).body.billable,true);
+ const after=get();assert.notEqual(after.items[0].assignment_id,before.items[0].assignment_id);assert.equal(after.items[1].assignment_id,before.items[1].assignment_id);
+ assert.equal(f.db.campaign_budgets.find(b=>b.campaign_id==='campaign2').reservations.length,1);
+ assert.deepEqual(get().items.map(i=>i.assignment_id),after.items.map(i=>i.assignment_id));
+});
+
+test('a cached empty set retries funding immediately when another screen releases a failed attempt',()=>{
+ const {reserveBudget,budgetReceipt}=require('./load-lib.cjs')('budgets'),f=fixture(),now=Date.parse('2026-09-24T00:00:11Z');
+ const campaign={id:'campaign2',org_id:'org1',advertiser_id:'advertiser2',rate_type:'per_play',rate_value:1,committed_budget:1,accrued_spend:0};f.db.campaigns.push(campaign);
+ const other={id:'other-assignment',device_id:'other-device',campaign_id:campaign.id,duration_s:10,rate_type:'per_play',rate_value:1,issued_at:new Date(now).toISOString(),valid_until:new Date(now+3600000).toISOString(),accept_until:new Date(now+72*3600000).toISOString()};
+ assert.equal(reserveBudget(f.db,campaign,other,1,now),1);
+ const get=()=>deviceRoute(f.db,'GET',['playlist','screen1'],{},f.paired.token,{now,playerProtocol:2,playlist:()=>({items:[{campaign_id:campaign.id,creative_id:'creative2',duration_s:10,youtube_id:'abcdefghijk',rate_value:1}],config:f.config,config_version:3})}).body;
+ assert.equal(get().items.length,0);const phase=f.db.devices[0].assignment_set.rotation_index;
+ budgetReceipt(f.db,campaign,other,true,false,now);
+ const after=get();assert.equal(after.items.length,1);assert.equal(after.items[0].max_plays,1);assert.equal(f.db.devices[0].assignment_set.rotation_index,phase);
+ assert.equal(get().items[0].assignment_id,after.items[0].assignment_id);
+});
+
+test('a changed filler media identity invalidates its old evidence while unchanged media reuses it',()=>{
+ const f=fixture(),filler={creative_id:'house',duration_s:20,media_type:'image',width:1920,height:1080,asset_id:'house-asset',asset_sha256:'a'.repeat(64)};
+ const get=()=>deviceRoute(f.db,'GET',['playlist','screen1'],{},f.paired.token,{now:Date.parse('2026-09-24T00:00:11Z'),playerProtocol:2,playlist:()=>({items:[],filler_items:[filler],config:f.config,config_version:3})}).body.filler_items[0];
+ const before=get();assert.equal(get().assignment_id,before.assignment_id);
+ filler.asset_sha256='b'.repeat(64);assert.notEqual(get().assignment_id,before.assignment_id);
+});
+
+test('renewal chooses the authorization horizon from the newly rotated media source',()=>{
+ const f=fixture(),now=Date.parse('2026-09-24T00:00:11Z');
+ const result=deviceRoute(f.db,'GET',['playlist','screen1'],{},f.paired.token,{now,playerProtocol:2,playlist:(_s,_d,index=0)=>({items:[{...f.item,asset_id:index%2?undefined:'uploaded',youtube_id:index%2?'abcdefghijk':undefined,creative_id:index%2?'online':'offline'}],config:f.config,config_version:3})});
+ assert.equal(result.body.items[0].creative_id,'online');assert.equal(Date.parse(result.body.valid_until)-now,3600000);
+});

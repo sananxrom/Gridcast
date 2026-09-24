@@ -73,3 +73,28 @@ test('simulated 72h: assignment rotation, 48h report backlog, ACK loss and month
  assert.equal(call('POST','play',{...earliest,ended_reason:'timeout'},paired.token).status,409);
  assert.equal(JSON.stringify(db),snapshot,'expired and conflicting reports cannot change ledger');
 });
+
+// Full utilization exercises the hourly anti-replay ceiling, unlike sparse fixed-loop fixtures.
+test('three continuous hours switch from exhausted paid budget to filler without false throughput failures',()=>{
+ const start=Date.parse('2026-09-25T06:00:00Z'); let now=start,seq=0;
+ const org={id:'org-continuous',status:'active'},screen={id:'screen-continuous',org_id:org.id,status:'active',has_camera:false};
+ const campaign={id:'campaign-continuous',org_id:org.id,advertiser_id:'brand-continuous',committed_budget:3.6,rate_type:'per_play',rate_value:.01,screen_ids:[screen.id],accrued_spend:0};
+ const db={orgs:[org],screens:[screen],campaigns:[campaign],devices:[],device_assignments:[],plays:[],presence:[],settlement_buckets:[]};
+ const items=[{campaign_id:campaign.id,creative_id:'paid-video',asset_id:'paid-asset',duration_s:10,rate_type:'per_play',rate_value:.01}],filler_items=[{campaign_id:null,creative_id:'house-video',asset_id:'house-asset',duration_s:10,kind:'filler'}];
+ const playlist=()=>({items,filler_items,config:{camera_fail_mode:'continue',sample_interval_s:2,count_ceiling:50},config_version:1});
+ const call=(method,path,body={},token)=>deviceRoute(db,method,path.split('/'),body,token,{now,playerProtocol:2,playlist,clientKey:'continuous-endurance'});
+ const paired=call('POST','pair',issuePairing(db,screen,now)).body;
+ const offered=call('GET',`playlist/${screen.id}`,{},paired.token).body;
+ const paid=offered.items[0],filler=offered.filler_items[0];assert.equal(paid.max_plays,360);
+ for(let n=0;n<1080;n++){
+  const item=n<paid.max_plays?paid:filler,at=start+n*10000; now=at+10000;
+  const event={play_uid:`continuous_event_${++seq}`,seq_no:seq,assignment_id:item.assignment_id,campaign_id:item.campaign_id,creative_id:item.creative_id,config_version:1,started_at_device:new Date(at).toISOString(),ended_at_device:new Date(now).toISOString(),playing_duration_ms:10000,media_started_s:0,media_ended_s:10,ended_reason:'ended',server_clock_offset_ms:0,measured:false,avg_persons:null,sample_count:0,model_ver:null};
+  const result=call('POST','play',event,paired.token);assert.equal(result.status??200,200);assert.equal(result.body.billable,n<360);
+  const play=db.plays[db.plays.length-1];assert.equal(play.rendered,true);assert.ok(!play.nonbillable_reasons.includes('device_throughput_exceeded'));
+  if(n%137===0){const before=JSON.stringify(db.campaign_budgets);assert.equal(call('POST','play',event,paired.token).body.duplicate,true);assert.equal(JSON.stringify(db.campaign_budgets),before);}
+ }
+ assert.equal(db.plays.length,1080);assert.equal(db.plays.filter(p=>p.billable).length,360);assert.equal(db.plays.filter(p=>p.kind==='filler').length,720);
+ assert.equal(db.campaign_budgets[0].spent_paise,360);assert.equal(campaign.accrued_spend,3.6);
+ assert.equal(db.presence.filter(p=>p.source==='filler_device_report').length,720);assert.ok(db.presence.every(p=>p.avg_persons===null));
+ const next=call('GET',`playlist/${screen.id}`,{},paired.token).body;assert.equal(next.items.length,0);assert.ok(next.filler_items.length);
+});

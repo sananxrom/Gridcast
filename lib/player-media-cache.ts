@@ -35,27 +35,45 @@ export async function cachedMediaUrl(item: MediaItem): Promise<string | null> {
   const key = keyFor(item); if (!key) return null;
   const saved = await row('media', key); return saved?.blob ? URL.createObjectURL(saved.blob) : null;
 }
+/** Publish the newest online permission set before downloading: removed grants must not
+ * reappear after an offline restart, even if an older download finishes in another tab. */
 export async function saveReadySchedule(deviceId: string, playlist: any, offset: number): Promise<boolean> {
   const isUploaded = (i: MediaItem) => !i.youtube_id && !!keyFor(i);
   playlist = { ...playlist, items: playlist.items.filter(isUploaded), filler_items: (playlist.filler_items || []).filter(isUploaded) };
-  const items: MediaItem[] = [...playlist.items, ...playlist.filler_items];
-  if (!items.length) return false;
+  const items: MediaItem[] = [...playlist.items, ...playlist.filler_items], sourceTime = Date.parse(playlist.server_time);
+  if (!Number.isFinite(sourceTime)) return false;
+  const db = await open(), prepare = db.transaction('schedules', 'readwrite'), prepared = done(prepare), store = prepare.objectStore('schedules');
+  const previous = store.get(deviceId); let revision = 0;
+  previous.onsuccess = () => {
+    const old = previous.result;
+    if (old?.revoked) return;
+    if ((old?.sourceTime ?? Date.parse(old?.playlist?.server_time || '')) > sourceTime) return;
+    revision = (old?.revision || 0) + 1;
+    const retained = new Set([...(old?.playlist?.items || []), ...(old?.playlist?.filler_items || [])].map((i: MediaItem) => i.assignment_id + ':' + keyFor(i)));
+    const permitted = (i: MediaItem) => retained.has(i.assignment_id + ':' + keyFor(i));
+    const kept = { ...playlist, items: playlist.items.filter(permitted), filler_items: playlist.filler_items.filter(permitted) };
+    const remaining: MediaItem[] = [...kept.items, ...kept.filler_items];
+    store.put({ key: deviceId, revision, sourceTime, playlist: remaining.length ? kept : null, offset,
+      until: remaining.length ? Math.min(...remaining.map(i => Date.parse(i.valid_until))) : 0, saved: Date.now() });
+  };
+  await prepared;
+  if (!revision || !items.length) return false;
   if (!(await Promise.all(items.map(cacheMedia))).every(Boolean)) return false;
   const until = Math.min(...items.map(i => Date.parse(i.valid_until)));
   if (!Number.isFinite(until) || until <= Date.now() + offset) return false;
-  const db = await open(), tx = db.transaction('schedules', 'readwrite'), complete = done(tx);
-  const store = tx.objectStore('schedules'), previous = store.get(deviceId);
-  previous.onsuccess = () => {
-    if (Date.parse(previous.result?.playlist?.server_time || '') > Date.parse(playlist.server_time)) return;
-    store.put({ key: deviceId, playlist, offset, until, saved: Date.now() });
+  const tx = db.transaction('schedules', 'readwrite'), complete = done(tx), commit = tx.objectStore('schedules');
+  const current = commit.get(deviceId); let published = false;
+  current.onsuccess = () => {
+    if (current.result?.revision !== revision) return;
+    commit.put({ key: deviceId, revision, sourceTime, playlist, offset, until, saved: Date.now() }); published = true;
   };
   await complete;
-  void navigator.storage?.persist?.().catch(() => false);
-  return true;
+  if (published) void navigator.storage?.persist?.().catch(() => false);
+  return published;
 }
 export async function readySchedule(deviceId: string) {
   const saved = await row('schedules', deviceId);
-  if (!saved || Date.now() < saved.saved - 1000 || Date.now() + saved.offset >= saved.until) return null;
+  if (saved?.revoked || !saved?.playlist || Date.now() < saved.saved - 1000 || Date.now() + saved.offset >= saved.until) return null;
   const items: MediaItem[] = [...saved.playlist.items, ...(saved.playlist.filler_items || [])];
   for (const item of items) if (!(await row('media', keyFor(item)!))?.blob) return null;
   return saved;
@@ -64,16 +82,23 @@ export async function readySchedule(deviceId: string) {
 export async function reserveLocalPlay(deviceId: string, item: MediaItem, now: number): Promise<boolean> {
   const cap = item.max_plays;
   if (!Number.isSafeInteger(cap) || cap! <= 0 || now + item.duration_s * 1000 > Date.parse(item.valid_until)) return false;
-  const db = await open(), tx = db.transaction('allowances', 'readwrite'), complete = done(tx), store = tx.objectStore('allowances');
-  const key = `${deviceId}:${item.assignment_id}`, read = store.get(key); let allowed = false;
-  read.onsuccess = () => {
-    const used = Number(read.result?.used || 0);
-    if (used >= cap!) return;
-    store.put({ key, used: used + 1, until: item.valid_until }); allowed = true;
+  const db = await open(), tx = db.transaction(['allowances', 'schedules'], 'readwrite'), complete = done(tx), store = tx.objectStore('allowances');
+  const key = `${deviceId}:${item.assignment_id}`; let allowed = false;
+  const permission = tx.objectStore('schedules').get(deviceId);
+  permission.onsuccess = () => {
+    if (permission.result?.revoked) return;
+    const read = store.get(key);
+    read.onsuccess = () => {
+      const used = Number(read.result?.used || 0);
+      if (used >= cap!) return;
+      store.put({ key, used: used + 1, until: item.valid_until }); allowed = true;
+    };
   };
   await complete; return allowed;
 }
 export async function clearReadySchedule(deviceId: string) {
   const db = await open(), tx = db.transaction('schedules', 'readwrite'), complete = done(tx);
-  tx.objectStore('schedules').delete(deviceId); await complete;
+  const store = tx.objectStore('schedules'), previous = store.get(deviceId);
+  previous.onsuccess = () => store.put({ key: deviceId, revoked: true, revision: (previous.result?.revision || 0) + 1, sourceTime: previous.result?.sourceTime || 0, playlist: null, until: 0, saved: Date.now() });
+  await complete;
 }

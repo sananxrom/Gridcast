@@ -14,7 +14,7 @@ const MODEL_VERSION = 'coco-ssd@2.2.3/lite_mobilenet_v2';
 type Credential = { token: string; device_id: string; screen_id: string };
 type Item = { kind?: 'diagnostic' | 'paid' | 'filler'; diagnostic_has_camera?: boolean; assignment_id: string; valid_until: string; campaign_id: string | null; creative_id: string;
   max_plays?: number; media_type?: 'video' | 'image'; youtube_id?: string; asset_url?: string; asset_id?: string; asset_sha256?: string; asset_bytes?: number; asset_mime?: string; width?: number; height?: number; duration_s: number };
-type Playlist = { screen: any; config: Record<string, any>; config_version: string | number; server_time: string; items: Item[]; filler_items?: Item[]; scheduling_mode?: string; readiness?: {message:string}; diagnostic?: {assignment_id:string;status:string;message:string} | null };
+type Playlist = { screen: any; config: Record<string, any>; config_version: string | number; server_time: string; items: Item[]; filler_items?: Item[]; scheduling_mode?: string; budget_state?: string; readiness?: {message:string}; diagnostic?: {assignment_id:string;status:string;message:string} | null };
 type Slot = { item: Item; uid: string; started: number; startedPlaying: boolean; accumulated: number; segmentStart: number | null;
   mediaStart: number; samples: number[]; cameraHealthy: boolean; config: Record<string, any>; version: string | number; offset: number; done: boolean; diagnosticRun?: string; decodedWidth?: number; decodedHeight?: number };
 function script(src: string, ready: () => boolean) {
@@ -55,7 +55,7 @@ export default function Player() {
     let cycleItems: Item[] = [], cycleIndex = 0, fillerIndex = 0, waitingEmpty = false;
     let activeMedia = media.current, activeSurface = 0, prepared: { id: string; video: HTMLVideoElement; url: string } | null = null;
     const urlByAsset = new Map<string, string>(), objectUrls = new Set<string>(), exhausted = new Set<string>(), failedUntil = new Map<string, number>();
-    let preparing = false, retiring = false;
+    let preparing = false, retiring = false, needsAllowanceRefresh = false;
     const preparedImages = new Map<string, Promise<{ image: HTMLImageElement; url: string }>>();
     const prepareImage = (item: Item) => {
       if (!preparedImages.has(item.assignment_id)) preparedImages.set(item.assignment_id, (async () => { const url = await mediaUrl(item), image = new Image(); image.src = url; await image.decode(); return { image, url }; })().catch(error => { preparedImages.delete(item.assignment_id); throw error; }));
@@ -129,7 +129,7 @@ export default function Player() {
       try {
         await flushPlays(paired.device_id, async event => {
           const r = await request('/play', paired.token, event);
-          if (r.status === 401) { fatal = true; state('Device authorization expired. Pair again.'); stopMedia(); }
+          if (r.status === 401) { fatal = true; void clearReadySchedule(paired.device_id); state('Device authorization expired. Pair again.'); stopMedia(); }
           return { status: r.status >= 200 && r.status < 300 && r.value.ok !== true ? 502 : r.status, error: r.value.error || (r.value.ok !== true ? 'Server did not acknowledge delivery' : undefined) };
         }, Number(playlist?.config.telemetry_batch) || 25, Number(playlist?.config.telemetry_retry_h) || 72);
         if (!disposed) setQueue(await queueStatus(paired.device_id));
@@ -167,10 +167,11 @@ export default function Player() {
       pulling = true; lastPull = Date.now();
       try {
         const started = Date.now(), d: Playlist = await authRequest('/playlist/' + paired.screen_id + '?protocol=2');
+        if (disposed || fatal) return;
         if (!d.config || !Array.isArray(d.items)) throw new Error('Player update required. Reload this page.');
         const received = Date.now(); actualOffset = Date.parse(d.server_time) - ((started + received) / 2);
         if (!Number.isFinite(actualOffset)) actualOffset = 0;
-        pending = d; void initCamera();
+        pending = d; needsAllowanceRefresh = d.items.some(i => exhausted.has(i.assignment_id)); void initCamera();
         void saveReadySchedule(paired.device_id, d, actualOffset).then(ready => { if (!disposed) setOfflineStatus(ready ? d.items.some(i => i.youtube_id) ? 'Uploaded media ready offline · YouTube requires internet' : 'Schedule and uploaded media ready offline' : d.items.some(i => i.youtube_id) ? 'YouTube playback requires internet' : 'Preparing uploaded media for offline playback'); }).catch(() => { if (!disposed) setOfflineStatus('Offline media unavailable; online playback only'); });
         if (currentSlot?.diagnosticRun && d.diagnostic?.assignment_id === currentSlot.item.assignment_id && d.diagnostic.status === 'revoked') void finish('interrupted');
         lastPull = Date.now(); if (!disposed) setScreen(d.screen);
@@ -267,7 +268,7 @@ export default function Player() {
         for (let attempt = 0; attempt < cycleItems.length; attempt++) {
           const candidate = cycleItems[cycleIndex++ % cycleItems.length]; cycleIndex %= cycleItems.length;
           if (eligible(candidate) && await reserveLocalPlay(paired.device_id, candidate, Date.now() + actualOffset)) { item = candidate; break; }
-          if (eligible(candidate)) exhausted.add(candidate.assignment_id);
+          if (eligible(candidate)) { exhausted.add(candidate.assignment_id); needsAllowanceRefresh = true; }
         }
         if (!item) for (let attempt = 0; attempt < (playlist.filler_items || []).length; attempt++) {
           const candidate = playlist.filler_items![fillerIndex++ % playlist.filler_items!.length];
@@ -275,7 +276,7 @@ export default function Player() {
           if (eligible(candidate)) exhausted.add(candidate.assignment_id);
         }
         waitingEmpty = !item;
-        if (!item) { setCurrent(null); if (await startDiagnostic()) return; state(playlist.readiness?.message || 'No authorised playable content. Waiting for a refreshed schedule.'); return; }
+        if (!item) { setCurrent(null); if (await startDiagnostic()) return; state(playlist.budget_state === 'reserved_elsewhere_or_exhausted' ? 'Waiting for paid playback allowance' : playlist.readiness?.message || 'No authorised playable content. Waiting for a refreshed schedule.'); return; }
         if (!item.asset_url) await ensureYouTube();
         if (disposed || fatal) return;
         currentSlot = { item, uid: crypto.randomUUID(), started: Date.now(), startedPlaying: false, accumulated: 0, segmentStart: null,
@@ -432,7 +433,7 @@ export default function Player() {
         else if (elapsed > Math.max(30000, s.item.duration_s * 3000 + 10000)) void finish('timeout');
       } else void startNext();
       void initCamera();
-      if (Date.now() - lastPull > (waitingEmpty ? 10000 : Math.min(300, Math.max(30, (Number(playlist?.config.sync_interval_min) || 5) * 60)) * 1000)) { lastPull = Date.now(); void pull(); }
+      if (Date.now() - lastPull > (needsAllowanceRefresh ? 5000 : waitingEmpty ? 10000 : Math.min(300, Math.max(30, (Number(playlist?.config.sync_interval_min) || 5) * 60)) * 1000)) { lastPull = Date.now(); void pull(); }
       if (Date.now() - lastHeartbeat > Math.max(10, Number(playlist?.config.heartbeat_s) || 30) * 1000) { lastHeartbeat = Date.now(); void heartbeat(); }
       if (Date.now() - lastDetect > Math.max(500, (Number(currentSlot?.config.sample_interval_s ?? playlist?.config.sample_interval_s) || 2) * 1000)) { lastDetect = Date.now(); void detect(); }
     }, 250);

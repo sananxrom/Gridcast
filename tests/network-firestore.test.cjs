@@ -256,5 +256,17 @@ test('Enterprise SDK serializes two screens reserving the final campaign rupee',
   assert.equal(results.flatMap(r=>r.body.items).reduce((n,i)=>n+i.max_plays,0),1);
   const ledger=(await database.doc('campaign_budgets/budget_cn').get()).data();assert.equal(ledger.reservations.length,1);assert.equal(ledger.reservations[0].remaining_plays,1);assert.equal(ledger.spent_paise,0);
   assert.equal((await database.collection('device_assignments').get()).size,1);
+  // The losing screen has persisted an empty assignment set. A failed acknowledged
+  // attempt returns the winning hold; the losing screen must be funded on its next poll.
+  const winningIndex=results[0].body.items.length?0:1, winner=winningIndex===0?f.device:second, losing=winningIndex===0?second:f.device;
+  const winnerToken=winningIndex===0?f.token:token2, losingToken=winningIndex===0?token2:f.token;
+  const assigned=results[winningIndex].body.items[0];
+  const failed={...f.body,assignment_id:assigned.assignment_id,play_uid:'failed-reservation-0001',seq_no:200,started_at_device:new Date(f.now).toISOString(),ended_at_device:new Date(f.now+1000).toISOString(),playing_duration_ms:0,media_started_s:0,media_ended_s:0,ended_reason:'error'};
+  await store.transact({method:'POST',path:['play'],deviceId:winner.id,assignmentId:failed.assignment_id,playUid:failed.play_uid,seqNo:failed.seq_no,startedAtDevice:failed.started_at_device},async()=>{
+   const d=await store.read();const r=deviceRoute(d,'POST',['play'],failed,winnerToken,{now:f.now+1000,playlist:()=>({items:[],config:{},config_version:1})});assert.equal(r.body.billable,false);if(r.changed)await store.write(d);return r;
+  });
+  f.now+=1000;
+  const funded=await grant(losing,losingToken);assert.equal(funded.body.items.length,1);assert.equal(funded.body.items[0].max_plays,1);
+  const after=(await database.doc('campaign_budgets/budget_cn').get()).data();assert.equal(after.spent_paise,0);assert.equal(after.reservations.reduce((n,r)=>n+r.remaining_plays*r.rate_paise,0),100);
  }finally{await database.terminate();}
 });

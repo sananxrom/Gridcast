@@ -104,8 +104,9 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
     let rotationIndex = heldIndex;
     const playlistAt = (index: number) => { const p = options.playlist(screen,device,index); return {...p,items:[...p.items,...(p.filler_items || []).map((i: any) => ({...i,kind:'filler',campaign_id:null}))]}; };
     let p = playlistAt(rotationIndex);
-    const until = Math.min(now + (p.items.every((i: any) => i.asset_id) ? 24 * 3600e3 : ASSIGNMENT_TTL),
+    const assignmentUntil = () => Math.min(now + (p.items.every((i: any) => i.asset_id) ? 24 * 3600e3 : ASSIGNMENT_TTL),
       ...p.items.map((i: any) => Number.isFinite(Date.parse(i.authorization_until)) ? Date.parse(i.authorization_until) : Infinity));
+    let until = assignmentUntil();
     db.device_assignments ||= [];
     // Re-issuing identical assignments on every poll is what made the usage ledger unbounded, and an
     // unbounded ledger is one that has to evict — which hands back allowances that were already spent.
@@ -124,17 +125,34 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
     });
       return hash(JSON.stringify({ frozen, config_version: p.config_version, rotation_version: p.rotation_version ?? null }));
     };
+    const grantItem = (item: any, validUntil: number) => {
+      const c = db.campaigns.find((c: any) => c.id === item.campaign_id);
+      const a = { ...economics(item), id: 'assignment_' + crypto.randomUUID(), device_id: device.id, org_id: screen.org_id, screen_id: screen.id,
+        kind: item.kind === 'filler' ? 'filler' : 'paid', media_type: item.media_type || 'video', width:item.width ?? null, height:item.height ?? null, max_plays: 0,
+        campaign_id: item.campaign_id, advertiser_id: c?.advertiser_id || null, creative_id: item.creative_id, youtube_id: item.youtube_id || null, asset_id: item.asset_id || null,
+        duration_s: item.duration_s, rate_type: item.rate_type ?? c?.rate_type ?? 'flat', rate_value: Number(item.rate_value ?? c?.rate_value) || 0,
+        issued_at: iso(now), valid_until: iso(validUntil), accept_until: iso(now + BACKLOG_TTL), config_version: p.config_version,
+        camera_fail_mode: p.config.camera_fail_mode || 'continue', model_configured: p.config.model || null, sample_interval_s: Number(p.config.sample_interval_s) || 2, count_ceiling: Number(p.config.count_ceiling) || 50 };
+      const max = a.kind === 'filler' ? physicalPlays(a) : c ? reserveBudget(db,c,a,physicalPlays(a),now) : 0;
+      if (!max) return []; a.max_plays = max;
+      db.device_assignments.push(a); return [playbackItem(item, a)];
+    };
     let signature = playlistSignature(p);
     if (held && held.signature === signature && Date.parse(held.valid_until) > now + 60e3
       && Array.isArray(held.ids)
       && (!held.ids.some((id: string) => db.device_assignments.find((a: any) => a.id === id)?.kind !== 'filler')
         || held.ids.some((id: string) => { const a = db.device_assignments.find((a: any) => a.id === id); return a && a.kind !== 'filler' && (Number(device.assignment_uses?.find((u: any) => u.id === id)?.n) || 0) < a.max_plays; }))
       && held.ids.every((id: string) => db.device_assignments.some((a: any) => a.id === id && Number.isSafeInteger(a.max_plays)))) {
-      const items = held.ids.flatMap((id: string) => {
-        const a = db.device_assignments.find((a: any) => a.id === id);
-        const item = p.items.find((i: any) => i.campaign_id === a.campaign_id && i.creative_id === a.creative_id);
-        return item ? [playbackItem(item,a)] : [];
+      // Replenish only acknowledged exhausted or previously unfunded entries. Keep each
+      // still-live allowance intact so renewing one campaign never locks another's money twice.
+      const remaining = held.ids.map((id: string) => db.device_assignments.find((a: any) => a.id === id));
+      const items = p.items.flatMap((item: any) => {
+        const index = remaining.findIndex((a: any) => a && a.campaign_id === item.campaign_id && a.creative_id === item.creative_id);
+        const a = index >= 0 ? remaining.splice(index,1)[0] : null;
+        const used = a ? Number(device.assignment_uses?.find((u: any) => u.id === a.id)?.n) || 0 : 0;
+        return a && used < a.max_plays ? [playbackItem(item,a)] : grantItem(item,Date.parse(held.valid_until));
       });
+      held.ids = items.map((i: any) => i.assignment_id);
       return { changed: true, body: { screen: safeScreen(screen), scheduling_mode:'continuous', budget_state: items.filter((i: any) => i.kind !== 'filler').length < p.items.filter((i: any) => i.kind !== 'filler').length ? 'reserved_elsewhere_or_exhausted' : 'available', items: items.filter((i: any) => i.kind !== 'filler'), filler_items: items.filter((i: any) => i.kind === 'filler'), config: p.config, config_version: p.config_version, server_time: iso(now), readiness: playerReadiness(p.readiness), diagnostic: diagnosticOffer(db, screen, device, now), valid_until: held.valid_until } };
     }
     // Advance only when this transaction actually mints a replacement set. Retries and calendar
@@ -142,20 +160,10 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
     if (held) {
       rotationIndex = heldIndex < Number.MAX_SAFE_INTEGER ? heldIndex + 1 : 0;
       p = playlistAt(rotationIndex);
+      until = assignmentUntil();
       signature = playlistSignature(p);
     }
-    const items = p.items.flatMap((item: any) => {
-      const c = db.campaigns.find((c: any) => c.id === item.campaign_id);
-      const a = { ...economics(item), id: 'assignment_' + crypto.randomUUID(), device_id: device.id, org_id: screen.org_id, screen_id: screen.id,
-        kind: item.kind === 'filler' ? 'filler' : 'paid', media_type: item.media_type || 'video', width:item.width ?? null, height:item.height ?? null, max_plays: 0,
-        campaign_id: item.campaign_id, advertiser_id: c?.advertiser_id || null, creative_id: item.creative_id, youtube_id: item.youtube_id || null, asset_id: item.asset_id || null,
-        duration_s: item.duration_s, rate_type: item.rate_type ?? c?.rate_type ?? 'flat', rate_value: Number(item.rate_value ?? c?.rate_value) || 0,
-        issued_at: iso(now), valid_until: iso(until), accept_until: iso(now + BACKLOG_TTL), config_version: p.config_version,
-        camera_fail_mode: p.config.camera_fail_mode || 'continue', model_configured: p.config.model || null, sample_interval_s: Number(p.config.sample_interval_s) || 2, count_ceiling: Number(p.config.count_ceiling) || 50 };
-      const max = a.kind === 'filler' ? physicalPlays(a) : c ? reserveBudget(db,c,a,physicalPlays(a),now) : 0;
-      if (!max) return []; a.max_plays = max;
-      db.device_assignments.push(a); return [playbackItem(item, a)];
-    });
+    const items = p.items.flatMap((item: any) => grantItem(item,until));
     device.assignment_set = { signature, rotation_index: rotationIndex, valid_until: iso(until), ids: items.map((i: any) => i.assignment_id) };
     return { changed: true, body: { screen: safeScreen(screen), scheduling_mode:'continuous', budget_state: items.filter((i: any) => i.kind !== 'filler').length < p.items.filter((i: any) => i.kind !== 'filler').length ? 'reserved_elsewhere_or_exhausted' : 'available', items: items.filter((i: any) => i.kind !== 'filler'), filler_items: items.filter((i: any) => i.kind === 'filler'), config: p.config, config_version: p.config_version, server_time: iso(now), readiness: playerReadiness(p.readiness), diagnostic: diagnosticOffer(db, screen, device, now), valid_until: iso(until) } };
   }

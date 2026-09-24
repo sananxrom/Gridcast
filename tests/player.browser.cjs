@@ -52,9 +52,10 @@ async function harness(options={}) {
  execFileSync(ffmpeg,['-v','error','-i',path.join(temp,'fixture.webm'),'-frames:v','1','-y',path.join(temp,'fixture.png')]);
  const picture=fs.readFileSync(path.join(temp,'fixture.png'));
  const db={orgs:[{id:'org1',status:'active'}],screens:[{id:'screen1',org_id:'org1',status:'active',has_camera:true}],devices:[],device_assignments:[],plays:[],presence:[],campaigns:[{id:'campaign1',org_id:'org1',advertiser_id:'advertiser1',rate_type:'per_play',rate_value:2,accrued_spend:0,committed_budget:10000}]};
+ if(options.partialAllowance){db.campaigns[0].committed_budget=2;db.campaigns.push({...db.campaigns[0],id:'campaign2',advertiser_id:'advertiser2',committed_budget:10000});}
  const requests=[],bodies=[],replies=[];let failedAck=false,base='',stopItems=false,playlistFailed=false;
  const config={model:'coco-ssd',sample_interval_s:options.modelWorking?.5:2,loop_length_s:4,slot_duration_s:2,count_ceiling:50,camera_fail_mode:'continue',heartbeat_s:10,sync_interval_min:1,offline_buffer_plays:5000,telemetry_batch:25,telemetry_retry_h:72,...options.config};
- const callback=()=>({config,config_version:7,items:[],[options.filler?'filler_items':'items']:(stopItems||options.empty)?[]:[{campaign_id:'campaign1',creative_id:'creative1',creative_name:'Browser fixture',duration_s:2,rate_value:2,rate_type:'per_play',asset_url:base+(options.image?'/fixture.png':'/fixture.webm'),media_type:options.image?'image':'video',asset_id:'fixture',asset_mime:options.image?'image/png':'video/webm',width:128,height:72,...(options.offline?{asset_bytes:(options.image?picture:video).length,asset_sha256:crypto.createHash('sha256').update(options.image?picture:video).digest('hex')}:{})}]});
+ const callback=()=>{const p={config,config_version:7,items:[],[options.filler?'filler_items':'items']:(stopItems||options.empty)?[]:[{campaign_id:'campaign1',creative_id:'creative1',creative_name:'Browser fixture',duration_s:2,rate_value:2,rate_type:'per_play',asset_url:base+(options.image?'/fixture.png':'/fixture.webm'),media_type:options.image?'image':'video',asset_id:'fixture',asset_mime:options.image?'image/png':'video/webm',width:128,height:72,...(options.offline?{asset_bytes:(options.image?picture:video).length,asset_sha256:crypto.createHash('sha256').update(options.image?picture:video).digest('hex')}:{})}]};if(options.twoFillers&&p.filler_items?.length)p.filler_items.push({...p.filler_items[0],creative_id:'creative2'});if(options.partialAllowance&&p.items.length)p.items.push({...p.items[0],campaign_id:'campaign2',creative_id:'creative2'});return p;};
  const code=issuePairing(db,db.screens[0]);const paired=deviceRoute(db,'POST',['pair'],{code:code.code},null,{playlist:callback,playerProtocol:2}).body;
  if(options.diagnostic){db.campaigns=[];require('./load-lib.cjs')('diagnostics').requestDiagnostic(db,db.screens[0],{id:'admin'},{config,config_version:7});}
  const server=http.createServer(async(req,res)=>{
@@ -69,7 +70,7 @@ async function harness(options={}) {
    const result=deviceRoute(db,req.method,u.pathname.slice(5).split('/'),body,token,{playlist:callback,playerProtocol:2});
    if(u.pathname==='/api/diagnostic/result'&&options.loseFirstDiagnosticAck&&!failedAck){failedAck=true;res.writeHead(503,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'Diagnostic accepted; acknowledgement lost'}));return;}
    if(u.pathname==='/api/play'){
-    bodies.push(body);replies.push(result);stopItems=!options.continuous;
+    bodies.push(body);replies.push(result);if(options.partialAllowance&&body.campaign_id==='campaign1')db.campaigns[0].committed_budget=100;stopItems=!options.continuous;
     if(options.loseFirstAck&&!failedAck){failedAck=true;res.writeHead(503,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'Accepted server-side; response lost in fixture'}));return;}
    }
    res.writeHead(result?.status||200,{'Content-Type':'application/json'});res.end(JSON.stringify(result?.body||{}));return;
@@ -312,5 +313,24 @@ test('hiding an image interrupts display evidence and cannot bill its remaining 
   await h.page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});document.dispatchEvent(new Event('visibilitychange'));});
   await waitFor(()=>h.bodies.length>0);
   assert.equal(h.bodies[0].ended_reason,'interrupted');assert.ok(h.bodies[0].visible_duration_ms<2000);assert.equal(h.replies[0].body.billable,false);
+ }finally{await h.cleanup();}
+});
+
+
+test('two eligible fillers take alternating turns rather than repeatedly selecting the first', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({filler:true,twoFillers:true,continuous:true});try{
+  await waitFor(()=>h.bodies.length>=3);
+  assert.deepEqual(h.bodies.slice(0,3).map(p=>p.creative_id),['creative1','creative2','creative1']);
+  assert.ok(h.db.plays.every(p=>!p.billable&&p.campaign_id===null));
+ }finally{await h.cleanup();}
+});
+
+test('an exhausted paid allowance refreshes promptly while another campaign keeps playing', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({partialAllowance:true,continuous:true});try{
+  await waitFor(()=>h.bodies.filter(p=>p.campaign_id==='campaign1').length>=2,15000);
+  const own=h.bodies.filter(p=>p.campaign_id==='campaign1');
+  assert.notEqual(own[0].assignment_id,own[1].assignment_id);
+  assert.ok(Date.parse(own[1].started_at_device)-Date.parse(own[0].started_at_device)<12000);
+  assert.ok(h.bodies.some(p=>p.campaign_id==='campaign2'));
  }finally{await h.cleanup();}
 });

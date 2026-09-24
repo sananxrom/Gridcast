@@ -1659,3 +1659,101 @@ above should be settled in the same pass.
 **Player check limitation:** No existing Firebase player tab was open in Brave. Opened a temporary player tab using that profile's already-stored pairing; the server rejected it with “Device must be paired again.” Did not issue a new pairing or revoke another device; closed the temporary tab. Therefore live authenticated ad playback was not claimed. Local browser tests covered real nativevideo repetition, image visibility, offline reload, allowance exhaustion/retries and filler; physical72-hour burn-in remains outstanding.
 **User action:** Refresh an active paired player once to load protocol2; stale/revoked profiles need their normal pairing process. Uploaded media enables offline preparation; YouTube remains online-only and may have source-loading gaps. Upload and approve filler for each operator organisation before expecting content when all paid delivery is ineligible.
 **Log/push:** This entry is a follow-up documentation commit; no extra application rollout is needed for it. Source release remains `a974675`.
+
+### 2026-09-25 05:14 IST · claude-opus-5 (Cowork) · Settings architecture research (doc 19)
+
+**Asked:** Sanan: "research how we can make the settings tab more robust for each user — admin, operator,
+advertiser; look at Meta ads portal, Zoho org portal etc. for reference."
+**Did:** Read `lib/nav.ts`, `lib/roles.ts`, `components/views/account.tsx`, `lib/api.ts` settings/audit
+routes. Ran web research across Meta Business Settings, Zoho One / Zoho CRM, Google Ad Manager, Stripe
+Dashboard, Broadsign Platform, AWS Organizations, Shopify Polaris and NN/g. Wrote
+`gridcast-research/19-settings-architecture.md`. No source changes.
+
+**Current state — five findings, all from source:**
+1. **The advertiser has no settings at all.** `advertiserNav().bottom` is `[profile, logout]`. The only
+   party that pays us cannot set a notification, add a tax identity, invite a colleague or schedule a
+   report.
+2. **There is no platform-settings surface.** `db.settings` holds `config_revision` and
+   `blocked_categories` / `category_blocklist`; the eligibility engine **reads** them (`lib/api.ts:81`) and
+   `GET /settings` serves them (`:575`), but nothing can edit them. Network policy is a data structure with
+   no door.
+3. **Security does not exist as a concept** — no 2FA, no session list, no password policy, no IP
+   allowlist, no step-up re-auth. The one good primitive is already built: `auth_version` bumps on role and
+   password change and invalidates live tokens. That is the hard half of session revocation, with no UI.
+4. **Change history exists and is invisible.** `appendAudit` wraps every POST (`:186`) and `GET /audit`
+   serves it. No settings page surfaces it.
+5. **`TeamPage` contradicts doc 16.** It creates `advertiser_viewer` users filtered by
+   `a.org_id === orgId` (`account.tsx:369`), but doc 16 made advertisers network-level and Gridcast-owned.
+   A network advertiser's login can therefore only be created by a platform admin in the Gridcast org, and
+   which organisation that user belongs to is undefined. **This blocks advertiser settings and is a
+   data-model question, not a settings one.**
+
+**What is already right:** `lib/roles.ts` is deliberately coarse and should stay so; `assignable()` already
+implements a privilege-escalation ceiling, which is Stripe's `IAM Administrator` idea arrived at
+independently.
+
+**Patterns taken from the research:**
+- **Stripe's Personal / Account / Product trichotomy** — stated in their own docs, and the best defence
+  against a settings junk drawer. Adapted: *Personal is identical for all three roles; Organisation differs
+  by role; Platform exists once.* Building Personal once closes most of the advertiser gap for free.
+- **Stripe's inheritance rule verbatim**: parent roles cascade and cannot be narrowed at a child; child
+  roles can be granted standalone.
+- **Zoho One's security-policy object** — policies attached to groups, ordered by priority, with
+  **per-component fallback** and an **undeletable Default Policy** — layered with **AWS SCP semantics**
+  (policies as maximum boundaries, not grants). That gives the platform a floor and a ceiling an operator
+  can tighten but never weaken: the same discipline as doc 08's locked device keys, applied to org policy.
+- **Meta's three-value 2FA** — None / **Admins only** / Everyone. The middle value is the useful one.
+- **Google Ad Manager**: per-object **History** button on the object's own settings page plus a network-wide
+  log showing attribute, old → new, actor, timestamp; a "changes only" toggle; and explicit documentation
+  of what is *not* captured. Also deactivate-never-delete with downstream side-effect warnings, and Pending
+  invite states.
+- **Google Ads `Email only`** access level — receives reports, never signs in. Exactly right for an
+  advertiser's stakeholders.
+- **Broadsign** (closest DOOH analogue) organises settings **by revenue channel**, and has *Creative
+  Management* as a first-class settings section — which Gridcast needs and lacks. Their API keys inherit a
+  linked user's roles and **deactivate with that user**; combine with Stripe's reveal-once, 7-day rotation
+  grace, separate Expire/Rotate verbs, per-key note and request log.
+- **NN/g on confirmations**: specific verbs, identifying details, prefer undo (which `DataTable` bulk
+  actions already do), typed confirmation only for the rare and irreversible.
+
+**One gap the references exposed that we had not named:** Gridcast has a capability axis (`Cap`) but **no
+entity-scope axis**. Zoho (Profile × Role) and Google Ad Manager (Roles × Teams) both separate *what you
+may do* from *which objects you may touch*. Fine at 13 screens; wrong at 300, when a regional salesperson
+should see one venue chain. Recommended as a later addition, not now.
+
+**Also proposed:** operator **inventory defaults** (operating hours, advertiser slots, creative duration
+limits, network release, filler) — today every one is set per screen with no default, so onboarding screen
+#40 means retyping screen #1. And **advertiser brand safety** as a settings page: `lib/inventory.ts:240`
+already enforces `advertiser.exclusions`; doc 16 identified the missing piece as the editing surface, and
+it belongs to the advertiser, not the operator.
+
+**Research limitation, stated in the doc:** Meta's own help pages are robots-disallowed and could not be
+fetched. Meta claims come from a verbatim mirror of the Business Help Center and vendor docs; exact 2026 UI
+labels, Security Center contents and whether Business Settings has change history at all are unverified.
+Nothing in the build plan depends on an unverified Meta detail.
+
+**Proposed order:** Personal (all three portals) → advertiser org settings → platform settings → security
+policy objects → change-history surfaces → operator inventory defaults → API keys/webhooks last.
+**Blocked first:** finding 5 — which org a network advertiser's user belongs to.
+**Outcome:** Research and plan only. No source changes, tests, seed, deployment or push.
+**Files:** `gridcast-research/19-settings-architecture.md`, `AI-LOG.md`. Application `0969af0`; log base
+`1daf127`.
+
+
+### 2026-09-25 05:16 IST · GPT-6 (Codex desktop) · AFK completion review and confirmed recovery fixes
+
+**Asked:** Sanan is going AFK and authorizes finishing outstanding work; requested the caveman skill for concise chat responses. Read the skill and keep persisted project documents in normal prose.
+**Confirmed and fixed:** Two deployed playlist-cache defects reproduced against exact `a974675`: an exhausted campaign could remain blocked while a second campaign had allowance, and an empty/filler-only set did not recover when another screen released reserved funds. Replenishment now preserves unspent assignments and retries only missing/exhausted entries. Also recompute validity when rotation changes uploaded media to YouTube. Player requests replacement allowances within five seconds while other media continues.
+**Offline correction:** New online permission sets remove revoked assignments from saved schedules immediately. Revision checks prevent older downloads/responses from restoring removed schedules. A device revocation persists across tabs and prevents new local allowance consumption; receipt-upload401 now clears offline permissions too. Existing two-filler alternation was correct and now has explicit regression coverage.
+**Additional verification:** A three-hour full-utilization protocol test records1,080consecutive plays:360paid then720filler, exactly360paise spent, null unmeasured presence and no false hourly throughput failures. This is accelerated testing, not a physical burn-in. Budget/device/endurance27tests passed; actual Enterprise SDK budget-race and released-funds recovery passed; four targeted playback browser checks and extended cache/race checks passed. Final full regression/build checks follow.
+**Cloud finding:** Read-only error-log review found one Cloud Run update audit error at23:39:24UTC: the default maximum100instances exceeded the region's20CPU quota. The previous rollout still reached READY/SUCCEEDED100%. Set explicit runConfig cpu1/maxInstances20 in `apphosting.yaml`, preserving minInstances0/memory1024MiB, to prevent recurrence without requesting more quota.
+**Scope:** Preserve Claude's concurrent settings-research log and untracked research file; that separate proposed feature plan is not an implementation instruction for this release. No production data, device pairings, credentials or filler assets are created during this pass.
+**Files/base:** `lib/devices.ts`, `lib/player-media-cache.ts`, `app/player/page.tsx`, affected device/Firestore/cache/player tests, `tests/network-endurance.test.cjs`, `apphosting.yaml`; base `3cfecbd`, deployed app `a974675`.
+
+
+### 2026-09-25 05:18 IST · GPT-6 (Codex desktop) · Recovery release validation
+
+**Verified:** Full suite 203 tests: 199 passed, zero failed, four emulator-gated skips. Separate real Enterprise SDK recovery/race test passed. Four focused player browser tests and the extended offline-cache browser test passed. TypeScript, production build and whitespace check passed.
+**Action:** Commit and deploy the reviewed recovery changes and explicit Cloud Run scaling cap to Firebase. Preserve concurrent Claude research log additions. No unrelated untracked files included.
+**Follow-up request:** User separately requested installation of DeusData/codebase-memory-mcp and future use for Gridcast; reviewing official installation instructions while the release proceeds. Installation is not part of the application runtime.
+**Files/base:** The ten tracked files in this release; base `3cfecbd`, previous deployed app `a974675`. Final release SHA and rollout outcome will follow.
