@@ -913,3 +913,9 @@ about hardest, because it makes the ledger quietly unreliable exactly where it m
 **Did:** Reduced organisation-name bottom margin from 4px to 2px and applied compact line-height after font-size classes so class merging retains it. Explained All organisations is the master-admin overview across tenants; Gridcast selects the platform's own organisation for records it owns. Organisation selection does not change the signed-in admin role; creation requires explicit ownership scope. No scope/permission behavior changed.
 **Verification:** Production build/typecheck and diff checks PASS; checked merged classes retain `mb-0.5 leading-none`. No new tests for this one-line spacing change; no failures.
 **Files/commit:** `components/ui/sidebar-nav.tsx`, `AI-LOG.md`; base `d8cdb93`, scoped Firebase release follows.
+
+
+### 2026-09-25 02:39 IST · GPT-6 (Codex desktop) · Sidebar spacing deployed
+
+**Outcome:** Firebase `build-2026-09-24-007` READY, rollout SUCCEEDED, 100% traffic, source `5b18caeb3191276fe1f4c284c0df27f26effc0b8`. Live admin JavaScript contains the corrected subtitle margin and compact line-height classes. Build and deployment succeeded without failures.
+**Files/commit:** Application `5b18cae`; `AI-LOG.md` completion append, log-only follow-up commit.
