@@ -63,9 +63,9 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
       name: f.name, venue_name: f.venue_name, address: f.address, photo_url: f.photo_url || '', has_camera: !!f.has_camera,
       ...(mayPrice ? { venue_base: Number(f.venue_base), size_factor: Number(f.size_factor),
         location_factor: Number(f.location_factor), exposure_factor: Number(f.exposure_factor) } : {}),
-      advertiser_slots: Number(f.advertiser_slots) || 10, loop_length_s: Number(f.loop_length_s),
-      slot_duration_s: Number(f.slot_duration_s), operating_hours: {from:f.from,to:f.to},
-      ...(mayMoney ? { owner_share_pct: Number(f.owner_share_pct) } : {}), network_slots: net, network_available: net > 0, tags,
+      ...(mayPrice ? {advertiser_slots:Number(f.advertiser_slots) || 10, loop_length_s:Number(f.loop_length_s),slot_duration_s:Number(f.slot_duration_s),network_slots:net,network_available:net > 0} : {}),
+      operating_hours:{from:f.from,to:f.to},
+      ...(mayMoney ? { owner_share_pct: Number(f.owner_share_pct) } : {}), tags,
     });
     await api(`/screen/${id}/exclusions`, { exclusions: { categories: String(f.excStr).split(',').map(x => x.trim()).filter(Boolean), advertisers: String(f.advExcStr).split(',').map(x=>x.trim()).filter(Boolean), competitive_separation:!!f.exclusions?.competitive_separation } });
     setEdit(false); await load(); onChanged(); }catch(e){setError((e as Error).message);}finally{setBusy(false);}
@@ -112,12 +112,13 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
             ))}
           </div>
           <p className="mb-3 font-mono text-[12.5px] text-primary">→ {inr(preview)} / month · {inr(perSlot)} per advertiser per month</p></>}
-          <Label className="mt-2">Loop &amp; share</Label>
+          {(mayPrice || mayMoney) && <Label className="mt-2">Loop &amp; share</Label>}
           <div className="mb-3 flex flex-wrap gap-3">
-            {[['loop_length_s','Loop (s)'],['slot_duration_s','Slot (s)'],['owner_share_pct','Owner share %'],['network_slots','Slots to network']].filter(([k]) => k !== 'owner_share_pct' || mayMoney).map(([k, lbl]) => (
+            {[['loop_length_s','Loop (s)'],['slot_duration_s','Slot (s)'],['owner_share_pct','Owner share %'],['network_slots','Network advertiser limit']].filter(([k]) => k === 'owner_share_pct' ? mayMoney : mayPrice).map(([k, lbl]) => (
               <Field key={k} label={lbl}><Input type="number" value={f[k]} onChange={e => setF({ ...f, [k]: e.target.value })} /></Field>
             ))}
           </div>
+          {mayPrice && <p className="mb-3 text-xs text-muted-foreground">The network limit counts distinct advertisers within the shared advertiser limit. Reducing it stops new bookings; existing commitments keep their reserved space.</p>}
           <div className="mb-3 flex flex-wrap gap-3">
             <Field label="Opens (IST)"><Input type="time" value={f.from} onChange={e=>setF({...f,from:e.target.value})}/></Field><Field label="Closes (IST)"><Input type="time" value={f.to} onChange={e=>setF({...f,to:e.target.value})}/></Field>
             <Field label="Tags (key:value, comma separated)"><Input value={f.tagStr} onChange={e => setF({ ...f, tagStr: e.target.value })} /></Field>

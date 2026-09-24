@@ -155,8 +155,8 @@ export default function Admin() {
       {view === 'new-screen' && orgFilter!=='all' && <ScreenOnboarding boot={{...d,orgs:orgDirectory}} user={user} orgId={orgFilter==='all'?null:orgFilter} onGo={go} onDone={async(s:any)=>{await reload();go('s/'+s.id);}} />}
       {view.startsWith('s/') && orgFilter!=='all' && !d.screens.some((s:any)=>s.id===view.slice(2)&&s.org_id===orgFilter) && <Empty>This screen is outside the selected organisation. Select its organisation before opening it.</Empty>}
       {view.startsWith('s/') && (orgFilter==='all'||d.screens.some((s:any)=>s.id===view.slice(2)&&s.org_id===orgFilter)) && <ScreenDetail id={view.slice(2)} onGo={go} onChanged={reload} />}
-      {view.startsWith('c/') && orgFilter!=='all' && !d.campaigns.some((c:any)=>c.id===view.slice(2)&&c.org_id===orgFilter) && <Empty>This campaign is outside the selected organisation. Select its organisation before opening it.</Empty>}
-      {view.startsWith('c/') && (orgFilter==='all'||d.campaigns.some((c:any)=>c.id===view.slice(2)&&c.org_id===orgFilter)) && <CampaignDetail id={view.slice(2)} boot={d} onGo={go} onChanged={reload} />}
+      {view.startsWith('c/') && orgFilter!=='all' && !d.campaigns.some((c:any)=>c.id===view.slice(2)) && <Empty>This campaign is outside the selected organisation. Select its organisation before opening it.</Empty>}
+      {view.startsWith('c/') && (orgFilter==='all'||d.campaigns.some((c:any)=>c.id===view.slice(2))) && <CampaignDetail id={view.slice(2)} boot={d} onGo={go} onChanged={reload} />}
       {view === 'new' && <CampaignBuilder boot={d} user={user} orgId={orgFilter==='all'?null:orgFilter} onGo={go} onDone={async (c: any) => { await reload(); go('c/' + c.id); }} />}
 
       {view === 'overview' && (() => {

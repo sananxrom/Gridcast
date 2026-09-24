@@ -7,7 +7,7 @@ const clone = x => x === undefined ? undefined : JSON.parse(JSON.stringify(x));
 const source = ts.transpileModule(fs.readFileSync(path.join(__dirname, '../lib/firestore-store.ts'), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
 }).outputText;
-const mod = { exports: {} }; new Function('require', 'module', 'exports', source)(require, mod, mod.exports);
+const mod = { exports: {} }; new Function('require', 'module', 'exports', source)(name => name.startsWith('.') ? require('./load-lib.cjs')(name.slice(2)) : require(name), mod, mod.exports);
 const { createFirestoreStore, emailKey, playKey, sequenceKey } = mod.exports;
 
 // In-memory Firestore protocol fake: atomic commit, create preconditions and retry
@@ -79,7 +79,7 @@ test('tenant-scoped snapshot loads no unrelated tenant records or event history'
   assert.deepEqual(data.plays.map(x => x.id), ['a_play']); assert.equal(data.presence[0].avg_persons, null);
   assert.deepEqual(data.settings, { config_revision: 2 });
   const queries = f.database.reads.filter(x => typeof x === 'object' && x.collection !== 'configs');
-  assert.ok(queries.every(q => q.filters.some(f => f[0] === 'org_id' && f[2] === 'a')));
+  assert.ok(queries.every(q => q.filters.some(f => f[0] === 'org_id' && f[2] === 'a') || (q.collection === 'campaigns' && q.filters.some(f => f[0] === 'participant_org_ids' && f[1] === 'array-contains' && f[2] === 'a'))));
 });
 
 test('only changed entity documents are written; stale unseen history is not deleted', async () => {

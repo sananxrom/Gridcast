@@ -1,6 +1,8 @@
 'use client';
 import { HistoryNotice } from '@/components/views/history-notice';
 import React, { useEffect, useState } from 'react';
+import { defaultSlotsPerLoop, physicalCapacity } from '@/lib/inventory';
+import { Settlement } from './settlement';
 import { api } from '@/lib/client';
 import { inr, fmtDate } from '@/lib/utils';
 import { PageHead, SectionHead } from '@/components/ui/app-shell';
@@ -20,9 +22,19 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
   const [edit, setEdit] = useState(false);
   const [f, setF] = useState<any>(null);
   const [err, setErr] = useState('');
+  const [inventory,setInventory]=useState<any>(null);
+  const [inventoryError,setInventoryError]=useState('');
+  const platform=(boot.caps??[]).includes('platform');
 
   const load = () => api(`/campaign/${id}`).then(x => { setD(x); setF({ ...x.campaign }); });
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [id]);
+  useEffect(() => {setD(null);setEdit(false);setErr('');load().catch(e=>setErr(e.message)); /* eslint-disable-next-line */ }, [id]);
+  useEffect(()=>{
+    let current=true;setInventory(null);setInventoryError('');
+    if(edit && platform && d?.campaign?.campaign_type==='network')api(`/network-inventory?org=${encodeURIComponent(d.campaign.org_id)}`).then(x=>{if(current)setInventory(x);}).catch(e=>{if(current)setInventoryError(e.message);});
+    return ()=>{current=false;};
+  },[edit,platform,d?.campaign?.org_id,d?.campaign?.campaign_type]);
+
+  if(!d && err)return <Card className="p-5"><p role="alert">{err}</p><Button className="mt-3" onClick={()=>{setErr('');load().catch(e=>setErr(e.message));}}>Retry</Button></Card>;
 
   if (!d) return (
     <div className="space-y-3">
@@ -32,7 +44,11 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
     </div>
   );
   const c = d.campaign;
-  const mayEdit = (boot.caps ?? []).includes('sales');
+  const network=c.campaign_type==='network';
+  const scopedNetwork=network&&!platform;
+  const mayEdit = (boot.caps ?? []).includes('sales') && (!network||platform);
+  const screenPool=network ? [...(inventory?.screens??[]),...d.byScreen.map((r:any)=>r.screen)].filter((screen:any,i:number,rows:any[])=>rows.findIndex(x=>x.id===screen.id)===i).filter((s:any)=>c.screen_ids.includes(s.id)||(s.network_available===true&&s.network_slots>0&&inventory?.orgs?.some((o:any)=>o.id===s.org_id&&o.status==='active'))) : boot.screens.filter((s:any)=>s.org_id===c.org_id);
+  const slotsFor=(screen:any)=>f.bookings?.find((b:any)=>b.screen_id===screen.id)?.slots_per_loop??(network?1:defaultSlotsPerLoop(screen));
   const mayMoney = (boot.caps ?? []).includes('money');
   const pct = c.committed_budget ? Math.round((c.accrued_spend / c.committed_budget) * 100) : 0;
   const rate = c.rate_type === 'flat'
@@ -43,11 +59,13 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
     setErr('');
     if (!f.screen_ids.length) return setErr('Pick at least one screen.');
     if (!f.creative_ids.length) return setErr('Pick at least one creative.');
+    if(network && !inventory)return setErr('Wait for network inventory before saving.');
     try { await api(`/campaign/${id}`, {
       name: f.name, starts_at: f.starts_at, ends_at: f.ends_at,
       committed_budget: Number(f.committed_budget) || 0, rate_type: f.rate_type,
       rate_value: f.rate_type === 'per_play' ? Number(f.rate_value) || 0 : 0,
       ...(mayMoney ? { invoice_status: f.invoice_status } : {}), screen_ids: f.screen_ids, creative_ids: f.creative_ids,
+      bookings:f.screen_ids.map((screenId:string)=>{const screen=screenPool.find((s:any)=>s.id===screenId);if(!screen)throw new Error('Selected screen is unavailable.');return {screen_id:screenId,slots_per_loop:Number(slotsFor(screen))};}),
     });
     setEdit(false); await load(); onChanged(); }catch(e){setErr((e as Error).message);}
   };
@@ -56,7 +74,7 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
     await load(); onChanged(); }catch(e){setErr((e as Error).message);}
   };
   const tick = (arr: string[], v: string) => arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v];
-  const mine = boot.creatives.filter((x: any) => x.advertiser_id === c.advertiser_id);
+  const mine = [...boot.creatives,...(inventory?.creatives??[])].filter((cr:any,i:number,rows:any[])=>rows.findIndex(x=>x.id===cr.id)===i).filter((x: any) => x.advertiser_id === c.advertiser_id);
 
   return (
     <>
@@ -73,6 +91,7 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
       />
 
       <HistoryNotice history={d.history} />
+      {scopedNetwork && <Card className="mb-4 p-4 text-sm text-muted-foreground">Gridcast manages this network campaign. Delivery and amounts below cover your organisation’s screens only.</Card>}
       {!edit && err && <p role="alert" className="mb-3 text-sm text-destructive">{err}</p>}
       {edit && mayEdit && f && (
         <Card className="mb-5 border-primary/40 p-5">
@@ -84,8 +103,8 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
           </div>
           <div className="mb-3 flex flex-wrap gap-3">
             <Field label="Rate type">
-              <Select value={f.rate_type} onChange={e => setF({ ...f, rate_type: e.target.value })}>
-                <option value="per_play">Per play</option><option value="flat">Flat fee</option>
+              <Select disabled={network} value={f.rate_type} onChange={e => setF({ ...f, rate_type: e.target.value })}>
+                <option value="per_play">Per play</option>{!network&&<option value="flat">Flat fee</option>}
               </Select>
             </Field>
             {f.rate_type === 'per_play' && (
@@ -99,8 +118,10 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
             </Field>}
           </div>
           <Label>Screens</Label>
+          {network&&!inventory&&!inventoryError&&<p role="status" className="mb-2 text-sm">Loading network inventory…</p>}
+          {inventoryError&&<p role="alert" className="mb-2 text-sm text-destructive">{inventoryError}. Close and reopen the editor to retry.</p>}
           <div className="mb-3 max-h-52 overflow-y-auto rounded-lg border border-border/60">
-            {boot.screens.filter((s: any) => s.org_id === c.org_id).map((s: any) => (
+            {screenPool.map((s: any) => (
               <label key={s.id} className="flex cursor-pointer items-center gap-2.5 border-b border-border/50 px-3 py-2 text-[13px] last:border-0 hover:bg-black/[0.02]">
                 <input type="checkbox" checked={f.screen_ids.includes(s.id)} onChange={() => setF({ ...f, screen_ids: tick(f.screen_ids, s.id) })} />
                 <span className="flex-1 truncate">{s.name} <span className="text-muted-foreground">{s.address}</span></span>
@@ -108,6 +129,7 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
               </label>
             ))}
           </div>
+          {screenPool.filter((s:any)=>f.screen_ids.includes(s.id)).map((s:any)=><div key={s.id} className="mb-3 flex items-center gap-3"><span className="flex-1 text-sm">{s.name}</span><Field label="Appearances per loop"><Input aria-label={`Appearances per loop for ${s.name}`} type="number" min="1" max={physicalCapacity(s)} value={slotsFor(s)} onChange={e=>setF({...f,bookings:[...(f.bookings??[]).filter((b:any)=>b.screen_id!==s.id),{screen_id:s.id,slots_per_loop:e.target.value}]})}/></Field></div>)}
           <Label>Creatives</Label>
           <div className="mb-3 flex flex-col gap-1">
             {mine.map((cr: any) => (
@@ -122,7 +144,7 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
             Changing screens or creatives affects delivery from the next schedule pull. Existing screen bookings keep their agreed rate; a changed rate applies to newly added screens. Recorded plays and accrued spend are not altered.
           </div>
           <div className="sticky bottom-0 -mx-5 -mb-5 mt-4 flex items-center gap-2 border-t border-border bg-card/95 px-5 py-3 backdrop-blur">
-            <Button onClick={save}>Save changes</Button>
+            <Button disabled={network&&!inventory} onClick={save}>Save changes</Button>
             <Button variant="outline" onClick={() => setEdit(false)}>Cancel</Button>
             {err && <span className="text-[12.5px] text-destructive">{err}</span>}
           </div>
@@ -133,16 +155,17 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
         <Stat label="Play reports" value={d.totals.plays.toLocaleString('en-IN')} hint={`across ${d.byScreen.length} screen${d.byScreen.length === 1 ? '' : 's'}`} />
         <Stat label="Avg people / play" value={d.totals.avg === null ? '—' : d.totals.avg.toFixed(1)} hint="while the ad was on screen" />
         <Stat label="Measured" value={<>{d.totals.measured}<span className="text-[15px] text-muted-foreground"> / {d.totals.plays}</span></>} hint="reports with presence samples" />
-        <Stat label="Spend" value={inr(c.accrued_spend)} hint={`of ${inr(c.committed_budget)} · new bookings: ${rate}`} />
+        {typeof c.accrued_spend==='number'&&<Stat label={scopedNetwork?"Gross on your screens":"Spend"} value={inr(c.accrued_spend)} hint={scopedNetwork?"Verified per-play accrual":`of ${inr(c.committed_budget)} · new bookings: ${rate}`} />}
       </div>
-      <Progress className="mt-3" value={pct} hot={pct >= 80} />
+      {c.committed_budget!=null&&<Progress className="mt-3" value={pct} hot={pct >= 80} />}
+      {mayMoney&&<><SectionHead>Verified settlement</SectionHead><Settlement buckets={d.settlement_buckets??[]} campaigns={[c]} screens={d.byScreen.map((r:any)=>r.screen)}/></>}
 
       <SectionHead>Per-screen delivery</SectionHead>
       <DataTable
         cols={[
           { label: 'Screen', render: (r: any) => <><div className="font-medium">{r.screen.name}</div><div className="text-[12px] text-muted-foreground">{r.screen.address}</div></> },
           { label: 'Venue', render: (r: any) => <Badge variant="muted">{r.screen.venue_type}</Badge> },
-          {label:'Booking',render:(r:any)=>{const b=c.bookings?.find((x:any)=>x.screen_id===r.screen.id);return b?<span className="text-xs">{b.slots_per_loop} appearances / loop<br/>{b.rate_type==='per_play'?`${inr(b.rate_value)} / play`:b.rate_type==='flat'?'Agreed flat rate':'Rate unavailable'}</span>:<span className="text-xs text-muted-foreground">Legacy booking</span>;}},
+          {label:'Booking',render:(r:any)=>{const b=c.bookings?.find((x:any)=>x.screen_id===r.screen.id);return b?<span className="text-xs">{b.slots_per_loop} appearances / loop<br/>{b.rate_type==='per_play'&&typeof b.rate_value==='number'?`${inr(b.rate_value)} / play`:b.rate_type==='flat'?'Agreed flat rate':'Rate unavailable'}</span>:<span className="text-xs text-muted-foreground">Legacy booking</span>;}},
           { label: 'Play reports', num: true, render: (r: any) => r.plays },
           { label: 'Share', num: true, render: (r: any) => { const p = d.totals.plays ? Math.round(r.plays / d.totals.plays * 100) : 0; return <div className="flex items-center justify-end gap-2">{p}%<Progress value={p} className="w-16" /></div>; } },
           { label: 'Avg people', num: true, render: (r: any) => r.avg === null ? <span className="text-muted-foreground">—</span> : <b>{r.avg.toFixed(1)}</b> },

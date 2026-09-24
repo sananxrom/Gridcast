@@ -124,7 +124,7 @@ test('campaign relationships cannot reference unrelated orgs or advertisers; own
  expectStatus(await f.call('POST','campaign/cmp_1',{screen_ids:[d.screens.find(s=>s.org_id==='org_tricity').id]},t),404);
  expectStatus(await f.call('POST','campaign',{advertiser_id:'adv_mobile',screen_ids:[sid],creative_ids:['cr_mob_a']},t),400);
  expectStatus(await f.call('POST','campaign/cmp_1',{name:'Revised campaign'},t),200);
- expectStatus(await f.call('POST','campaign/cmp_net1',{status:'paused'},t),200);
+ expectStatus(await f.call('POST','campaign/cmp_net1',{status:'paused'},t),403);
  expectStatus(await f.call('POST','campaign',{advertiser_id:'adv_fitline',screen_ids:[sid],creative_ids:['cr_fit_a'],name:'New',starts_at:'2027-01-01',ends_at:'2027-01-31',committed_budget:1000,rate_type:'per_play',rate_value:1},t),200);
 });
 
@@ -132,7 +132,7 @@ test('network campaign references remain visible without counterparty private co
  const f=fixture(), t=f.token('u_op1');
  const b=expectStatus(await f.call('GET','bootstrap',{},t),200);
  assert.ok(b.creatives.some(c=>c.id==='cr_zep_a'));
- const net=b.campaigns.find(c=>c.id==='cmp_net1'); assert.equal(net.platform_fee_pct,10);
+ const net=b.campaigns.find(c=>c.id==='cmp_net1'); assert.equal(net.platform_fee_pct,undefined); assert.equal(net.committed_budget,undefined); assert.equal(net.reporting_scope,'organisation');
  const detail=expectStatus(await f.call('GET','campaign/cmp_net1',{},t),200);
  assert.equal(detail.advertiser.name,'Zephyr Beverages');
  for(const k of ['email','phone','contact']) assert.equal(detail.advertiser[k],undefined);
@@ -252,7 +252,7 @@ test('archive refuses paused and cross-organisation network references, audit is
  assert.ok(!JSON.stringify(audit).includes('private@example.invalid'));
  const own=expectStatus(await f.call('GET','bootstrap?org=org_sec17',{},admin),200);
  assert.ok(own.screens.every(s=>s.org_id==='org_sec17'));
- assert.ok(own.campaigns.every(c=>c.org_id==='org_sec17'));
+ assert.ok(own.campaigns.every(c=>c.org_id==='org_sec17' || (c.campaign_type==='network' && c.screen_ids.every(id=>own.screens.some(s=>s.id===id)))));
  expectStatus(await f.call('GET','bootstrap?org=org_sec17',{},f.token('u_op2')),404);
 });
 

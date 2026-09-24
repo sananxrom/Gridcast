@@ -5,8 +5,8 @@ const executablePath=[process.env.GC_TEST_BROWSER_PATH,chromium.executablePath()
 const compile=file=>ts.transpileModule(fs.readFileSync(path.join(root,file),'utf8'),{fileName:file,compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React,esModuleInterop:true}}).outputText;
 const scripts=Object.fromEntries(['lib/readiness.ts','components/views/screen-diagnostics.tsx','components/views/screen-detail.tsx'].map(f=>[f,compile(f)]));
 const fixture=()=>({screen:{id:'screen1',name:'Test screen',status:'active',has_camera:false,advertiser_slots:10,slot_duration_s:10,loop_length_s:120,tags:{}},status:{state:'live'},device:{id:'dev1',status:'active',vision:{camera_state:'unavailable',model_state:'not_loaded',last_sample_at:null,reported_at:new Date().toISOString()}},config:{},stats:{liveCampaigns:0,playsToday:0,plays:0,avg:null,measured:0},campaigns:[],recent:[],caps:['screens','sales'],readiness:{ready:false,code:'no_campaign',message:'No campaign is assigned to this screen.',warnings:[]},diagnostic_assignments:[],diagnostic_results:[]});
-async function harness(){
- const records=[],data=fixture();
+async function harness(options={}){
+ const records=[],data=fixture();if(options.caps)data.caps=options.caps;if(options.screen)Object.assign(data.screen,options.screen);
  const code=`const scripts=${JSON.stringify(scripts)},cache={};
  const el=tag=>({children,...props})=>React.createElement(tag,props,children);
  const plain=el('div');
@@ -45,6 +45,21 @@ test('screen renders empty readiness and unreported samples, saves camera and re
   await h.page.getByRole('button',{name:'Cancel test',exact:true}).waitFor();
   assert.ok(h.records.some(r=>r.path==='/api/screen/screen1/test'));
   assert.ok(!h.records.some(r=>/advertiser|campaign|\/play$/.test(r.path)));
+  assert.deepEqual(h.errors,[]);
+ }finally{await h.cleanup();}
+});
+
+
+test('installer edits screen details without sending pricing or network capacity fields',{skip:!executablePath},async()=>{
+ const protectedFields={venue_base:5000,size_factor:1.3,location_factor:1.2,exposure_factor:1,advertiser_slots:10,loop_length_s:600,slot_duration_s:10,network_slots:6,network_available:true,owner_share_pct:25};
+ const h=await harness({caps:['screens'],screen:protectedFields});try{
+  await h.page.getByRole('button',{name:'Edit screen',exact:true}).click();
+  for(const label of ['Venue base ₹','Size','Location','Exposure','Advertiser limit','Loop (s)','Slot (s)','Owner share %','Network advertiser limit'])assert.equal(await h.page.getByLabel(label,{exact:true}).count(),0,label+' hidden without permission');
+  await h.page.getByLabel('Name',{exact:true}).fill('Installer renamed screen');await h.page.getByLabel('Camera available for presence measurement').check();
+  await h.page.getByRole('button',{name:'Save screen',exact:true}).click();await h.page.getByText('Camera: enabled for this screen',{exact:true}).waitFor();
+  const payload=h.records.find(r=>r.path==='/api/screen/screen1'&&r.body).body;
+  assert.equal(payload.name,'Installer renamed screen');assert.equal(payload.has_camera,true);
+  for(const [key,value] of Object.entries(protectedFields)){assert.equal(Object.hasOwn(payload,key),false,key+' omitted from installer request');assert.equal(h.data.screen[key],value,key+' unchanged');}
   assert.deepEqual(h.errors,[]);
  }finally{await h.cleanup();}
 });

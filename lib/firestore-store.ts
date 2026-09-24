@@ -1,3 +1,4 @@
+import { appliedOffset, settlementKey, settlementPeriod } from './settlement';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import type { Firestore, Transaction } from 'firebase-admin/firestore';
@@ -6,14 +7,14 @@ import type { Firestore, Transaction } from 'firebase-admin/firestore';
 export type StoreContext = {
   method: string; path: string[]; uid?: string; deviceId?: string; loginEmail?: string;
   pairingCodeHash?: string; playUid?: string; seqNo?: number; assignmentId?: string;
-  orgId?: string; entity?: string; after?: string; limit?: number; targetOrg?: string;
+  startedAtDevice?: string; clockOffset?: number; orgId?: string; entity?: string; after?: string; limit?: number; targetOrg?: string;
 };
 export class StoreError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 const DOMAIN = ['orgs', 'users', 'screens', 'advertisers', 'creatives', 'campaigns', 'groups', 'devices', 'configs', 'assets'] as const;
 const EVENTS = ['plays', 'presence', 'device_assignments', 'audit', 'diagnostic_results'] as const;
-const COLLECTIONS = [...DOMAIN, ...EVENTS, 'diagnostic_assignments'];
+const COLLECTIONS = [...DOMAIN, ...EVENTS, 'diagnostic_assignments', 'settlement_buckets'];
 const DOMAIN_LIMIT = 2000;
 export const HISTORY_LIMIT = 1500;
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -124,6 +125,9 @@ export function createFirestoreStore(database: Firestore) {
       const target = collection && context.path[1] ? await readDoc(tx, collection, context.path[1]) : null;
       orgId = context.orgId || (target ? (collection === 'orgs' ? target.id : target.org_id) : context.targetOrg) || (['team','invite','campaign','creative','advertiser','screens','group'].includes(context.path[0]) && !context.path[1] ? actor.org_id : undefined);
     }
+    // Network administration validates all receiving inventories in this transaction.
+    if (state.admin && ['network-inventory','campaign'].includes(context.path[0])) orgId = undefined;
+    if (state.admin && context.method === 'POST' && ['creative','advertiser'].includes(context.path[0])) orgId = undefined;
     const scoped = !state.admin || !!orgId;
     const globalPage = state.admin && !orgId && context.method === 'GET' && context.path[0] === 'bootstrap';
     const authOnly = ['login', 'me', 'password', 'logout'].includes(context.path[0]);
@@ -141,6 +145,16 @@ export function createFirestoreStore(database: Firestore) {
       if (!['orgs','advertisers','creatives','campaigns','screens','users','configs','groups','devices','assets','audit'].includes(collection)) throw new StoreError(400, 'Unknown directory');
       const filters: [string,any,any][] = scoped ? [[collection === 'orgs' ? 'id' : 'org_id', '==', orgId]] : [];
       snapshot.directory = await page(tx, collection, filters, context);
+      if (collection === 'campaigns' && scoped) {
+        const network = await page(tx,'campaigns',[['participant_org_ids','array-contains',orgId]],context);
+        const combined = [...new Map([...snapshot.directory.items,...network.items].map((c: any) => [c.id,c])).values()].sort((a: any,b: any) => a.id.localeCompare(b.id));
+        const limit = Math.min(100,Math.max(1,context.limit || 100));
+        const hasMore = snapshot.directory.has_more || network.has_more || combined.length > limit;
+        snapshot.directory = {items:combined.slice(0,limit),has_more:hasMore,next_cursor:hasMore ? combined.slice(0,limit).at(-1)?.id : null};
+        snapshot.screens = await query(tx,'screens',[['org_id','==',orgId]]);
+        snapshot.settlement_buckets = await query(tx,'settlement_buckets',[['org_id','==',orgId]]);
+      }
+      if (collection === 'campaigns') { snapshot.campaigns = snapshot.directory.items; if (!scoped) snapshot.settlement_buckets = await query(tx,'settlement_buckets'); }
       if (collection === 'audit') snapshot.audit = snapshot.directory.items;
       if (collection === 'screens') {
         // Public status-only projection: credential fields are never requested here.
@@ -178,7 +192,7 @@ export function createFirestoreStore(database: Firestore) {
           snapshot.screens = screen && screen.org_id === orgId ? [screen] : [];
           continue;
         }
-        if (deviceRequest && collection === 'campaigns') filters.push(['screen_ids', 'array-contains', pairedScreen?.id || device.screen_id]);
+        if (deviceRequest && collection === 'campaigns') { filters.length = 0; filters.push(['screen_ids', 'array-contains', pairedScreen?.id || device.screen_id]); }
         if (deviceRequest && collection === 'devices') filters.push(['screen_id', '==', pairedScreen?.id || device.screen_id]);
         if (deviceRequest && ['advertisers', 'creatives', 'assets'].includes(collection)) continue;
         if (actor?.role === 'advertiser_viewer' && collection === 'campaigns') filters.push(['advertiser_id', '==', actor.advertiser_id || '__none__']);
@@ -187,6 +201,12 @@ export function createFirestoreStore(database: Firestore) {
           (snapshot.pagination ||= {})[collection] = { has_more:p.has_more, next_cursor:p.next_cursor };
         } else snapshot[collection] = await query(tx, collection, filters);
       }
+      if (!deviceRequest && scoped && actor?.role !== 'advertiser_viewer') {
+        const network = await query(tx,'campaigns',[['participant_org_ids','array-contains',orgId]]);
+        snapshot.campaigns = [...new Map([...snapshot.campaigns,...network].map((c: any) => [c.id,c])).values()];
+      }
+      if (actor?.role === 'advertiser_viewer') await referenced(tx,'screens',snapshot.campaigns.flatMap((c: any) => c.screen_ids || []),snapshot.screens);
+      await referenced(tx,'orgs',snapshot.screens.map((s: any) => s.org_id),snapshot.orgs);
       // Keep the true authenticated actor and their organisation even in another organisation's context.
       if (actor && !snapshot.users.some((u: any) => u.id === actor.id)) snapshot.users.push(actor);
       if (actor) await referenced(tx, 'orgs', [actor.org_id], snapshot.orgs);
@@ -214,8 +234,20 @@ export function createFirestoreStore(database: Firestore) {
         // Offline events retain the issued campaign even if targeting changed later.
         if (assignment && !snapshot.campaigns.some((c: any) => c.id === assignment.campaign_id)) {
           const campaign = await readDoc(tx, 'campaigns', assignment.campaign_id);
-          if (campaign?.org_id === orgId) snapshot.campaigns.push(campaign);
+          if (campaign && (campaign.org_id === orgId || campaign.campaign_type === 'network')) snapshot.campaigns.push(campaign);
         }
+      }
+      if (device && context.assignmentId && context.startedAtDevice) {
+        const a = snapshot.device_assignments.find((a: any) => a.id === context.assignmentId && a.device_id === device.id && a.org_id === orgId);
+        const at = Date.parse(context.startedAtDevice) + appliedOffset(device,context.clockOffset);
+        if (a?.econ_version && Number.isFinite(at)) await referenced(tx,'settlement_buckets',[settlementKey(a.campaign_id,a.screen_id,settlementPeriod(at),a.econ_version)],snapshot.settlement_buckets);
+      }
+      if (actor && context.method === 'GET' && ['bootstrap','campaign','screen'].includes(context.path[0])) {
+        const filters: [string,any,any][] = actor.role === 'advertiser_viewer' ? [['advertiser_id','==',actor.advertiser_id || '__none__']] : scoped ? [['org_id','==',orgId]] : [];
+        if (context.path[0] === 'campaign') filters.push(['campaign_id','==',context.path[1]]);
+        if (context.path[0] === 'screen') filters.push(['screen_id','==',context.path[1]]);
+        // Full bounded authoritative buckets, never a total from the truncated receipt history.
+        snapshot.settlement_buckets = await query(tx,'settlement_buckets',filters);
       }
       await referenced(tx, 'advertisers', snapshot.campaigns.map((c: any) => c.advertiser_id), snapshot.advertisers);
       await referenced(tx, 'creatives', snapshot.campaigns.flatMap((c: any) => c.creative_ids || []), snapshot.creatives);
@@ -237,7 +269,7 @@ export function createFirestoreStore(database: Firestore) {
       if (!deviceRequest && context.method === 'GET' && ['bootstrap', 'screen', 'campaign'].includes(context.path[0])) {
         let q: any = database.collection('plays');
         let scope = !scoped ? 'platform' : 'organisation';
-        if (scoped) q = q.where('org_id', '==', orgId);
+        if (scoped && actor?.role !== 'advertiser_viewer') q = q.where('org_id', '==', orgId);
         if (context.path[0] === 'screen' && context.path[1]) { q = q.where('screen_id', '==', context.path[1]); scope = 'screen'; }
         if (context.path[0] === 'campaign' && context.path[1]) { q = q.where('campaign_id', '==', context.path[1]); scope = 'campaign'; }
         if (actor?.role === 'advertiser_viewer') q = q.where('advertiser_id', '==', actor.advertiser_id || '__none__');
@@ -249,6 +281,10 @@ export function createFirestoreStore(database: Firestore) {
         snapshot.history = { limit: HISTORY_LIMIT, returned: snapshot.plays.length, truncated,
           scope, oldest_at: snapshot.plays[0]?.ended_at || null, complete: !truncated };
         await referenced(tx, 'presence', snapshot.plays.map((p: any) => p.id), snapshot.presence);
+        // Target removal does not erase delivery history. Resolve only screen IDs already
+        // selected by this advertiser's authorized receipt/bucket queries, including old periods.
+        if (actor?.role === 'advertiser_viewer') await referenced(tx, 'screens',
+          [...snapshot.plays, ...snapshot.settlement_buckets].map((r: any) => r.screen_id), snapshot.screens);
       }
     }
     if (snapshot.pagination) snapshot.pagination.partial = Object.values(snapshot.pagination).some((p: any) => p?.has_more);

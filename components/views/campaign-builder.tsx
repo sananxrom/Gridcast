@@ -1,5 +1,5 @@
 'use client';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { api } from '@/lib/client';
 import { defaultSlotsPerLoop, physicalCapacity } from '@/lib/inventory';
 import { inr, ytId } from '@/lib/utils';
@@ -15,6 +15,18 @@ export function CampaignBuilder({ boot, user, orgId, onGo, onDone }: {
   const localDay=(time:number)=>new Date(time+330*60000).toISOString().slice(0,10);
   const end = localDay(Date.now() + 30 * 86400000);
   const selectedOrg = orgId ?? (user.role==='platform_admin' ? '' : user.org_id);
+  const isPlatform = user.role === 'platform_admin';
+  const originOrg = boot.orgs?.find((o:any)=>o.id===selectedOrg) ?? boot.org;
+  const [campaignType,setCampaignType] = useState('operator');
+  const network = campaignType === 'network';
+  const [networkInventory,setNetworkInventory] = useState<any>(null);
+  const [inventoryError,setInventoryError] = useState('');
+  const [inventoryAttempt,setInventoryAttempt] = useState(0);
+  useEffect(()=>{
+    let current=true;setNetworkInventory(null);setInventoryError('');
+    if(network && isPlatform && selectedOrg) api(`/network-inventory?org=${encodeURIComponent(selectedOrg)}`).then(result=>{if(current)setNetworkInventory(result);}).catch(e=>{if(current)setInventoryError(e.message);});
+    return ()=>{current=false;};
+  },[network,isPlatform,selectedOrg,inventoryAttempt]);
   const availableAdvertisers=boot.advertisers.filter((a:any)=>a.org_id===selectedOrg && a.status!=='archived');
   const [advId, setAdvId] = useState(availableAdvertisers[0]?.id ?? '__new');
   const [addedAdvertisers,setAddedAdvertisers] = useState<any[]>([]);
@@ -31,11 +43,12 @@ export function CampaignBuilder({ boot, user, orgId, onGo, onDone }: {
   const [status,setStatus] = useState('pending');
   const advertisers=[...availableAdvertisers,...addedAdvertisers];
   const [daypart,setDaypart]=useState({enabled:false,from:'09:00',to:'21:00'});
-  const ownScreens = boot.screens.filter((s:any)=>s.org_id===selectedOrg);
-  const slotsFor=(s:any)=>bookingSlots[s.id] ?? String(defaultSlotsPerLoop(s));
+  const ownScreens = network ? (networkInventory?.screens ?? []).filter((s:any)=>s.network_available===true && s.network_slots>0 && networkInventory.orgs.some((o:any)=>o.id===s.org_id && o.status==='active')) : boot.screens.filter((s:any)=>s.org_id===selectedOrg);
+  const slotsFor=(s:any)=>bookingSlots[s.id] ?? String(network ? 1 : defaultSlotsPerLoop(s));
+  const orgName=(id:string)=>(networkInventory?.orgs ?? boot.orgs ?? []).find((o:any)=>o.id===id)?.name ?? id;
 
   const pool = [...boot.creatives, ...local].filter((c: any) => c.advertiser_id === advId);
-  const total = boot.screens.filter((s: any) => screens.includes(s.id)).reduce((a: number, b: any) => a + b.slot_price_month, 0);
+  const total = ownScreens.filter((s: any) => screens.includes(s.id)).reduce((a: number, b: any) => a + b.slot_price_month, 0);
   const tick = (arr: string[], v: string, set: (x: string[]) => void) => set(arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v]);
 
   const addAdvertiser=async()=>{setErr('');try{if(!selectedOrg) throw new Error('Select an organisation first.');if(!newAdv.name.trim()) throw new Error('Enter the advertiser name.');const a=await api('/advertiser',{org_id:selectedOrg,...newAdv,category:'general'});setAddedAdvertisers([...addedAdvertisers,a]);setAdvId(a.id);}catch(e){setErr((e as Error).message);}};
@@ -60,6 +73,8 @@ export function CampaignBuilder({ boot, user, orgId, onGo, onDone }: {
     try {
       if (!selectedOrg) throw new Error('Select an organisation first.');
       if (advId !== '__new' && !advertisers.some((a:any)=>a.id===advId)) throw new Error('Select an active advertiser in this organisation.');
+      if (network && (!isPlatform || originOrg?.type!=='gridcast')) throw new Error('Select the Gridcast organisation to create a network campaign.');
+      if (network && !networkInventory) throw new Error('Wait for network screens to load.');
       if (!screens.length) throw new Error('Pick at least one screen.');
       if (!creatives.length) throw new Error('Pick or add at least one creative.');
       if (!f.name.trim()) throw new Error('Enter a campaign name.');
@@ -71,11 +86,11 @@ export function CampaignBuilder({ boot, user, orgId, onGo, onDone }: {
         const a = await api('/advertiser', { org_id: selectedOrg, name: newAdv.name, contact: newAdv.contact, category: 'general' });
         adv = a.id; setAdvId(adv);
       }
-      const bookings=screens.map(id=>{const s=ownScreens.find((x:any)=>x.id===id);if(!s) throw new Error('Selected screen does not belong to this advertiser’s organisation.');const n=Number(slotsFor(s));if(!Number.isInteger(n)||n<1) throw new Error('Appearances per loop must be a positive whole number.');return {screen_id:id,slots_per_loop:n};});
+      const bookings=screens.map(id=>{const s=ownScreens.find((x:any)=>x.id===id);if(!s) throw new Error('Selected screen is no longer available for this campaign.');const n=Number(slotsFor(s));if(!Number.isInteger(n)||n<1) throw new Error('Appearances per loop must be a positive whole number.');return {screen_id:id,slots_per_loop:n};});
       const c = await api('/campaign', {
-        org_id: selectedOrg, advertiser_id: adv, name: f.name,
+        org_id: selectedOrg, advertiser_id: adv, name: f.name, campaign_type: campaignType,
         starts_at: f.starts_at, ends_at: f.ends_at, committed_budget: budget,
-        rate_type: f.rate_type, rate_value: f.rate_type === 'per_play' ? rate : 0,
+        rate_type: network ? 'per_play' : f.rate_type, rate_value: network || f.rate_type === 'per_play' ? rate : 0,
         screen_ids: screens, creative_ids: creatives, bookings, status, ...(daypart.enabled?{dayparts:[{from:daypart.from,to:daypart.to}]}:{}),
       });
       onDone(c);
@@ -88,6 +103,13 @@ export function CampaignBuilder({ boot, user, orgId, onGo, onDone }: {
         sub="Budget is entered manually — the platform records what was agreed, it does not take payment." />
 
       {!selectedOrg && <Card className="mb-4 p-4">Select an organisation above before creating a campaign.</Card>}
+      {isPlatform && <Card className="mb-4 p-5">
+        <Field label="Campaign type"><Select aria-label="Campaign type" value={campaignType} onChange={e=>{setCampaignType(e.target.value);setScreens([]);setBookingSlots({});setErr('');if(e.target.value==='network')setF({...f,rate_type:'per_play'});}}>
+          <option value="operator">Organisation campaign — its own screens</option>
+          <option value="network" disabled={originOrg?.type!=='gridcast'}>Network campaign — screens across organisations</option>
+        </Select></Field>
+        <p className="mt-2 text-sm text-muted-foreground">{network ? `Advertisers and creatives stay with ${originOrg?.name ?? 'Gridcast'}. Choose released screens across the network below. Network campaigns use per-play billing.` : 'For network campaigns, select the Gridcast organisation above. A campaign’s type cannot change after creation.'}</p>
+      </Card>}
       <Card className="mb-4 p-5">
         <h3 className="mb-3 text-[14px] font-semibold">1 · Client &amp; dates</h3>
         <div className="flex flex-wrap gap-3">
@@ -114,22 +136,22 @@ export function CampaignBuilder({ boot, user, orgId, onGo, onDone }: {
         <h3 className="mb-3 text-[14px] font-semibold">2 · Rate &amp; budget</h3>
         <div className="flex flex-wrap gap-3">
           <Field label="Rate type">
-            <Select value={f.rate_type} onChange={e => setF({ ...f, rate_type: e.target.value })}>
-              <option value="per_play">Per play</option><option value="flat">Flat fee</option>
+            <Select aria-label="Campaign rate type" disabled={network} value={f.rate_type} onChange={e => setF({ ...f, rate_type: e.target.value })}>
+              <option value="per_play">Per play</option>{!network && <option value="flat">Flat fee</option>}
             </Select>
           </Field>
           {f.rate_type === 'per_play' && <Field label="Rate per play (₹)"><Input type="number" step="0.01" value={f.rate_value} onChange={e => setF({ ...f, rate_value: e.target.value })} /></Field>}
           <Field label="Committed budget (₹)"><Input type="number" value={f.budget} onChange={e => setF({ ...f, budget: e.target.value })} /></Field>
         </div>
         <p className="mt-2 text-[12.5px] text-muted-foreground">
-          {f.rate_type === 'flat' ? 'Flat fee: spend accrues evenly across the campaign dates.'
+          {f.rate_type === 'flat' ? 'Flat-rate settlement is awaiting a confirmed commercial policy; these campaigns do not accrue verified settlement here.'
             : 'Per play: spend accrues each time a creative plays. Budget is a cap you are alerted at, not an automatic stop.'}
         </p>
       </Card>
 
       <Card className="mb-4 p-5">
         <h3 className="mb-3 text-[14px] font-semibold">3 · Screens</h3>
-        {boot.groups?.length > 0 && (
+        {!network && boot.groups?.length > 0 && (
           <>
             <Label>Quick select by group</Label>
             <div className="mb-3 flex flex-wrap gap-2">
@@ -142,13 +164,16 @@ export function CampaignBuilder({ boot, user, orgId, onGo, onDone }: {
             </div>
           </>
         )}
+        {network && !networkInventory && !inventoryError && <p role="status" className="mb-3 text-sm">Loading released network screens…</p>}
+        {inventoryError && <div role="alert" className="mb-3 text-sm text-destructive">{inventoryError}<Button variant="outline" size="sm" onClick={()=>setInventoryAttempt(n=>n+1)}>Retry inventory</Button></div>}
+        {network && networkInventory && <p className="mb-3 text-sm text-muted-foreground">{ownScreens.length} screens released for new network bookings. Network limits count distinct advertisers; appearances per loop reserve airtime separately. Existing commitments are checked when you save.</p>}
         <div className="max-h-64 overflow-y-auto rounded-lg border border-border/60">
           {ownScreens.map((s: any) => (
             <label key={s.id} className="flex cursor-pointer items-center gap-3 border-b border-border/50 px-3 py-2.5 text-[13px] last:border-0 hover:bg-black/[0.02]">
               <input type="checkbox" checked={screens.includes(s.id)} onChange={() => tick(screens, s.id, setScreens)} />
-              <span className="min-w-0 flex-1"><span className="font-medium">{s.name}</span><br /><span className="text-[12px] text-muted-foreground">{s.address}</span></span>
+              <span className="min-w-0 flex-1"><span className="font-medium">{s.name}</span><br /><span className="text-[12px] text-muted-foreground">{network ? `${orgName(s.org_id)} · ` : ''}{s.address}</span></span>
               <Badge variant="muted">{s.venue_type}</Badge>
-              <span className="w-14 text-right font-mono text-[12px] text-muted-foreground">{s.advertiser_slots} advertisers</span>
+              <span className="w-14 text-right font-mono text-[12px] text-muted-foreground">{s.advertiser_slots} advertisers{network && <><br/>{s.network_slots} network limit</>}</span>
               <span className="w-24 text-right font-mono tnum">{inr(s.slot_price_month)}</span>
             </label>
           ))}
@@ -187,7 +212,7 @@ export function CampaignBuilder({ boot, user, orgId, onGo, onDone }: {
       </Card>
 
       <div className="flex items-center gap-3">
-        <Field label="Initial status" className="max-w-[220px]"><Select value={status} onChange={e=>setStatus(e.target.value)}><option value="pending">Pending — reserve capacity</option><option value="draft">Draft — no reservation</option><option value="active">Active — approved creatives play</option></Select></Field><Button onClick={save} disabled={saving||!selectedOrg}>{saving?'Creating…':'Create campaign'}</Button>
+        <Field label="Initial status" className="max-w-[220px]"><Select value={status} onChange={e=>setStatus(e.target.value)}><option value="pending">Pending — reserve capacity</option><option value="draft">Draft — no reservation</option><option value="active">Active — approved creatives play</option></Select></Field><Button onClick={save} disabled={saving||!selectedOrg||(network&&!networkInventory)}>{saving?'Creating…':'Create campaign'}</Button>
         <Button variant="outline" onClick={() => onGo('campaigns')}>Cancel</Button>
         {err && <span className="text-[12.5px] text-destructive">{err}</span>}
       </div>

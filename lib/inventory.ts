@@ -168,27 +168,58 @@ function slotUnits(c: Row, s: Row, creatives: Row[]) {
   const longest = Math.max(s.slot_duration_s, ...durations.map(n=>number(n, 'creative duration_s', 0.001, 86400)));
   return appearances(c,s) * Math.ceil(longest / s.slot_duration_s);
 }
-/** Returns normalized bookings, never mutates records. Call inside the same transaction as save. */
-export function validateBooking(candidate: Row, campaigns: Row[], screens: Row[], creatives: Row[] = []): Row[] {
+export type BookingValidationOptions = { previous?: Row; orgs?: Row[] };
+
+/** A reservation may shrink without needing a fresh network release. Only a persisted holding
+ * campaign is evidence of a commitment: request-supplied booking fields never grant this exception.
+ * The frozen slot-unit baseline also catches a longer creative uploaded after the booking was sold.
+ */
+function retainedNetworkBooking(candidate: Row, screen: Row, units: number, previous?: Row): boolean {
+  if (!previous || previous.id !== candidate.id || previous.campaign_type !== 'network' ||
+      previous.org_id !== candidate.org_id || previous.origin_org_id !== candidate.origin_org_id ||
+      previous.advertiser_id !== candidate.advertiser_id || !HOLD_STATUSES.has(previous.status) ||
+      !HOLD_STATUSES.has(candidate.status) || !previous.screen_ids?.includes(screen.id)) return false;
+  const booked = previous.bookings?.find((b: Row) => b.screen_id === screen.id);
+  if (!booked || typeof booked.booked_at !== 'string' || !Number.isFinite(Date.parse(booked.booked_at)) ||
+      !Number.isInteger(booked.reserved_slot_units) || booked.reserved_slot_units < units ||
+      !Number.isInteger(booked.slots_per_loop) || booked.slots_per_loop < appearances(candidate, screen)) return false;
+  const [start,end] = campaignInterval(candidate), [oldStart,oldEnd] = campaignInterval(previous);
+  return start >= oldStart && end <= oldEnd;
+}
+
+/** Returns normalized bookings, never mutates records. Call inside the same transaction as save.
+ * All campaigns targeting these screens must be present, including campaigns from other orgs.
+ * previous must be the persisted pre-edit campaign, never a copy of the submitted candidate.
+ */
+export function validateBooking(candidate: Row, campaigns: Row[], screens: Row[], creatives: Row[] = [], options: BookingValidationOptions = {}): Row[] {
   if (!STATUSES.has(candidate.status)) bad('Invalid campaign status');
+  const network = candidate.campaign_type === 'network';
+  if (network && (!candidate.origin_org_id || candidate.org_id !== candidate.origin_org_id)) bad('Network campaigns must belong to their origin organisation');
   const [start,end] = campaignInterval(candidate);
   if (!Array.isArray(candidate.screen_ids) || !candidate.screen_ids.length || candidate.screen_ids.some((id: any) => typeof id !== 'string')) bad('Select at least one screen');
   if (new Set(candidate.screen_ids).size !== candidate.screen_ids.length) bad('Duplicate screen target');
   if (candidate.bookings !== undefined && (!Array.isArray(candidate.bookings) || candidate.bookings.some((b: Row) => !b || !candidate.screen_ids.includes(b.screen_id)) || new Set(candidate.bookings.map((b: Row) => b.screen_id)).size !== candidate.bookings.length)) bad('Bookings must target selected screens exactly once');
   const bookings = candidate.screen_ids.map((id: string) => {
-    const screen = screens.find(s => s.id === id && s.org_id === candidate.org_id);
+    const screen = screens.find(s => s.id === id && (network || s.org_id === candidate.org_id));
     if (!screen) throw new InventoryError('Screen not found',404);
-    const normalized = { screen_id: id, slots_per_loop: appearances(candidate, screen) };
     const currentUnits = slotUnits(candidate,screen,creatives), capacity = physicalCapacity(screen);
+    const normalized = { screen_id: id, slots_per_loop: appearances(candidate, screen), reserved_slot_units: currentUnits };
     if (currentUnits > capacity) throw new InventoryError('Campaign appearances exceed physical loop capacity',409);
     if (!HOLD_STATUSES.has(candidate.status)) return normalized;
-    const overlapping = campaigns.filter(c => c.id !== candidate.id && c.org_id === screen.org_id && HOLD_STATUSES.has(c.status) && c.screen_ids?.includes(id))
+    if (network && options.orgs?.find(o => o.id === screen.org_id)?.status !== 'active') throw new InventoryError('Screen organisation is not active',409);
+    const retained = network && retainedNetworkBooking(candidate,screen,currentUnits,options.previous);
+    if (network && !retained && (screen.network_available !== true || integer(screen.network_slots ?? 0, 'network_slots', 0) === 0)) throw new InventoryError(`Screen is not accepting new network bookings: ${screen.name || id}`,409);
+    const overlapping = campaigns.filter(c => c.id !== candidate.id && HOLD_STATUSES.has(c.status) && c.screen_ids?.includes(id))
       .map(c => ({ campaign:c, interval:campaignInterval(c) })).filter(r => r.interval[0] < end && r.interval[1] > start);
     const points = new Set([start,...overlapping.map(r=>Math.max(start,r.interval[0]))]);
     for (const point of points) {
       const active = overlapping.filter(r=>r.interval[0] <= point && point < r.interval[1]).map(r=>r.campaign);
       const advertisers = new Set([candidate.advertiser_id, ...active.map(c=>c.advertiser_id)]);
       if (advertisers.size > integer(screen.advertiser_slots, 'advertiser_slots')) throw new InventoryError(`Advertiser capacity exceeded for ${screen.name || id}`,409);
+      if (network && !retained) {
+        const networkAdvertisers = new Set([candidate.advertiser_id, ...active.filter(c=>c.campaign_type === 'network').map(c=>c.advertiser_id)]);
+        if (networkAdvertisers.size > integer(screen.network_slots ?? 0, 'network_slots', 0)) throw new InventoryError(`Network advertiser capacity exceeded for ${screen.name || id}`,409);
+      }
       if (currentUnits + active.reduce((sum,c)=>sum+slotUnits(c,screen,creatives),0) > capacity) throw new InventoryError(`Physical loop capacity exceeded for ${screen.name || id}`,409);
     }
     return normalized;
@@ -208,12 +239,17 @@ function aspectRatio(value: any): number {
   if (typeof value !== 'string' || !/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(value)) return NaN;
   const [w,h] = value.split(':').map(Number); return w > 0 && h > 0 ? w / h : NaN;
 }
-export type EligibilityInput = { screen: Row; campaign: Row; creative: Row | undefined; advertiser?: Row; settings?: Row; at?: Date | string | number; config?: Row; loopAdvertisers?: Row[] };
+export type EligibilityInput = { screen: Row; screenOrg?: Row; campaign: Row; creative: Row | undefined; advertiser?: Row; settings?: Row; at?: Date | string | number; config?: Row; loopAdvertisers?: Row[] };
 export type EligibilityResult = { eligible: boolean; rejected_at_step: number | null; reason: string; warnings: string[]; asset: Row | null; letterbox: boolean };
-export function eligibility({screen, campaign:c, creative:cr, advertiser, settings = {}, at = new Date(), config = {}, loopAdvertisers = []}: EligibilityInput): EligibilityResult {
+export function eligibility({screen, screenOrg, campaign:c, creative:cr, advertiser, settings = {}, at = new Date(), config = {}, loopAdvertisers = []}: EligibilityInput): EligibilityResult {
   const result = (step: number | null, reason: string, asset: Row | null = null, letterbox = false): EligibilityResult => ({ eligible: step === null, rejected_at_step: step, reason, warnings, asset, letterbox });
   const warnings: string[] = [];
-  if (!c.screen_ids?.includes(screen.id) || c.org_id !== screen.org_id) return result(1,'screen_not_targeted');
+  const network = c.campaign_type === 'network';
+  if (!c.screen_ids?.includes(screen.id) || (network ? !c.origin_org_id || c.org_id !== c.origin_org_id : c.org_id !== screen.org_id)) return result(1,'screen_not_targeted');
+  if (network && !c.bookings?.some((b: Row) => b.screen_id === screen.id && typeof b.booked_at === 'string' && Number.isFinite(Date.parse(b.booked_at)))) return result(1,'network_booking_missing');
+  // Release reductions affect future sales only; a frozen booking remains eligible until an
+  // explicit status action or the usual delivery/exclusion checks stop it.
+  if (network && (!screenOrg || screenOrg.id !== screen.org_id || screenOrg.status !== 'active')) return result(2,'screen_org_not_active');
   if (screen.status !== 'active') return result(2,'screen_not_active');
   if (c.status !== 'active') return result(2,'campaign_not_active');
   const time = new Date(at).getTime();
@@ -236,6 +272,7 @@ export function eligibility({screen, campaign:c, creative:cr, advertiser, settin
   if ((settings.blocked_categories || settings.category_blocklist || []).includes(cr.category)) return result(4,'platform_category_block');
   if ((screen.exclusions?.categories || []).includes(cr.category)) return result(5,'screen_category_block');
   if ((screen.exclusions?.advertisers || []).includes(c.advertiser_id)) return result(6,'screen_advertiser_block');
+  if (advertiser?.status === 'archived') return result(7,'advertiser_archived');
   const exclusions = advertiser?.exclusions || {};
   if ((exclusions.venue_types || []).includes(screen.venue_type) || (exclusions.screens || []).includes(screen.id) || (exclusions.tag_rules || []).some((rule: Row)=>groupMatches(screen,{tags:rule}))) return result(7,'advertiser_venue_block');
   if (screen.exclusions?.competitive_separation === true && loopAdvertisers.some(a=>a.id !== c.advertiser_id && a.category === cr.category)) return result(8,'competitive_separation');

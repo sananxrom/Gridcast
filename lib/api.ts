@@ -1,9 +1,12 @@
+import { createHash } from 'node:crypto';
+import { creativeRotationIndex } from './rotation';
+import { economics, freezeEconomics } from './settlement';
 import { DiagnosticError, requestDiagnostic, revokeDiagnostic, assertNoDiagnosticLease } from './diagnostics';
 import { auditSnapshot, appendAudit, auditView } from './audit';
 import { summarizeReadiness } from './readiness';
 import { openMedia, mediaUrl } from './media';
 import * as store from './store';
-import { AccessError, authorize, bootstrap, publicUser, orgView, screenView, advertiserView, capabilities, redact } from './access';
+import { AccessError, authorize, bootstrap, publicUser, orgView, screenView, advertiserView, capabilities, campaignView, settlementView, redact } from './access';
 import { seed, uid, nowISO, code6 } from './seed';
 import * as cfg from './config';
 import { deviceRoute, deviceIdFromToken, pairingCodeHash, issuePairing, revokeDevices } from './devices';
@@ -26,39 +29,49 @@ const save = async () => {
   if (auditContext) { appendAudit(db,auditContext.before,auditContext.actor,auditContext.action); auditContext.before = auditSnapshot(db); }
   await store.write(db);
 };
+const creationId = (prefix: string, body: any) => body.external_key ? prefix + '_' + createHash('sha256').update(JSON.stringify([prefix,body.org_id || null,body.external_key])).digest('hex').slice(0,32) : uid(prefix);
 const bumpConfig = () => { db.settings ||= {}; db.settings.config_revision = (db.settings.config_revision || 0) + 1; };
-function freezeBookings(c: any, old: any[] = []) {
+function freezeBookings(c: any, previousCampaign?: any) {
+  const old = previousCampaign?.bookings || [];
   assertNoDiagnosticLease(db, [...(c.screen_ids || []), ...old.map((b: any) => b.screen_id)]);
   if (typeof c.name !== 'string' || !c.name.trim()) throw new AccessError(400, 'Campaign name is required');
   if (!['per_play','flat'].includes(c.rate_type) || typeof c.rate_value !== 'number' || !Number.isFinite(c.rate_value) || c.rate_value < 0 || typeof c.committed_budget !== 'number' || !Number.isFinite(c.committed_budget) || c.committed_budget < 0) throw new AccessError(400, 'Enter a valid campaign price and budget');
-  c.bookings = validateBooking(c, db.campaigns, inventoryScreens(), db.creatives).map((b: any) => {
+  c.bookings = validateBooking(c, db.campaigns, inventoryScreens(), db.creatives, {previous:previousCampaign,orgs:db.orgs}).map((b: any) => {
     const previous = old.find((x: any) => x.screen_id === b.screen_id);
     const screen = db.screens.find((x: any) => x.id === b.screen_id);
-    return { ...b, rate_value: previous?.rate_value ?? c.rate_value, rate_type: previous?.rate_type ?? c.rate_type, rate_version: previous?.rate_version ?? screen.rate_version ?? 'legacy', booked_at: previous?.booked_at ?? nowISO(), pricing_source: previous?.pricing_source ?? 'agreed_campaign_rate' };
+    return { ...b, ...freezeEconomics(c,screen,db.orgs.find((o: any) => o.id === screen.org_id),previous) };
   });
+  c.participant_org_ids = [...new Set([...(previousCampaign?.participant_org_ids || []), ...c.screen_ids.map((id: string) => db.screens.find((s: any) => s.id === id).org_id)])];
 }
 const inventoryScreens = () => db.screens.map((s: any) => { const v = cfg.flatten(resolveFor(s)); return { ...s, loop_length_s: v.loop_length_s, slot_duration_s: v.slot_duration_s }; });
-function validateInventory() { for (const c of db.campaigns) validateBooking(c, db.campaigns, inventoryScreens(), db.creatives); }
-function playlistFor(screen: any, _device?: any) {
+function validateInventory() {
+  const screens = inventoryScreens(), ids = new Set(screens.map((s: any) => s.id));
+  for (const c of db.campaigns) {
+    const candidate = {...c,screen_ids:(c.screen_ids || []).filter((id: string) => ids.has(id)),bookings:c.bookings?.filter((b: any) => ids.has(b.screen_id))};
+    if (candidate.screen_ids.length) validateBooking(candidate,db.campaigns,screens,db.creatives,{previous:c,orgs:db.orgs});
+  }
+}
+function playlistFor(screen: any, _device?: any, rotationIndex = 0) {
   const config = cfg.flatten(resolveFor(screen));
-  const items: any[] = [], decisions: any[] = [], loopAdvertisers: any[] = [];
+  const items: any[] = [], decisions: any[] = [], loopAdvertisers: any[] = [], rotationPool: any[] = [];
   for (const campaign of db.campaigns.filter((c: any) => c.screen_ids?.includes(screen.id))) {
     const advertiser = db.advertisers.find((a: any) => a.id === campaign.advertiser_id);
     const eligible: any[] = [];
     for (const id of campaign.creative_ids || []) {
       const creative = db.creatives.find((x: any) => x.id === id);
-      const result = eligibility({ screen, campaign, creative, advertiser, settings: db.settings, config, loopAdvertisers });
+      const result = eligibility({ screen, screenOrg:db.orgs.find((o: any) => o.id === screen.org_id), campaign:campaign.campaign_type === 'network' ? {...campaign,accrued_spend:undefined} : campaign, creative, advertiser, settings: db.settings, config, loopAdvertisers });
       decisions.push({ campaign_id: campaign.id, creative_id: id, eligible: result.eligible, reason: result.reason, rejected_at_step: result.rejected_at_step, warnings: result.warnings, letterbox: result.letterbox });
       if (result.eligible) eligible.push({ result, creative });
     }
+    rotationPool.push([campaign.id,eligible.map(({creative,result}: any) => [creative.id,result.asset.asset_id || result.asset.youtube_id,result.asset.duration_s])]);
     const booking = campaign.bookings?.find((b: any) => b.screen_id === screen.id);
     for (let n = 0; eligible.length && n < (booking?.slots_per_loop ?? defaultSlotsPerLoop(screen)); n++) {
-      const { result, creative } = eligible[n % eligible.length], asset = result.asset;
-      items.push({ campaign_id: campaign.id, campaign_name: campaign.name, creative_id: creative.id, creative_name: creative.name, advertiser: advertiser?.name || '—', youtube_id: asset.youtube_id, duration_s: asset.duration_s, rate_value: booking?.rate_value ?? campaign.rate_value, rate_type: booking?.rate_type ?? campaign.rate_type, letterbox: result.letterbox, asset_id: asset.asset_id, asset_url: asset.storage_path ? mediaUrl(asset) : undefined, width: asset.width, height: asset.height });
+      const { result, creative } = eligible[creativeRotationIndex(screen.id,rotationIndex,n,eligible.length)], asset = result.asset;
+      items.push({ ...economics(booking), campaign_id: campaign.id, campaign_name: campaign.name, creative_id: creative.id, creative_name: creative.name, advertiser: advertiser?.name || '—', youtube_id: asset.youtube_id, duration_s: asset.duration_s, rate_value: booking?.rate_value ?? campaign.rate_value, rate_type: booking?.rate_type ?? campaign.rate_type, letterbox: result.letterbox, asset_id: asset.asset_id, asset_url: asset.storage_path ? mediaUrl(asset) : undefined, width: asset.width, height: asset.height });
     }
     if (eligible.length && advertiser) loopAdvertisers.push(advertiser);
   }
-  return { items, config, config_version: db.settings?.config_revision || 1, decisions, readiness: summarizeReadiness(screen, db.campaigns.filter((c: any) => c.screen_ids?.includes(screen.id)), decisions, items.length) };
+  return { items, rotation_version:createHash('sha256').update(JSON.stringify(rotationPool)).digest('hex'), config, config_version: db.settings?.config_revision || 1, decisions, readiness: summarizeReadiness(screen, db.campaigns.filter((c: any) => c.screen_ids?.includes(screen.id)), decisions, items.length) };
 }
 const scope = (rows: any[], orgId: string, isAdmin: boolean) => (isAdmin ? rows : rows.filter(r => r.org_id === orgId));
 
@@ -103,7 +116,7 @@ export function handle(method: string, seg: string[], q: URLSearchParams, body: 
         loginEmail: seg.join('/') === 'login' ? String(body.email || '').trim().toLowerCase() : undefined,
         pairingCodeHash: seg.join('/') === 'pair' ? pairingCodeHash(String(body.code || '')) : undefined,
         playUid: typeof body.play_uid === 'string' ? body.play_uid : undefined,
-        seqNo: body.seq_no, assignmentId: body.assignment_id, orgId: q.get('org') || q.get('org_id') || undefined,
+        startedAtDevice:body.started_at_device,clockOffset:body.server_clock_offset_ms,seqNo: body.seq_no, assignmentId: body.assignment_id, orgId: q.get('org') || q.get('org_id') || undefined,
         targetOrg: typeof body.org_id === 'string' ? body.org_id : undefined, entity:q.get('entity') || undefined,
         after:q.get('after') || undefined,limit:Number(q.get('limit')) || 100 }, async () => {
         db = null; auditContext = null;
@@ -152,6 +165,11 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
   const actor = me;
   const isAdmin = actor?.role === 'platform_admin';
   if (!OPEN.has(`${method} ${p}`)) body = authorize(db, actor, method, seg, body, q);
+  if (body.external_key) {
+    const collection = ({org:'orgs',screens:'screens',advertiser:'advertisers',creative:'creatives',campaign:'campaigns'} as any)[p];
+    const existing = db[collection]?.find((r: any) => r.external_key === body.external_key && (p === 'org' || r.org_id === body.org_id));
+    if (existing) return {body:p === 'screens' ? {screen:existing,pairing:null,reused:true} : {...existing,reused:true}};
+  }
   if (actor && method === 'POST' && p !== 'login') auditContext = {before:auditSnapshot(db),actor:{...actor},action:p};
 
   if (method === 'GET' && p === '_health') return { body: { ok: true, store: store.mode, database: process.env.GC_FIRESTORE_DATABASE || null, schema_version: 1 } };
@@ -181,15 +199,19 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     } } };
   }
 
+  if (method === 'GET' && p === 'network-inventory') return {body:{
+    orgs:db.orgs.map((o: any) => orgView(o,actor)),screens:inventoryScreens().map((s: any) => screenView(s,actor)),
+    campaigns:db.campaigns,creatives:db.creatives}};
+
   if (method === 'GET' && ['directory','audit'].includes(p)) {
     const entity = p === 'audit' ? 'audit' : q.get('entity') || '';
     if (!['orgs','advertisers','creatives','campaigns','screens','users','configs','groups','devices','assets','audit'].includes(entity)) throw new AccessError(400,'Unknown directory');
     const selected = q.get('org') || q.get('org_id') || (isAdmin ? null : actor.org_id);
     const limit = Math.min(100,Math.max(1,Number(q.get('limit')) || 100));
-    const rows = (db[entity] || []).filter((r: any) => !selected || (entity === 'orgs' ? r.id : r.org_id) === selected)
+    const rows = (db[entity] || []).filter((r: any) => !selected || (entity === 'orgs' ? r.id : r.org_id) === selected || (entity === 'campaigns' && r.participant_org_ids?.includes(selected)))
       .filter((r: any) => !q.get('after') || r.id > q.get('after')!).sort((a: any,b: any) => a.id.localeCompare(b.id));
     const page = db.directory || {items:rows.slice(0,limit),has_more:rows.length > limit,next_cursor:rows.length > limit ? rows[limit-1].id : null};
-    return {body:{...page,items:page.items.map((r: any) => entity === 'audit' ? auditView(r,actor) : entity === 'users' ? publicUser(r) : entity === 'orgs' ? orgView(r,actor) : entity === 'advertisers' ? advertiserView(r,actor) : entity === 'screens' ? screenView({...r,_status:screenStatus(r)},actor) : r)}};
+    return {body:{...page,items:page.items.map((r: any) => entity === 'audit' ? auditView(r,actor) : entity === 'users' ? publicUser(r) : entity === 'orgs' ? orgView(r,actor) : entity === 'advertisers' ? advertiserView(r,actor) : entity === 'screens' ? screenView({...r,_status:screenStatus(r)},actor) : entity === 'campaigns' ? campaignView(db,r,actor,selected) : r)}};
   }
 
   if (method === 'GET' && p === 'team') {
@@ -300,9 +322,10 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
   }
 
   if (method === 'GET' && seg[0] === 'campaign' && seg[1] && !seg[2]) {
-    const c = db.campaigns.find((x: any) => x.id === seg[1]);
-    if (!c) return { status: 404, body: { error: 'not found' } };
-    const plays = db.plays.filter((x: any) => x.campaign_id === c.id);
+    const original = db.campaigns.find((x: any) => x.id === seg[1]);
+    if (!original) return { status: 404, body: { error: 'not found' } };
+    const c = campaignView(db,original,actor);
+    const plays = db.plays.filter((x: any) => x.campaign_id === c.id && (isAdmin || actor.role === ADVERTISER || x.org_id === actor.org_id));
     const byPlay = Object.fromEntries(db.presence.map((x: any) => [x.play_id, x]));
     // Rendered, measured and billable are three separate questions and are reported as three numbers.
     // A slot that played in full but failed a billing check is delivery that happened and was not charged;
@@ -313,9 +336,9 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
         billable: all.filter((r: any) => r.billable !== false).length, measured: m.length,
         avg: m.length ? m.reduce((a: number, b: any) => a + b.avg_persons, 0) / m.length : null }; };
     return { body: {
-      history: db.history || { complete: true, scope: 'local_demo' }, campaign: c, advertiser: advertiserView(db.advertisers.find((a: any) => a.id === c.advertiser_id), actor),
+      settlement_buckets:settlementView(db,actor,c.id), history: db.history || { complete: true, scope: 'local_demo' }, campaign: c, advertiser: advertiserView(db.advertisers.find((a: any) => a.id === c.advertiser_id), actor),
       org: orgView(db.orgs.find((o: any) => o.id === c.org_id), actor), totals: agg(plays),
-      byScreen: c.screen_ids.map((id: string) => db.screens.find((s: any) => s.id === id)).filter(Boolean)
+      byScreen: [...new Set([...c.screen_ids,...plays.map((p: any) => p.screen_id),...settlementView(db,actor,c.id).map((b: any) => b.screen_id)])].map((id: string) => db.screens.find((s: any) => s.id === id)).filter(Boolean)
         .map((s: any) => ({ screen: screenView(s, actor), ...agg(plays.filter((p: any) => p.screen_id === s.id)) })),
       byCreative: c.creative_ids.map((id: string) => db.creatives.find((x: any) => x.id === id)).filter(Boolean)
         .map((cr: any) => ({ creative: cr, ...agg(plays.filter((p: any) => p.creative_id === cr.id)) })),
@@ -338,7 +361,7 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
       return { id: c.id, name: c.name, status: c.status, campaign_type: c.campaign_type,
         live: c.status === 'active' && c.starts_at <= t && c.ends_at >= t,
         advertiser: advOf(c.advertiser_id)?.name || '—', starts_at: c.starts_at, ends_at: c.ends_at,
-        committed_budget: c.committed_budget, accrued_spend: c.accrued_spend,
+        ...((c.campaign_type === 'network' || c.bookings?.some((b: any) => b.econ_version)) ? {accrued_spend:settlementView(db,actor,c.id,screen.org_id).filter((b: any) => b.screen_id === screen.id).reduce((n: number,b: any) => n + (b.gross_paise || 0),0) / 100} : {committed_budget:c.committed_budget,accrued_spend:c.accrued_spend}),
         creatives: c.creative_ids.map((id: string) => db.creatives.find((x: any) => x.id === id)).filter(Boolean),
         plays: cp.length, avg: cm.length ? cm.reduce((a: number, b: any) => a + b.avg_persons, 0) / cm.length : null };
     });
@@ -355,7 +378,7 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     const diagnosticResults = can(actor.role,'screens') ? (db.diagnostic_results || []).filter((r: any) => r.screen_id === screen.id).sort((a: any,b: any) => String(b.received_at).localeCompare(String(a.received_at))) : [];
     return { body: { organisation:{id:screen.org_id,name:db.orgs.find((o: any) => o.id === screen.org_id)?.name || screen.org_id}, diagnostic_assignments:diagnosticAssignments, diagnostic_results:diagnosticResults, diagnostic_history:can(actor.role,'screens') ? db.diagnostic_history || {complete:true} : null, history: db.history || { complete: true, scope: 'local_demo' }, config_version: db.settings?.config_revision || 1, device: can(actor.role, 'screens') ? st.device : null, eligibility: playlist.decisions, readiness: playlist.readiness, screen: screenView(screen, actor), caps: capabilities(actor),
       status: can(actor.role, 'screens') ? st : { state: st.state, label: st.label, age_s: st.age_s },
-      nowPlaying: np, campaigns: camps, advertisers: db.advertisers.filter((a: any) => a.org_id === screen.org_id || db.campaigns.some((c: any) => c.org_id === screen.org_id && c.advertiser_id === a.id)).map((a: any) => ({ id: a.id, name: a.name })),
+      nowPlaying: np, campaigns: camps, advertisers: db.advertisers.filter((a: any) => a.org_id === screen.org_id || db.campaigns.some((c: any) => c.screen_ids?.includes(screen.id) && c.advertiser_id === a.id)).map((a: any) => ({ id: a.id, name: a.name })),
       config: resolved,
 
       configStack: cfg.applicable(screen, db.groups || [], db.configs || []).map((c: any) => ({ id: c.id, name: c.name, layer: c.layer, keys: Object.keys(c.values || {}).length })),
@@ -370,12 +393,12 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
   if (method === 'POST' && seg[0] === 'campaign' && seg[1] && !seg[2]) {
     const c = db.campaigns.find((x: any) => x.id === seg[1]);
     if (!c) return { status: 404, body: { error: 'not found' } };
-    const previousBookings = c.bookings || [];
+    const previousCampaign = structuredClone(c);
     for (const k of ['name','starts_at','ends_at','committed_budget','rate_type','rate_value','status','invoice_status','screen_ids','creative_ids','bookings','dayparts']) if (k in body) c[k] = body[k];
-    freezeBookings(c, previousBookings); await save(); return { body: c };
+    freezeBookings(c, previousCampaign); await save(); return { body: c };
   }
   if (method === 'POST' && p === 'campaign') {
-    const c = { id: uid('cmp'), created_at: nowISO(), accrued_spend: 0, status: 'active', campaign_type: 'operator', platform_fee_pct: 0, fee_basis: 'gross', invoice_status: 'not_invoiced', ...body };
+    const c = { id: creationId('cmp',body), created_at: nowISO(), accrued_spend: 0, status: 'active', campaign_type: 'operator', platform_fee_pct: 0, fee_basis: 'gross', invoice_status: 'not_invoiced', ...body };
     freezeBookings(c); db.campaigns.push(c); await save(); return { body: c };
   }
   if (method === 'POST' && seg[0] === 'creative' && seg[2] === 'approve') {
@@ -422,12 +445,12 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     validateInventory(); await save(); return {body:c};
   }
   if (method === 'POST' && p === 'creative') {
-    const c = { metadata_source: 'operator_declared', id: uid('cr'), created_at: nowISO(), approval_status: 'pending', content_source: 'advertiser', ...body };
+    const c = { metadata_source: 'operator_declared', id: creationId('cr',body), created_at: nowISO(), approval_status: 'pending', content_source: 'advertiser', ...body };
     db.creatives.push(c); await save(); return { body: c };
   }
   if (method === 'POST' && p === 'advertiser') {
     if (typeof body.name !== 'string' || !body.name.trim()) throw new AccessError(400,'Advertiser name is required');
-    const a = { id: uid('adv'), created_at: nowISO(), status:'active', ...body };
+    const a = { id: creationId('adv',body), created_at: nowISO(), status:'active', ...body };
     db.advertisers.push(a); await save(); return { body: a };
   }
   if (seg[0] === 'advertiser' && seg[1]) {
@@ -467,7 +490,7 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     await save(); return { body: s };
   }
   if (method === 'POST' && p === 'screens') {
-    const screen: any = { ...validateScreenInput(body), id: uid('scr'), org_id: body.org_id, created_at: nowISO(), rate_version: uid('rate') };
+    const screen: any = { ...validateScreenInput(body), ...(body.external_key ? {external_key:body.external_key} : {}), id: creationId('scr',body), org_id: body.org_id, created_at: nowISO(), rate_version: uid('rate') };
     if (body.rate_seed) {
       const rate = reverseCalculate({ ...body.rate_seed, venue_base: screen.venue_base, size_factor: screen.size_factor, loop_length_s: screen.loop_length_s, slot_duration_s: screen.slot_duration_s });
       Object.assign(screen, { rate_seed: rate, advertiser_slots: rate.advertiser_slots, monthly_value: rate.seed_monthly_value, slot_price_month: rate.seed_slot_price_month, pricing_source: 'derived_from_self_reported_revenue' });
@@ -490,7 +513,7 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     validateInventory(); bumpConfig(); await save(); return { body: g };
   }
   if (method === 'POST' && p === 'org') {
-    const o = { id: uid('org'), type: 'operator', platform_fee_pct: 10, status: 'active', created_at: nowISO(), ...body };
+    const o = { id: creationId('org',body), type: 'operator', platform_fee_pct: 10, status: 'active', created_at: nowISO(), ...body };
     db.orgs.push(o);
     let temp: string | null = null;
     if (body.admin_email) {
@@ -513,7 +536,11 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     if (can(actor?.role, 'money'))
       for (const k of ['gstin', 'pan', 'state_code', 'payout_method', 'upi_id', 'payout_note']) if (k in body) o[k] = body[k];
     // only the platform may move an operator's fee
-    if ('platform_fee_pct' in body && isAdmin) o.platform_fee_pct = Number(body.platform_fee_pct) || 0;
+    if (isAdmin && ('platform_fee_pct' in body || 'fee_basis' in body)) {
+      if ('platform_fee_pct' in body) o.platform_fee_pct = body.platform_fee_pct;
+      if ('fee_basis' in body) o.fee_basis = body.fee_basis;
+      o.fee_version = uid('fee');
+    }
     await save(); return { body: orgView(o, actor) };
   }
   if (method === 'POST' && seg[0] === 'user' && seg[1]) {

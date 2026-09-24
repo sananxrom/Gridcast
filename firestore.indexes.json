@@ -572,6 +572,166 @@
           "order": "DESCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "campaigns",
+      "queryScope": "COLLECTION",
+      "density": "DENSE",
+      "fields": [
+        {
+          "fieldPath": "screen_ids",
+          "arrayConfig": "CONTAINS"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "campaigns",
+      "queryScope": "COLLECTION",
+      "density": "DENSE",
+      "fields": [
+        {
+          "fieldPath": "participant_org_ids",
+          "arrayConfig": "CONTAINS"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "campaigns",
+      "queryScope": "COLLECTION",
+      "density": "DENSE",
+      "fields": [
+        {
+          "fieldPath": "participant_org_ids",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "id",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "plays",
+      "queryScope": "COLLECTION",
+      "density": "DENSE",
+      "fields": [
+        {
+          "fieldPath": "advertiser_id",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "ended_at",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "plays",
+      "queryScope": "COLLECTION",
+      "density": "DENSE",
+      "fields": [
+        {
+          "fieldPath": "advertiser_id",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "campaign_id",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "ended_at",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "settlement_buckets",
+      "queryScope": "COLLECTION",
+      "density": "DENSE",
+      "fields": [
+        {
+          "fieldPath": "org_id",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "settlement_buckets",
+      "queryScope": "COLLECTION",
+      "density": "DENSE",
+      "fields": [
+        {
+          "fieldPath": "advertiser_id",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "settlement_buckets",
+      "queryScope": "COLLECTION",
+      "density": "DENSE",
+      "fields": [
+        {
+          "fieldPath": "campaign_id",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "settlement_buckets",
+      "queryScope": "COLLECTION",
+      "density": "DENSE",
+      "fields": [
+        {
+          "fieldPath": "screen_id",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "settlement_buckets",
+      "queryScope": "COLLECTION",
+      "density": "DENSE",
+      "fields": [
+        {
+          "fieldPath": "org_id",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "campaign_id",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "settlement_buckets",
+      "queryScope": "COLLECTION",
+      "density": "DENSE",
+      "fields": [
+        {
+          "fieldPath": "org_id",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "screen_id",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "settlement_buckets",
+      "queryScope": "COLLECTION",
+      "density": "DENSE",
+      "fields": [
+        {
+          "fieldPath": "advertiser_id",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "campaign_id",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": []

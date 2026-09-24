@@ -27,6 +27,7 @@ import { Advertisers, AdvertiserDetail, Creatives } from '@/components/views/com
 import { CampaignDetail } from '@/components/views/campaign-detail';
 import { CameraReadiness } from '@/components/views/camera-readiness';
 import { CampaignList } from '@/components/views/campaign-list';
+import { Settlement } from '@/components/views/settlement';
 import { CampaignBuilder } from '@/components/views/campaign-builder';
 import type { CmdItem } from '@/components/ui/command-palette';
 
@@ -151,7 +152,7 @@ export default function Operator() {
         <PageHead title={user.orgName} sub={`${d.screens.length} screens · ${d.advertisers.length} advertisers · ${d.campaigns.filter(isLive).length} live campaigns`} />
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {caps.includes('sales') && <Stat label="Monthly inventory" value={inr(d.screens.reduce((s: number, x: any) => s + x.monthly_value, 0))} hint="at full sell-through" />}
-          {caps.includes('sales') && <Stat label="Accrued this period" value={inr(d.campaigns.reduce((s: number, c: any) => s + c.accrued_spend, 0))} hint="across live campaigns" />}
+          {caps.includes('sales') && <Stat label="Accrued on your screens" value={d.campaigns.some((c:any)=>typeof c.accrued_spend!=='number')?'—':inr(d.campaigns.reduce((s: number, c: any) => s + c.accrued_spend, 0))} hint={d.campaigns.some((c:any)=>typeof c.accrued_spend!=='number')?'Full totals require finance access':'reported lifetime accrual'} />}
           {caps.includes('screens') && <Stat label="Screens on air" value={`${d.screens.filter((s: any) => s._status?.state === 'live').length}/${d.screens.length}`} hint="paired and playing" />}
           <Stat label="Avg people / play" value={(() => { const m = d.presence.filter((p: any) => p.measured); return m.length ? (m.reduce((a: number, b: any) => a + b.avg_persons, 0) / m.length).toFixed(1) : '—'; })()} hint="reported presence" />
         </div>
@@ -188,7 +189,7 @@ export default function Operator() {
                   <ScreenPhoto src={s.photo_url} venue={s.venue_type} className="h-[172px] rounded-none border-0 border-b">
                     <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-2.5">
                       {s._status && <StatusBadge st={s._status} />}
-                      {s.network_available && <Badge variant="muted">{s.network_slots} network slots</Badge>}
+                      {s.network_available && <Badge variant="muted">Up to {s.network_slots} network advertisers</Badge>}
                     </div>
                     <div className="absolute inset-x-0 bottom-0 bg-[linear-gradient(to_top,rgba(0,0,0,.72),transparent)] px-3 pb-2.5 pt-8">
                       <div className="truncate text-[14.5px] font-semibold text-white">{s.name}</div>
@@ -238,29 +239,10 @@ export default function Operator() {
 
       {view === 'groups' && <GroupManager boot={d} user={user} onChanged={()=>reload()} />}
 
-      {view === 'settlement' && caps.includes('money') && (() => {
-        const rows = d.campaigns.map((c: any) => {
-          const gross = c.accrued_spend, fee = Math.round(gross * (c.platform_fee_pct / 100));
-          const opGross = gross - fee;
-          const ownerPct = d.screens.find((s: any) => c.screen_ids.includes(s.id))?.owner_share_pct ?? 25;
-          const owner = Math.round(opGross * ownerPct / 100);
-          return { c, gross, fee, opGross, ownerPct, owner, net: opGross - owner };
-        });
-        return (<>
-          <PageHead title="Settlement" sub="Full decomposition — nothing netted, nothing hidden" />
-          <DataTable cols={[
-            { label: 'Campaign', render: (r: any) => <><div className="font-medium">{r.c.name}</div><div className="text-[12px] text-muted-foreground">{advName(r.c.advertiser_id)}</div></> },
-            { label: 'Gross', num: true, render: (r: any) => inr(r.gross) },
-            { label: 'Platform fee', num: true, render: (r: any) => r.fee ? <>−{inr(r.fee)} <span className="text-muted-foreground">({r.c.platform_fee_pct}%)</span></> : <span className="text-muted-foreground">0%</span> },
-            { label: 'Operator share', num: true, render: (r: any) => inr(r.opGross) },
-            { label: 'Screen owner', num: true, render: (r: any) => <>−{inr(r.owner)} <span className="text-muted-foreground">({r.ownerPct}%)</span></> },
-            { label: 'Your net', num: true, render: (r: any) => <b>{inr(r.net)}</b> },
-          ]} rows={rows} rowId={(r: any) => r.c.id} exportName="settlement" />
-          <Card className="mt-3 border-primary/25 bg-primary/[0.04] p-3.5 text-[12.5px] text-primary">
-            Every line is shown gross → fee → share → net. You see exactly what the advertiser paid and exactly what was taken.
-          </Card>
-        </>);
-      })()}
+      {view === 'settlement' && caps.includes('money') && <>
+        <PageHead title="Settlement" sub="Verified amounts for your screens, using the terms agreed when booked" />
+        <Settlement buckets={d.settlement_buckets??[]} campaigns={d.campaigns} screens={d.screens}/>
+      </>}
 
       {view === 'inbox' && (<>
         <PageHead title="Inbox" sub={`${alerts.length} thing${alerts.length === 1 ? '' : 's'} needing attention`} />

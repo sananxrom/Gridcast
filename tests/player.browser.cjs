@@ -21,6 +21,7 @@ const player={exports:{}};const fixtureRequire=name=>{
  if(name==='@/lib/player-queue')return q.exports;
  if(name==='@/lib/player-diagnostics')return diagnostic.exports;
  if(name==='@/lib/player-vision')return vision.exports;
+ if(name==='@/components/ui/brand-mark')return {BrandLogo:()=>React.createElement('span',null,'Gridcast')};
  if(name==='@/components/ui/button')return {Button:props=>React.createElement('button',props)};
  if(name==='@/components/ui/input')return {Input:props=>React.createElement('input',props)};
  if(name==='lucide-react')return {Monitor:()=>React.createElement('span')};
@@ -78,7 +79,9 @@ async function harness(options={}) {
  let browser;
  try{
   browser=await chromium.launch({executablePath,headless:true,args:['--autoplay-policy=no-user-gesture-required','--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream','--enable-unsafe-swiftshader']});
-  const page=await browser.newPage();
+  const page=await browser.newPage(),pageErrors=[];
+  let failStartup;const pageFailure=new Promise((_,reject)=>{failStartup=reject;});
+  page.on('pageerror',error=>{pageErrors.push(error.message);failStartup(new Error('Player fixture browser error: '+error.message));});
   await page.addInitScript(({credential,options})=>{
     localStorage.setItem('gc_device',JSON.stringify(credential));window.fixtureModelWorking=!!options.modelWorking;window.fixtureRealModel=!!options.realModel;
     window.fixtureLoadWait=!!options.loadWait;
@@ -90,8 +93,8 @@ async function harness(options={}) {
       const result=await original({audio:false,video:{width:640,height:480}});window.fixtureStream=result;return result;
     };
   },{credential:{token:paired.token,device_id:paired.device.id,screen_id:'screen1'},options});
-  await page.goto(base);if(!options.empty)await page.waitForFunction(()=>{const v=document.querySelector('video');return v&&!v.paused&&v.currentTime>.1;},{},{timeout:15000});
-  return {page,db,requests,bodies,replies,paired,cleanup:async()=>{await browser.close();await new Promise(r=>server.close(r));fs.rmSync(temp,{recursive:true,force:true});}};
+  await Promise.race([pageFailure,(async()=>{await page.goto(base);if(!options.empty)await page.waitForFunction(()=>{const v=document.querySelector('video');return v&&!v.paused&&v.currentTime>.1;},{},{timeout:15000});})()]);
+  return {page,db,requests,bodies,replies,paired,pageErrors,cleanup:async()=>{await browser.close();await new Promise(r=>server.close(r));fs.rmSync(temp,{recursive:true,force:true});assert.deepEqual(pageErrors,[],'Player fixture must not have uncaught browser errors');}};
  }catch(e){await browser?.close();await new Promise(r=>server.close(r));fs.rmSync(temp,{recursive:true,force:true});throw e;}
 }
 const waitFor=async(fn,ms=15000)=>{const until=Date.now()+ms;while(!fn()){if(Date.now()>until)throw new Error('Timed out waiting for playback report');await new Promise(r=>setTimeout(r,25));}};

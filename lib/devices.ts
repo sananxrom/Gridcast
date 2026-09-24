@@ -1,3 +1,4 @@
+import { accrueSettlement, appliedOffset, economics } from './settlement';
 import crypto from 'crypto';
 import { playerReadiness } from './readiness';
 import { deviceDiagnosticRoute, diagnosticOffer, DiagnosticError } from './diagnostics';
@@ -44,8 +45,8 @@ function canonical(v: any): string {
   if (v && typeof v === 'object') return '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + canonical(v[k])).join(',') + '}';
   return JSON.stringify(v);
 }
-type Playlist = { items: any[]; config: Record<string, any>; config_version: string | number; readiness?: { ready: boolean; code: string; message: string; warnings: string[] } };
-type Options = { playlist: (screen: any, device: any) => Playlist; now?: number; clientKey?: string };
+type Playlist = { items: any[]; config: Record<string, any>; config_version: string | number; rotation_version?: string; readiness?: { ready: boolean; code: string; message: string; warnings: string[] } };
+type Options = { playlist: (screen: any, device: any, rotationIndex?: number) => Playlist; now?: number; clientKey?: string };
 type Result = { status?: number; body: any; changed: boolean };
 const fail = (status: number, error: string): Result => ({ status, body: { error }, changed: false });
 const attempts = new Map<string, { at: number; count: number }>();
@@ -94,7 +95,11 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
     return { changed: true, body: { ok: true, server_time: iso(now), config_version: options.playlist(screen, device).config_version } };
   }
   if (seg[0] === 'playlist') {
-    const p = options.playlist(screen, device), until = now + ASSIGNMENT_TTL;
+    const held = device.assignment_set;
+    const heldIndex = Number.isSafeInteger(held?.rotation_index) && held.rotation_index >= 0 ? held.rotation_index : 0;
+    let rotationIndex = heldIndex;
+    let p = options.playlist(screen, device, rotationIndex);
+    const until = now + ASSIGNMENT_TTL;
     db.device_assignments ||= [];
     // Re-issuing identical assignments on every poll is what made the usage ledger unbounded, and an
     // unbounded ledger is one that has to evict — which hands back allowances that were already spent.
@@ -102,30 +107,40 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
     // The signature must cover everything the assignment row freezes — media identity, the rate it will be
     // billed at, and the measurement settings it was issued under — not just which campaign and creative.
     // Anything omitted here is a field where the playlist we serve and the evidence we keep can disagree.
-    const frozen = p.items.map((item: any) => {
+    const playlistSignature = (playlist: Playlist) => {
+      const p = playlist;
+      const frozen = p.items.map((item: any) => {
       const c = db.campaigns.find((x: any) => x.id === item.campaign_id);
       return [item.campaign_id, c?.advertiser_id || null, item.creative_id, item.youtube_id || null, item.asset_id || null,
-        item.duration_s, item.rate_type ?? c?.rate_type ?? 'flat', Number(item.rate_value ?? c?.rate_value) || 0,
+        economics(item), item.duration_s, item.rate_type ?? c?.rate_type ?? 'flat', Number(item.rate_value ?? c?.rate_value) || 0,
         p.config_version, p.config.camera_fail_mode || 'continue', p.config.model || null,
         Number(p.config.sample_interval_s) || 2, Number(p.config.count_ceiling) || 50];
     });
-    const signature = hash(JSON.stringify(frozen));
-    const held = device.assignment_set;
+      return hash(JSON.stringify({ frozen, config_version: p.config_version, rotation_version: p.rotation_version ?? null }));
+    };
+    let signature = playlistSignature(p);
     if (held && held.signature === signature && Date.parse(held.valid_until) > now + 60e3
       && Array.isArray(held.ids) && held.ids.length === p.items.length) {
       const items = p.items.map((item: any, i: number) => playbackItem(item, held.ids[i], held.valid_until));
       return { changed: true, body: { screen: safeScreen(screen), items, config: p.config, config_version: p.config_version, server_time: iso(now), readiness: playerReadiness(p.readiness), diagnostic: diagnosticOffer(db, screen, device, now), valid_until: held.valid_until } };
     }
+    // Advance only when this transaction actually mints a replacement set. Retries and calendar
+    // boundaries use the persisted phase above; final-minute renewal advances exactly once.
+    if (held) {
+      rotationIndex = heldIndex < Number.MAX_SAFE_INTEGER ? heldIndex + 1 : 0;
+      p = options.playlist(screen, device, rotationIndex);
+      signature = playlistSignature(p);
+    }
     const items = p.items.map((item: any) => {
       const c = db.campaigns.find((c: any) => c.id === item.campaign_id);
-      const a = { id: 'assignment_' + crypto.randomUUID(), device_id: device.id, org_id: screen.org_id, screen_id: screen.id,
+      const a = { ...economics(item), id: 'assignment_' + crypto.randomUUID(), device_id: device.id, org_id: screen.org_id, screen_id: screen.id,
         campaign_id: item.campaign_id, advertiser_id: c?.advertiser_id || null, creative_id: item.creative_id, youtube_id: item.youtube_id || null, asset_id: item.asset_id || null,
         duration_s: item.duration_s, rate_type: item.rate_type ?? c?.rate_type ?? 'flat', rate_value: Number(item.rate_value ?? c?.rate_value) || 0,
         issued_at: iso(now), valid_until: iso(until), accept_until: iso(now + BACKLOG_TTL), config_version: p.config_version,
         camera_fail_mode: p.config.camera_fail_mode || 'continue', model_configured: p.config.model || null, sample_interval_s: Number(p.config.sample_interval_s) || 2, count_ceiling: Number(p.config.count_ceiling) || 50 };
       db.device_assignments.push(a); return playbackItem(item, a.id, a.valid_until);
     });
-    device.assignment_set = { signature, valid_until: iso(until), ids: items.map((i: any) => i.assignment_id) };
+    device.assignment_set = { signature, rotation_index: rotationIndex, valid_until: iso(until), ids: items.map((i: any) => i.assignment_id) };
     return { changed: true, body: { screen: safeScreen(screen), items, config: p.config, config_version: p.config_version, server_time: iso(now), readiness: playerReadiness(p.readiness), diagnostic: diagnosticOffer(db, screen, device, now), valid_until: iso(until) } };
   }
   const assignment = (db.device_assignments || []).find((a: any) => a.id === body.assignment_id && a.device_id === device.id && a.screen_id === screen.id);
@@ -155,7 +170,7 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
   // The heartbeat estimate is derived from device_now, which is also device-supplied, so it is bounded the
   // same way. Real skew beyond a few minutes is a fault to surface, not a billing window to grant.
   const OFFSET_LIMIT = 300e3, clamp = (v: number) => Math.max(-OFFSET_LIMIT, Math.min(OFFSET_LIMIT, v));
-  const offset = clamp(Number.isFinite(device.clock_offset_estimate_ms) ? device.clock_offset_estimate_ms : claimedOffset);
+  const offset = appliedOffset(device,claimedOffset);
   const timestampValid = start + offset >= Date.parse(assignment.issued_at) - 60e3 && start + offset <= Date.parse(assignment.valid_until) && end + offset <= now + 60e3;
   const expected = Number(assignment.duration_s) * 1000, mediaStart = body.media_started_s, mediaEnd = body.media_ended_s;
   if (!Number.isFinite(mediaStart) || !Number.isFinite(mediaEnd) || mediaStart < 0 || mediaEnd < 0) return fail(400, 'Invalid media progress');
@@ -195,7 +210,7 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
   const rendered = completed && durationValid && mediaValid;
   const billable = rendered && timestampValid && cameraAllowed && withinAssignment && withinThroughput;
   const reasons = [!timestampValid && 'clock_or_assignment_window', !durationValid && 'incomplete_playing_duration', !mediaValid && 'incomplete_media_progress', !completed && body.ended_reason, !cameraAllowed && 'camera_required', !withinAssignment && 'assignment_replay_cap', !withinThroughput && 'device_throughput_exceeded'].filter(Boolean);
-  const play = { id, play_uid: body.play_uid, seq_no: body.seq_no, device_id: device.id, org_id: screen.org_id, screen_id: screen.id,
+  const play = { ...economics(assignment), id, play_uid: body.play_uid, seq_no: body.seq_no, device_id: device.id, org_id: screen.org_id, screen_id: screen.id,
     assignment_id: assignment.id, campaign_id: assignment.campaign_id, advertiser_id: assignment.advertiser_id, creative_id: assignment.creative_id, config_version: assignment.config_version,
     started_at: body.started_at_device, ended_at: body.ended_at_device, started_at_device: body.started_at_device, ended_at_device: body.ended_at_device,
     duration_ms: played, playing_duration_ms: played, media_started_s: mediaStart, media_ended_s: mediaEnd, ended_reason: body.ended_reason,
@@ -215,9 +230,10 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
   }
   device.last_seq_no = Math.max(device.last_seq_no || 0, body.seq_no);
   if (device.now_playing?.campaign_id === assignment.campaign_id && device.now_playing?.creative_id === assignment.creative_id) delete device.now_playing;
-  if (billable && assignment.rate_type === 'per_play') {
+  accrueSettlement(db,play,assignment,playedAt);
+  if (billable && assignment.rate_type === 'per_play' && !assignment.econ_version) {
     const c = db.campaigns.find((c: any) => c.id === assignment.campaign_id);
-    if (c) c.accrued_spend = Math.round(((c.accrued_spend || 0) + assignment.rate_value) * 100) / 100;
+    if (c && c.org_id === screen.org_id && c.campaign_type !== 'network') c.accrued_spend = Math.round(((c.accrued_spend || 0) + assignment.rate_value) * 100) / 100;
   }
   return { changed: true, body: { ok: true, play_id: id, billable, nonbillable_reasons: reasons } };
 }

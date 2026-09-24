@@ -22,7 +22,7 @@ function org(db: any, id: unknown, actor: any) {
   return found;
 }
 export function campaignVisible(c: any, actor: any) {
-  return admin(actor) || (c.org_id === actor.org_id && (actor.role === ADVERTISER
+  return admin(actor) || ((c.org_id === actor.org_id || (actor.role !== ADVERTISER && c.campaign_type === 'network' && c.participant_org_ids?.includes(actor.org_id))) && (actor.role === ADVERTISER
     ? !!actor.advertiser_id && c.advertiser_id === actor.advertiser_id
     : can(actor.role, 'sales') || can(actor.role, 'money')));
 }
@@ -31,6 +31,7 @@ export function campaignVisible(c: any, actor: any) {
 // Empty capabilities mean a valid human session, not an anonymous route.
 export const ROUTES: { method: string; path: RegExp; caps: Cap[] }[] = [
   { method: 'GET', path: /^(me|bootstrap)$/, caps: [] },
+  { method: 'GET', path: /^network-inventory$/, caps: ['platform'] },
   { method: 'POST', path: /^(password|logout)$/, caps: [] },
   { method: 'GET', path: /^team$/, caps: ['team'] },
   { method: 'GET', path: /^(directory|audit)$/, caps: ['platform', 'org'] },
@@ -58,7 +59,7 @@ export const ROUTES: { method: string; path: RegExp; caps: Cap[] }[] = [
   { method: 'GET', path: /^config(?:\/schema)?$/, caps: ['screens'] },
   { method: 'POST', path: /^config(?:\/[^/]+(?:\/delete)?)?$/, caps: ['screens'] },
 ];
-const ADVERTISER_EDIT = ['name','contact','email','phone','category','notes'];
+const ADVERTISER_EDIT = ['name','contact','email','phone','category','notes','exclusions'];
 const SCREEN_EDIT = ['name','venue_name','venue_type','address','photo_url','size_in','orientation','aspect',
   'venue_base','size_factor','location_factor','location_tier','exposure_factor','exposure_source','advertiser_slots',
   'loop_length_s','slot_duration_s','operating_hours','owner_share_pct','network_slots','network_available',
@@ -72,7 +73,7 @@ const SCREEN_MONEY = ['venue_base','size_factor','location_factor','exposure_fac
   'slot_price_month','owner_share_pct','priced_against'];
 /** Fields that re-derive a screen's price or its sellable inventory. Writing one is a pricing action even when
  *  the field itself carries no rupee value, so it needs the same access as writing the price outright. */
-const SCREEN_PRICING_INPUTS = [...SCREEN_MONEY, 'advertiser_slots', 'loop_length_s', 'slot_duration_s'];
+const SCREEN_PRICING_INPUTS = [...SCREEN_MONEY, 'advertiser_slots', 'loop_length_s', 'slot_duration_s', 'network_slots', 'network_available'];
 function rejectUnknown(body: any, allowed: string[]) {
   if (Object.keys(body).some(k => !allowed.includes(k))) fail(400, 'Unsupported field');
 }
@@ -118,7 +119,9 @@ function teamTarget(db: any, id: string, actor: any) {
   return u;
 }
 function campaignRelations(db: any, c: any, actor: any) {
-  org(db, c.org_id, actor);
+  const origin = org(db, c.org_id, actor);
+  if (c.campaign_type === 'network' && (!admin(actor) || origin.type !== 'gridcast' || c.origin_org_id !== c.org_id)) fail(403, 'Only platform administrators can manage Gridcast network campaigns');
+  if (c.campaign_type === 'network' && c.rate_type !== 'per_play') fail(400, 'Network campaigns currently support per-play pricing only');
   const adv = db.advertisers.find((a: any) => a.id === c.advertiser_id);
   // Network campaigns deliberately reference the originating organisation's advertiser/creative.
   const sourceOrg = c.campaign_type === 'network' ? c.origin_org_id : c.org_id;
@@ -126,7 +129,7 @@ function campaignRelations(db: any, c: any, actor: any) {
   if (adv.status === 'archived') fail(409, 'Restore this advertiser before creating or changing campaigns');
   for (const id of ids(c.screen_ids)) {
     const s = own(db.screens, id, actor);
-    if (s.org_id !== c.org_id) fail(400, 'Campaign screens must belong to the receiving organisation');
+    if (c.campaign_type !== 'network' && s.org_id !== c.org_id) fail(400, 'Campaign screens must belong to the receiving organisation');
   }
   for (const id of ids(c.creative_ids)) {
     const cr = db.creatives.find((x: any) => x.id === id);
@@ -143,9 +146,15 @@ export function authorize(db: any, actor: any, method: string, seg: string[], in
   if (actor.must_change && !['me','password','logout'].includes(path)) fail(403, 'Change your temporary password first');
   let body = { ...input };
   const [entity, id, action] = seg;
+  const externalKey = body.external_key;
+  if (externalKey !== undefined) {
+    if (!admin(actor)) fail(403,'External keys are platform-only');
+    if (method !== 'POST' || id || !['org','screens','advertiser','creative','campaign'].includes(entity) || typeof externalKey !== 'string' || !/^[a-z0-9][a-z0-9._-]{2,119}$/.test(externalKey)) fail(400,'Invalid external key');
+    delete body.external_key;
+  }
   if (path === 'reset' && (process.env.NODE_ENV === 'production' || process.env.GC_ALLOW_RESET !== '1')) fail(403, 'Reset is disabled');
   const requestedOrg = q.get('org') || q.get('org_id');
-  if (['team','bootstrap','directory','audit','config'].includes(path) && requestedOrg) org(db, requestedOrg, actor);
+  if (['team','bootstrap','directory','audit','config','network-inventory'].includes(path) && requestedOrg) org(db, requestedOrg, actor);
   if (entity === 'advertiser' && id) {
     const a = own(db.advertisers, id, actor);
     if (method === 'POST') {
@@ -158,6 +167,7 @@ export function authorize(db: any, actor: any, method: string, seg: string[], in
     const c = db.campaigns.find((x: any) => x.id === id);
     if (!c || !campaignVisible(c, actor)) fail(404, 'Not found');
     if (method === 'POST') {
+      if (c.campaign_type === 'network' && !admin(actor)) fail(403, 'Network campaigns are managed by the platform');
       rejectUnknown(body, CAMPAIGN_EDIT);
       if ('invoice_status' in body && !can(actor.role, 'money')) fail(403, 'Billing requires money access');
       campaignRelations(db, { ...c, ...body }, actor);
@@ -166,10 +176,11 @@ export function authorize(db: any, actor: any, method: string, seg: string[], in
   if (path === 'campaign' && method === 'POST') {
     const orgId = body.org_id || actor.org_id;
     org(db, orgId, actor);
-    rejectUnknown(body, [...CAMPAIGN_EDIT, 'org_id', 'advertiser_id']);
+    rejectUnknown(body, [...CAMPAIGN_EDIT, 'org_id', 'advertiser_id', 'campaign_type']);
     if ('invoice_status' in body && !can(actor.role, 'money')) fail(403, 'Billing requires money access');
-    body = { ...body, org_id: orgId, origin_org_id: orgId };
-    campaignRelations(db, { ...body, campaign_type: 'operator' }, actor);
+    if (!['operator','network'].includes(body.campaign_type || 'operator')) fail(400,'Unknown campaign type');
+    body = { ...body, org_id: orgId, origin_org_id: orgId, campaign_type:body.campaign_type || 'operator' };
+    campaignRelations(db, body, actor);
   }
   if ((path === 'creative' || path === 'advertiser') && method === 'POST') {
     const orgId = body.org_id || actor.org_id; org(db, orgId, actor);
@@ -182,6 +193,17 @@ export function authorize(db: any, actor: any, method: string, seg: string[], in
       if (a.status === 'archived') fail(409, 'Restore this advertiser before adding creatives');
     }
     body.org_id = orgId;
+  }
+  if (entity === 'advertiser' && method === 'POST' && 'exclusions' in body) {
+    const ex = body.exclusions;
+    if (!ex || typeof ex !== 'object' || Array.isArray(ex)) fail(400,'Invalid exclusions');
+    rejectUnknown(ex,['venue_types','screens','tag_rules']);
+    const venues = ids(ex.venue_types || []), screens = ids(ex.screens || []);
+    if (venues.length > 100 || venues.some(v => !v.trim() || v.length > 100) || screens.length > 2000) fail(400,'Too many or invalid exclusions');
+    for (const sid of screens) own(db.screens,sid,actor);
+    const rules = ex.tag_rules || [];
+    if (!Array.isArray(rules) || rules.length > 100 || rules.some((r: any) => !r || typeof r !== 'object' || Array.isArray(r) || !Object.keys(r).length || Object.keys(r).length > 20 || Object.entries(r).some(([k,v]) => ['__proto__','constructor','prototype'].includes(k) || !k.trim() || k.length > 100 || typeof v !== 'string' || !v.trim() || v.length > 200))) fail(400,'Invalid tag exclusion rule');
+    body.exclusions = {venue_types:venues,screens,tag_rules:rules};
   }
   if (entity === 'creative' && id) {
     const creative = own(db.creatives, id, actor);
@@ -206,7 +228,7 @@ export function authorize(db: any, actor: any, method: string, seg: string[], in
       if (!ex || !Array.isArray(ex.categories)) fail(400, 'Invalid exclusions');
       for (const aid of ids(ex.advertisers || [])) {
         const a = db.advertisers.find((x: any) => x.id === aid);
-        const participant = db.campaigns.some((c: any) => c.org_id === actor.org_id && c.advertiser_id === aid);
+        const participant = db.campaigns.some((c: any) => campaignVisible(c,actor) && c.screen_ids?.includes(id) && c.advertiser_id === aid);
         if (!a || (!admin(actor) && a.org_id !== actor.org_id && !participant)) fail(404, 'Not found');
       }
     }
@@ -260,15 +282,20 @@ export function authorize(db: any, actor: any, method: string, seg: string[], in
     for (const k of ['blocked_categories','category_blocklist']) if (k in body) ids(body[k]);
   }
   if (entity === 'org' && method === 'POST') {
+    if ('platform_fee_pct' in body && (typeof body.platform_fee_pct !== 'number' || !Number.isFinite(body.platform_fee_pct) || body.platform_fee_pct < 0 || body.platform_fee_pct > 100 || Math.abs(body.platform_fee_pct * 100 - Math.round(body.platform_fee_pct * 100)) > .000001)) fail(400,'Invalid platform fee percentage');
+    if ('fee_basis' in body && !['gross','net_of_owner_share'].includes(body.fee_basis)) fail(400,'Invalid fee basis');
     if (id) {
       org(db, id, actor);
       if (!can(actor.role, 'money') && ORG_MONEY.some(k => k in body)) fail(403, 'Billing requires money access');
-      if (!admin(actor) && ['platform_fee_pct','type','status','_as'].some(k => k in body)) fail(403, 'Platform-only field');
-      rejectUnknown(body, [...ORG_EDIT, ...ORG_MONEY, ...(admin(actor) ? ['platform_fee_pct','type','status','_as'] : [])]);
+      if (!admin(actor) && ['platform_fee_pct','fee_basis','type','status','_as'].some(k => k in body)) fail(403, 'Platform-only field');
+      rejectUnknown(body, [...ORG_EDIT, ...ORG_MONEY, ...(admin(actor) ? ['platform_fee_pct','fee_basis','type','status','_as'] : [])]);
       delete body._as;
     } else {
-      rejectUnknown(body, [...ORG_EDIT, 'platform_fee_pct','type','admin_email','admin_name']);
-      if (body.admin_email && db.users.some((u: any) => u.email.toLowerCase() === String(body.admin_email).trim().toLowerCase()))
+      rejectUnknown(body, [...ORG_EDIT, 'platform_fee_pct','fee_basis','type','admin_email','admin_name']);
+      // A platform retry returns the existing organisation before any user or audit mutation.
+      // Its already-created owner is not a conflicting new login; a different key still is.
+      const reusesOrganisation = externalKey !== undefined && db.orgs.some((o: any) => o.external_key === externalKey);
+      if (!reusesOrganisation && body.admin_email && db.users.some((u: any) => u.email.toLowerCase() === String(body.admin_email).trim().toLowerCase()))
         fail(409, 'That email already has a login');
       if (body.admin_email) body.admin_email = String(body.admin_email).trim().toLowerCase();
     }
@@ -318,7 +345,7 @@ export function authorize(db: any, actor: any, method: string, seg: string[], in
       configValid(db, body, actor);
     }
   }
-  return body;
+  return externalKey === undefined ? body : {...body,external_key:externalKey};
 }
 
 export function advertiserView(a: any, actor: any) {
@@ -341,38 +368,65 @@ export function screenView(s: any, actor: any) {
   if (!can(actor.role, 'sales') && !can(actor.role, 'money')) for (const k of SCREEN_MONEY) delete out[k];
   return out;
 }
+export function settlementView(db: any, actor: any, campaignId?: string, orgId?: string | null) {
+  const rows = (db.settlement_buckets || []).filter((b: any) => (!campaignId || b.campaign_id === campaignId) && (!orgId || b.org_id === orgId) &&
+    (admin(actor) || (actor.role === ADVERTISER ? b.advertiser_id === actor.advertiser_id && db.campaigns.some((c: any) => c.id === b.campaign_id && campaignVisible(c,actor)) : b.org_id === actor.org_id)));
+  if (actor.role === ADVERTISER) return rows.map((b: any) => pick(b,['id','campaign_id','screen_id','period','billable_plays','gross_paise','rate_value','rate_version','source','updated_at']));
+  return rows.map((b: any) => can(actor.role,'money') ? b : pick(b,['id','campaign_id','screen_id','org_id','period','billable_plays','source','updated_at']));
+}
+export function campaignView(db: any, c: any, actor: any, orgId?: string | null) {
+  const all = admin(actor) || actor.role === ADVERTISER;
+  const scopedOrg = orgId || (!all ? actor.org_id : null);
+  const scopedNetwork = c.campaign_type === 'network' && !!scopedOrg;
+  const ownScreens = new Set(db.screens.filter((s: any) => s.org_id === scopedOrg).map((s: any) => s.id));
+  const buckets = settlementView(db,actor,c.id,scopedOrg);
+  const out = {...c};
+  if (c.campaign_type === 'network' || c.bookings?.some((b: any) => b.econ_version)) {
+    out.accrued_spend = buckets.reduce((sum: number,b: any) => sum + (b.gross_paise || 0),0) / 100 + (c.campaign_type === 'network' ? 0 : (c.accrued_spend || 0));
+    out.spend_source = c.campaign_type !== 'network' && c.accrued_spend ? 'legacy_accrual_and_verified_settlement' : 'settlement_buckets';
+    // Do not present unavailable economics as zero to sales-only users.
+    if (!all && !can(actor.role,'money')) delete out.accrued_spend;
+  }
+  if (scopedNetwork) {
+    out.screen_ids = (c.screen_ids || []).filter((id: string) => ownScreens.has(id));
+    out.bookings = (c.bookings || []).filter((b: any) => ownScreens.has(b.screen_id));
+    for (const key of ['committed_budget','rate_type','rate_value','invoice_status','platform_fee_pct','fee_basis','participant_org_ids']) delete out[key];
+    out.reporting_scope = 'organisation';
+  }
+  if (actor.role === ADVERTISER) out.bookings = (out.bookings || []).map((b: any) => pick(b,['screen_id','slots_per_loop','rate_type','rate_value','rate_version','booked_at']));
+  return out;
+}
 export function bootstrap(db: any, actor: any, screenStatus: (s: any) => any, orgId?: string | null) {
   if (orgId && admin(actor)) {
-    const campaignRows = db.campaigns.filter((c: any) => c.org_id === orgId);
+    const campaignRows = db.campaigns.filter((c: any) => c.org_id === orgId || c.participant_org_ids?.includes(orgId));
     const advIds = new Set(campaignRows.map((c: any) => c.advertiser_id));
     const crIds = new Set(campaignRows.flatMap((c: any) => c.creative_ids || []));
     db = { ...db, campaigns: campaignRows, orgs: db.orgs.filter((o: any) => o.id === orgId || o.id === actor.org_id),
       advertisers: db.advertisers.filter((a: any) => a.org_id === orgId || advIds.has(a.id)),
       creatives: db.creatives.filter((c: any) => c.org_id === orgId || crIds.has(c.id)),
-      ...Object.fromEntries(['screens','groups','devices','plays','presence'].map(k => [k, (db[k] || []).filter((r: any) => r.org_id === orgId)])),
+      ...Object.fromEntries(['screens','groups','devices','plays','presence','settlement_buckets'].map(k => [k, (db[k] || []).filter((r: any) => r.org_id === orgId)])),
       configs: (db.configs || []).filter((c: any) => c.org_id === orgId || c.layer === 'platform') };
   }
-  const campaigns = db.campaigns.filter((c: any) => campaignVisible(c, actor));
+  const campaigns = db.campaigns.filter((c: any) => campaignVisible(c, actor)).map((c: any) => campaignView(db,c,actor,orgId && admin(actor) ? orgId : null));
   const campaignIds = new Set(campaigns.map((c: any) => c.id));
-  const plays = db.plays.filter((p: any) => admin(actor) || (p.org_id === actor.org_id &&
-    (actor.role !== ADVERTISER || campaignIds.has(p.campaign_id)))).slice(-1500);
+  const plays = db.plays.filter((p: any) => admin(actor) || (actor.role === ADVERTISER ? campaignIds.has(p.campaign_id) : p.org_id === actor.org_id)).slice(-1500);
   const playIds = new Set(plays.map((p: any) => p.id));
-  const screenIds = new Set([...campaigns.flatMap((c: any) => c.screen_ids), ...plays.map((p: any) => p.screen_id)]);
+  const screenIds = new Set([...campaigns.flatMap((c: any) => c.screen_ids), ...plays.map((p: any) => p.screen_id), ...settlementView(db,actor).map((b: any) => b.screen_id)]);
   const advIds = new Set(campaigns.map((c: any) => c.advertiser_id));
   const crIds = new Set(campaigns.flatMap((c: any) => c.creative_ids));
   const advertiser = actor.role === ADVERTISER;
   const sales = can(actor.role, 'sales');
-  const screens = db.screens.filter((s: any) => admin(actor) || (s.org_id === actor.org_id && (!advertiser || screenIds.has(s.id))));
+  const screens = db.screens.filter((s: any) => admin(actor) || (advertiser ? screenIds.has(s.id) : s.org_id === actor.org_id));
   return {
     pagination: db.pagination || {}, scope_org: orgId || null, history: db.history || { complete: true, scope: 'local_demo' }, config_version: db.settings?.config_revision || 1, user: publicUser(actor), org: orgView(db.orgs.find((o: any) => o.id === actor.org_id), actor), isAdmin: admin(actor),
     orgs: db.orgs.filter((o: any) => admin(actor) || o.id === actor.org_id).map((o: any) => orgView(o, actor)),
     screens: screens.map((s: any) => screenView({ ...s, _status: screenStatus(s) }, actor)),
-    campaigns, advertisers: db.advertisers.filter((a: any) => admin(actor) || (sales && a.org_id === actor.org_id) || advIds.has(a.id))
+    campaigns, settlement_buckets:settlementView(db,actor,undefined,orgId && admin(actor) ? orgId : null), advertisers: db.advertisers.filter((a: any) => admin(actor) || (sales && a.org_id === actor.org_id) || advIds.has(a.id))
       .map((a: any) => advertiserView(a, actor)),
     creatives: db.creatives.filter((c: any) => admin(actor) || (sales && c.org_id === actor.org_id) || crIds.has(c.id)),
     groups: (db.groups || []).filter((g: any) => admin(actor) || (!advertiser && g.org_id === actor.org_id)),
     devices: can(actor.role, 'screens') ? db.devices.filter((d: any) => admin(actor) || d.org_id === actor.org_id) : [],
-    plays, presence: db.presence.filter((p: any) => playIds.has(p.play_id) && (admin(actor) || p.org_id === actor.org_id)),
+    plays, presence: db.presence.filter((p: any) => playIds.has(p.play_id) && (admin(actor) || advertiser || p.org_id === actor.org_id)),
     settings: admin(actor) ? db.settings || {} : {},
     configs: can(actor.role, 'screens') ? (db.configs || []).filter((c: any) => admin(actor) || c.org_id === actor.org_id || c.layer === 'platform') : [],
     caps: capabilities(actor),
@@ -386,8 +440,8 @@ export function redact(value: any, actor: any): any {
   const hidden = new Set(['password_hash','password_salt','auth_version','token_hash','pairing_code_hash','payload_hash','storage_path','frame','frame_url','preview_frame','frameUrl']);
   if (!can(actor?.role, 'money')) for (const k of [...ORG_MONEY, 'owner_share_pct']) hidden.add(k);
   if (!can(actor?.role, 'sales') && !can(actor?.role, 'money'))
-    for (const k of [...SCREEN_MONEY, 'committed_budget','accrued_spend','rate_value','platform_fee_pct','invoice_status']) hidden.add(k);
-  if (!can(actor?.role, 'money')) for (const k of ['invoice_status','platform_fee_pct','fee_basis']) hidden.add(k);
+    for (const k of [...SCREEN_MONEY, ...(actor?.role === ADVERTISER ? [] : ['committed_budget']),...(actor?.role === ADVERTISER ? [] : ['rate_value','accrued_spend','gross_paise','rate_paise']), 'platform_fee_pct','invoice_status']) hidden.add(k);
+  if (!can(actor?.role, 'money')) for (const k of ['invoice_status','platform_fee_pct','fee_basis','fee_paise','owner_paise','net_paise','fee_version','econ_version']) hidden.add(k);
   if (!can(actor?.role, 'screens')) for (const k of ['code','priced_against','frameUrl','config','configStack','configConflicts','pricingDrift']) hidden.add(k);
   return Object.fromEntries(Object.entries(value).filter(([k]) => !hidden.has(k)).map(([k,v]) => [k, redact(v, actor)]));
 }

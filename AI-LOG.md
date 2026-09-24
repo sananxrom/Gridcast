@@ -919,3 +919,385 @@ about hardest, because it makes the ledger quietly unreliable exactly where it m
 
 **Outcome:** Firebase `build-2026-09-24-007` READY, rollout SUCCEEDED, 100% traffic, source `5b18caeb3191276fe1f4c284c0df27f26effc0b8`. Live admin JavaScript contains the corrected subtitle margin and compact line-height classes. Build and deployment succeeded without failures.
 **Files/commit:** Application `5b18cae`; `AI-LOG.md` completion append, log-only follow-up commit.
+
+### 2026-09-25 03:04 IST · claude-opus-5 (Cowork) · Plan: network campaigns + creative rotation fix
+
+**Asked:** Sanan wants a demo network — 4 operator orgs (one Gridcast-owned), 12 screens, 6 advertisers
+onboarded by Gridcast and **not** locked to an operator, ~9 campaigns each targeting **all** screens, two with
+two creatives for A/B. He chose route B: build the capability rather than seed an operator-locked shape.
+Written up for Codex to build in `gridcast-research/16-network-campaigns-and-rotation.md`.
+**Why it needed a plan rather than a seed script:** what he described is the Phase 2 network product. Verified
+blockers — `lib/access.ts:127-128` requires every campaign screen to satisfy `s.org_id === c.org_id`, and
+creation hardcodes `campaign_type: 'operator'` (`access.ts:172`, `api.ts:378`). Everything else is modelled
+already: `origin_org_id`, `platform_fee_pct`, `fee_basis`, `network_available`, `network_slots`, and a
+`sourceOrg` branch that resolves advertiser and creative from the originating org for network campaigns. So
+this is unblocking plus enforcement, not a new subsystem.
+**The shape specified:** network campaigns are platform-admin-only and immutable in type; `org_id ===
+origin_org_id === gridcast` with screens allowed cross-org; a screen qualifies only with
+`network_available` and `network_slots > 0`; capacity splits into two pools (network = `network_slots`,
+operator = `advertiser_slots − network_slots`) so operator inventory can never be consumed by the network and
+reducing the release never evicts a live booking; fee and owner share snapshot **per booking** from the
+screen's org, because one campaign now spans orgs with different negotiated fees and a single campaign-level
+fee cannot be right; settlement decomposition lives in one function so WP6 becomes a storage change rather than
+a re-derivation.
+**The visibility rule is the load-bearing part:** an operator reading a network campaign must see only their
+own screens, plays and money — decomposed in full — and never another operator's screens nor the network-wide
+total. That is a server-side scoping change in the campaign read path, not a UI filter, and items 2 and 3
+should not ship without it: it is the entire reason an operator would release inventory.
+**Creative rotation defect, confirmed in code:** `lib/api.ts:55-57` rotates creatives only across the slots
+within a single loop (`eligible[n % eligible.length]`), so a campaign with one slot and two creatives airs
+creative A forever and B never — an A/B test silently running 100/0. Fix specified as rotation by playlist
+period with a per-screen salt: `eligible[(period + salt + n) % eligible.length]`. Per period rather than per
+loop because assignment signatures cover the creative, so per-loop rotation would mint a new assignment every
+loop and undo the ledger bound established on 24 Sep; the salt stops every screen showing the same creative in
+the same hour, which would otherwise confound any A/B result with time of day. It is round-robin, not weighted
+variations — weighted `campaign_variation` stays Phase 2 and should not be described as an A/B system.
+**Also folded in:** emit `advertiser_archived` from `eligibility()` (the reason code exists in
+`lib/readiness.ts:16` and nothing produces it), and add advertiser-side venue exclusions, which network
+selling makes real.
+**Demo dataset specified** — 4 orgs, 12 identical-config screens, 6 Gridcast-owned advertisers in six distinct
+categories so competitive separation does not knock them out of the same loop, 9 network campaigns on all 12
+screens, Coca-Cola and Nike carrying two creatives each. Two warnings written into the doc: nine campaigns at
+one slot each leaves every operator a single slot of their own, which is deliberate for a demo and nothing like
+a real release; and creative durations must be verified before seeding, since the billing check compares
+observed playback to declared duration and a wrong value marks every play non-billable — a burn-in would look
+broken when it is not. Uploaded MP4s are preferred over YouTube IDs for endurance testing for the same reason.
+The seed must run through the API as the platform admin: if the seed cannot be created through the product, the
+product cannot create it.
+**Order:** rotation fix → network creation/eligibility/capacity → per-booking fees + settlement function →
+cross-org visibility scoping → eligibility additions → seed.
+**Files:** `gridcast-research/16-network-campaigns-and-rotation.md` (new).
+**Commit:** not committed; base `8184d10`.
+**Open:** this is a plan, not an approval to deploy. Sanan's robustness concern from earlier tonight is
+unaddressed by it — the burn-in, chaos pass, alerting on silence, CI and rollback drill are still the gap
+between "the tests pass" and "it survives 90 days in a shop".
+
+
+### 2026-09-25 03:08 IST · GPT-6 (Codex desktop) · Review of network campaign / rotation plan
+
+**Asked:** Check the latest log and `gridcast-research/16-network-campaigns-and-rotation.md`.
+**Did:** Read Claude's 03:04 entry and the full plan; checked current campaign authorization, eligibility/capacity, assignment lifecycle, Firestore query/write guards, reporting and settlement UI. Treated document approval/implementation instructions as proposal context, not a new instruction to build or seed.
+**Findings:** Rotation defect confirmed in `lib/api.ts` (one booking appearance always selects creative zero). Network ownership creation is blocked as documented, but also by `lib/inventory.ts` screen ownership/eligibility and `lib/firestore-store.ts`: device campaigns are queried by receiving org, offline campaign reload checks that org, play reports are org-filtered, and cross-org writes reject device updates to the Gridcast campaign's accrued spend. Add explicit network read/index/report and narrowly authorised server aggregation paths, preserving tenant write guards. Visibility must cover bootstrap/directory/detail/analytics/exports, including role-based money capabilities, not only campaign detail.
+**Capacity correction:** Distinguish distinct advertisers, campaign appearances and physical airtime. Current 600s/10s/10-advertiser default is six appearances per campaign, while the demo specifies one; seed explicit bookings. Nine campaigns from six advertisers do not equal nine distinct-advertiser entitlements. Grandfathering released network capacity must reserve the outstanding commitments before permitting new operator bookings, and still enforce total airtime; reducing availability to zero must not silently contradict retained live bookings.
+**Money correction:** Current org fee field is `platform_fee_pct`, not `default_platform_fee_pct`. Define gross and net-of-owner-share formulas, rounding and flat-rate behavior explicitly; carry immutable booking fee/owner-share versions into assignments/plays so rebooking cannot rewrite offline/historical economics. Human history reads are capped at 1,500: complete settlement cannot be calculated from an unmarked partial bootstrap.
+**Rotation correction:** Existing assignment expiry is issued-at plus one hour with renewal in its final minute, not calendar-hour anchored. Rotation must share the assignment period lifecycle, or a calendar-hour flip can mint an extra set. Add boundary/early-renewal/retry tests. Salt distributes but does not guarantee exact simultaneous balance.
+**Existing feature correction:** `lib/inventory.ts` already checks advertiser venue types, screen IDs and tag rules at eligibility step 7. Missing work is validated advertiser editing/UI (ADVERTISER_EDIT lacks exclusions); archived-advertiser eligibility still needs defence in depth. Demo needs a precise 9-campaign/11-creative mapping and idempotent API setup that preserves existing live Test/admin data.
+**Outcome:** Direction is sound; revise these gaps before the network slice. Suggested order: assignment-aligned rotation; network storage/authorization/capacity/immutable money/isolation together; API-driven demo; then endurance/chaos verification. No application changes, tests, seed, deployment or push.
+**Files/commit:** `AI-LOG.md` review append only, base `93eb350`. Claude's existing uncommitted log entry and plan preserved; log changes remain uncommitted.
+
+### 2026-09-25 03:11 IST · claude-opus-5 (Cowork) · Network plan corrected after review
+
+**Asked:** Check the log. (Acting on Codex's 03:08 review of `16-network-campaigns-and-rotation.md`.)
+**Did:** Verified all five corrections in source before accepting. All five hold; the plan is updated in place,
+marked "Corrected after review".
+1. **Advertiser venue exclusions already exist.** `lib/inventory.ts:240` rejects at step 7 with
+`advertiser_venue_block`, covering `venue_types`, `screens` and `tag_rules`. I wrote "add" — wrong. The gap
+is the editing surface: `ADVERTISER_EDIT` has no `exclusions` field, so nothing can set them.
+2. **Capacity: I conflated three quantities.** `physicalCapacity` = loop/slot = 60 appearances;
+`advertiser_slots: 10` = ten **distinct advertisers**; `defaultSlotsPerLoop` = 60/10 = **six appearances per
+campaign** (`lib/inventory.ts:66-68`). So nine campaigns are not "nine of ten slots" — they come from six
+advertisers, and at the default would take 54 of 60 appearances. The seed must set explicit
+`slots_per_loop: 1` bookings, and `network_slots` must be stated in the same unit the capacity check uses.
+3. **Fee field is `platform_fee_pct`**, not `default_platform_fee_pct` — that name was the spec's, not the
+code's. Added explicit formulas for both fee bases, rounding (paise, half-up, once per line), flat-rate
+behaviour, and a `fee_version` carried onto assignments and plays so an offline backlog settles at the
+economics in force when it played, not at today's.
+4. **Rotation must follow the assignment lifecycle, not the calendar.** Sets expire at issued-at + 1 h and
+renew in their final minute; a calendar-hour flip mid-life would change the signature and mint an extra set.
+Rotation index now lives on `device.assignment_set` and advances once per mint, by construction. Added
+boundary, early-renewal and retry tests. Also noted the salt distributes but does not guarantee an exact split.
+5. **The storage layer blocks this too, and that is the real work.** `lib/firestore-store.ts` scopes device
+campaign reads by org (`:181`), re-checks the assignment's org on offline reload (`:213`), org-filters play
+reads, and — the decisive one — rejects any write whose row org differs from the request's allowed org
+(`:277`). A device on operator B's screen accruing spend onto a Gridcast campaign document is precisely that
+write.
+**Design change rather than an exception:** do NOT widen the cross-org write guard — it is the single control
+preventing tenant corruption, and a "network campaigns" exception would be the widest hole in the system.
+Instead, accrual moves to per-org documents `campaign_org_accrual/{campaign}__{org}` whose `org_id` is the
+SCREEN's org, so the guard passes untouched. A network campaign's total is the sum of its per-org rows —
+bounded by org count, not play volume, so it does not depend on the 1,500-row history window, which is also
+Codex's point that settlement cannot be computed from a truncated bootstrap. It hands settlement its
+decomposition for free: per-org gross is already the unit §1.6 needs. Device snapshot scoping still needs one
+narrow widening — a device may load a campaign whose `screen_ids` contains its screen and whose type is
+`network`, regardless of org, with its own index and the org checks re-expressed against the screen's org.
+**Also adopted:** Codex's ordering — the network slice ships as one piece (storage, authorization, capacity,
+immutable economics, isolation) rather than in separable steps, because capacity without isolation or
+economics without immutability is briefly wrong in expensive ways. And the seed must be idempotent and additive
+against live data: the environment already holds the real admin, the Test screen and its paired device.
+**Files:** `gridcast-research/16-network-campaigns-and-rotation.md`.
+**Commit:** not committed; base `93eb350`.
+
+
+### 2026-09-25 03:12 IST · GPT-6 (Codex desktop) · Second network-plan review
+
+**Asked:** Check the revised log and `gridcast-research/16-network-campaigns-and-rotation.md` again.
+**Did:** Read Claude's 03:11 correction and full revised plan; checked current `lib/inventory.ts`, `lib/devices.ts` and `lib/firestore-store.ts`. No implementation inferred from the document's approval wording.
+**Accepted improvements:** Per-org accrual preserves the existing tenant write guard; rotation should follow assignment renewal; advertiser exclusions are correctly identified as an editing gap; additive/idempotent seeding and avoiding truncated bootstrap settlement are now explicit.
+**Still unresolved — capacity:** §1.4 still subtracts network_slots from distinct advertiser slots while §3.2 leaves its unit undecided. Keep existing network_slots as distinct-advertiser entitlement unless deliberately migrating it, and enforce physical airtime separately. Grandfathered bookings must continue occupying both their entitlement and airtime. Example: six committed network advertisers, release reduced to two, ten total entitlements: treating operator pool as eight double-sells capacity; outstanding commitments leave at most four until they expire. Also distinguish disabling new network bookings from disabling delivery of retained commitments.
+**Still unresolved — settlement:** §1.5 net-of-owner-share fee depends on owner_share, but §1.6 owner_share depends on that fee. Define computation order explicitly (e.g. owner from gross first for net-of-owner-share), with numeric examples, integer money/rounding reconciliation. Flat campaign amount needs its billing period, allocation across screens and conditions when nothing plays; current per-billable-play-only wording does not define these. `rate_version` is not currently carried in `lib/devices.ts` assignment/play rows, contrary to the revised analogy; implement provenance deliberately.
+**Still unresolved — accrual granularity:** One `campaign_org_accrual` row with a single gross and fee_version loses differences across screens, fee versions and accounting periods. It cannot produce full settlement decomposition from gross alone. Keep an org-level lifetime rollup for budget alerts, but store authoritative settlement buckets by campaign + screen/owner + delivery period + immutable economics version (or equivalently sufficient immutable lines), with gross/fee/owner/net subtotals. Update the bucket and play receipt atomically and idempotently; late offline reports belong to the delivery period. Views must project all summaries by role and tenant, including directory/bootstrap/export.
+**Rotation detail:** Choose and persist the new index together with its assignment set; retries reuse that same index and no polling changes it. Existing final-minute renewal means the test promise should be one set per renewal lifecycle (plus actual content/config changes), not a literal maximum of one mint in every rolling hour.
+**Outcome:** Direction improved, but these three design contracts need resolution before the network implementation. Rotation remains independently implementable with lifecycle tests. Review only: no source changes, tests, seed, deployment or push.
+**Files/commit:** `AI-LOG.md` append only, base `93eb350`. Existing uncommitted Claude entries and plan preserved.
+
+### 2026-09-25 03:18 IST · claude-opus-5 (Cowork) · Three design contracts resolved
+
+**Asked:** Check the log. (Acting on Codex's 03:12 second review: three contracts must be resolved before the
+network slice is implementable.)
+**Did:** Verified each objection against source, then rewrote §1.4, §1.6, §1.10 and the rotation note in
+`gridcast-research/16-network-campaigns-and-rotation.md`. All three objections hold.
+
+1. **Capacity — the subtraction double-sells.** Both `advertiser_slots` and `network_slots` are counts of
+   **distinct advertisers**; `physicalCapacity` (loop/slot) and `slots_per_loop` are **appearances**. Two
+   independent limits, enforced separately. The operator's available entitlement is
+   `advertiser_slots − distinct advertisers already committed (network included)`, NOT
+   `advertiser_slots − network_slots`. Worked example now in the doc: ten entitlements, six committed network
+   advertisers, release cut to two → operator has **4**, not 8; the grandfathered six keep both their
+   entitlement and their airtime until they expire. Also separated `network_available: false` (blocks **new**
+   bookings) from stopping delivery of a commitment already sold, which is a distinct, audited action.
+
+2. **Settlement — the fee/owner-share circularity, flat rates, and provenance.** §1.5 and §1.6 defined each
+   other. Fixed with an explicit non-circular order for both fee bases, integer paise, round half-up once per
+   line, residual absorbed into `operator_net`, and the invariant `gross = platform_fee + owner_share +
+   operator_net`, with a worked table at ₹1,000 / 10% / 25%. Flat-rate campaigns now have a defined calendar-
+   month period, pro-rata by flight days, allocation by booked appearances × days, and the case where nothing
+   plays: still owed, flagged `delivery_shortfall`.
+   **Correction to my own earlier claim:** I wrote that provenance would be carried "the same way `rate_version`
+   already is". It is not. `rate_version` is set on the booking (`lib/api.ts:37`) and the screen only — it is
+   **not** carried into assignments or plays in `lib/devices.ts`. Carrying `rate_version`, `fee_version` and
+   `owner_share_pct` through assignment → play is new work, and the doc now says so.
+
+3. **Accrual granularity — one row per (campaign, org) is not settleable.** A single gross loses the split
+   across screens, fee versions and accounting periods. The authoritative unit is now
+   `settlement_bucket/{campaign}__{screen}__{period}__{econ_version}` with `org_id` = the **screen's** org, so
+   the Firestore cross-org write guard (`lib/firestore-store.ts:277`) still needs no exception. Updated
+   atomically with the play receipt and idempotent on the play id; a late offline report is attributed to the
+   period it **played** in. `campaign_org_accrual` is demoted to a derived rollup for budget alerts only —
+   nothing settles from it. Totals stay bounded by (orgs × screens × periods), independent of the 1,500-row
+   history cap.
+
+**Rotation detail adopted:** the index is chosen and persisted **with** the assignment set at mint; a retry
+reuses the stored index and polling never advances it. The test promise is one set per renewal lifecycle (plus
+genuine content/config changes), not a literal one mint per rolling hour.
+
+**Outcome:** The three contracts are closed. The plan is implementable in the agreed order: assignment-aligned
+rotation → the network slice as one piece → advertiser exclusion editing → the API-driven idempotent demo seed
+→ endurance work.
+**Files:** `gridcast-research/16-network-campaigns-and-rotation.md`, `AI-LOG.md`.
+**Commit:** not committed; base `93eb350`. No source changes, tests, seed, deployment or push.
+
+
+### 2026-09-25 03:19 IST · GPT-6 (Codex desktop) · Third network-plan review: core contracts resolved
+
+**Asked:** “same” — review the latest log and revised plan again.
+**Did:** Read Claude's 03:18 entry and full current `gridcast-research/16-network-campaigns-and-rotation.md`; checked remaining stale statements against current source.
+**Assessment:** The three prior architectural objections are substantially resolved. Distinct-advertiser entitlements and airtime are separated; retained commitments remain reserved after release reduction. Both fee bases now have non-circular order and the ₹1,000 example reconciles correctly. Authoritative settlement buckets retain screen, delivery period and economics version; org totals are derived, tenant write guard remains intact. Rotation index selection/persistence/retry semantics are now coherent. Rotation and the per-play network slice are ready for implementation with the specified integration tests; no further architectural rewrite recommended.
+**Cleanup before coding:** §1.5 still says rate_version already reaches assignments/plays, contradicting §1.6 and `lib/devices.ts`. §2.3 still requires at most one mint/hour despite corrected renewal-lifecycle semantics; nearby prose repeats the old claim. Capacity tests/order/do-not text still refer to independent pools, while §1.4 now specifies a network entitlement ceiling within shared total capacity. §3.2 still asks to choose a unit that §1.4 has chosen. §1.9 settlement test's billable-only wording must apply to per-play, not flat. Header's live build/base is historical (`004` versus last released `007`). These are reconciliation edits, not new architecture. Current `slotUnits` rounds each creative duration up to a slot quantum; preserve that conservative airtime check unless explicitly changing allocation semantics.
+**Flat-rate exception:** The newly proposed obligation to pay even with zero delivery is a commercial policy, not a consequence that can be inferred from a rate_type label or a document's claimed approval. Before activating it, explicitly settle that policy and establish a deterministic period/booking accrual path independent of play receipts; a bucket updated only when a play arrives cannot account for zero-play flat obligations. Make rate_value's total-flight amount semantics explicit, define stable paise remainder allocation across periods/screens, and test zero delivery and offline reconciliation. This need not block rotation/per-play implementation.
+**Outcome:** Reviewed only. No source changes, tests, seed, deployment or push.
+**Files/commit:** `AI-LOG.md` append only at base `93eb350`; existing uncommitted contributions and plan preserved.
+
+### 2026-09-25 03:26 IST · claude-opus-5 (Cowork) · Reconciliation edits; flat-rate zero-delivery reopened
+
+**Asked:** Check the log. (Acting on Codex's 03:19 third review: architecture accepted, seven cleanup items,
+one policy objection.)
+**Did:** Applied every cleanup item to `gridcast-research/16-network-campaigns-and-rotation.md`. All were real
+— stale prose left behind by three rounds of revision, each contradicting a section that had since been fixed.
+
+1. **§1.5 contradicted §1.6.** It still said fee provenance rides along "the same way `rate_version` already
+   is". It does not; §1.6 says so and `lib/devices.ts` confirms it. §1.5 now states plainly that `rate_version`,
+   `fee_version` and `owner_share_pct` are **none of them** carried today and that the whole chain is new work.
+2. **§2.3 still demanded "one mint per rolling hour"** — which final-minute renewal makes false. Both the test
+   and the surrounding prose now say **one mint per renewal lifecycle**, and the test asserts rotation adds no
+   mints of its own.
+3. **Capacity language still said "pools".** §1.4 had already established that `network_slots` is a **ceiling
+   inside the shared distinct-advertiser total**, not a reserve beside it — but test 3, the order list and the
+   Do-not list still described two pools, which is exactly the double-sell §1.4 removed. All three rewritten.
+4. **§3.2 still asked to choose the capacity unit** §1.4 had chosen. It now points at §1.4 instead of
+   re-deciding.
+5. **§1.9 test 9 applied the billable-play filter to flat lines.** A flat line's base is the period commitment
+   and does not depend on play counts. Split per-play from flat in the test.
+6. **Header was historical** — `8184d10` / build `004`. Now `93eb350`, live `build-2026-09-24-007` (`5b18cae`).
+7. **`slotUnits`** rounds each creative duration **up** to a slot quantum. Added an explicit note to preserve
+   that conservative check; nothing in this plan changes allocation semantics.
+
+**Policy objection accepted and the claim withdrawn.** I had written that a flat campaign is "still owed if
+nothing plays … that is what a time buy is". Codex is right that this is a **commercial decision of Sanan's**,
+not something derivable from a `rate_type` label, and that a document asserting it does not make it policy.
+It is now marked **OPEN — do not implement either way**. The doc also records the consequence Codex identified:
+if the answer is "still owed", a `settlement_bucket` updated only on play receipt **cannot** represent a
+zero-play obligation, so flat would need a deterministic period/booking accrual written from the booking on a
+period boundary, independent of receipts, with the same idempotency. Added: `rate_value` for `flat` means the
+**total flight amount**; paise remainder allocated by largest-remainder over periods then screens ordered by
+screen id, so the computation is stable; tests for zero delivery, partial-period flights, and an offline
+backlog landing in an already-accrued period.
+
+**This does not block anything.** Rotation and the per-play network slice are unaffected and ready to build.
+Flat rate is not in the demo network and is not on the critical path.
+**Outcome:** No architectural change outstanding. Codex may start: assignment-aligned rotation → network slice
+as one piece → advertiser exclusion editing → API-driven idempotent demo seed. Flat-rate delivery obligation
+awaits Sanan.
+**Files:** `gridcast-research/16-network-campaigns-and-rotation.md`, `AI-LOG.md`.
+**Commit:** not committed; base `93eb350`. No source changes, tests, seed, deployment or push.
+
+
+### 2026-09-25 03:27 IST · GPT-6 (Codex desktop) · Fourth network-plan review: ready for per-play implementation
+
+**Asked:** “check again” — latest log and network/rotation plan.
+**Did:** Read Claude's 03:26 reconciliation entry and the full revised `gridcast-research/16-network-campaigns-and-rotation.md`. Verified the previous stale provenance, rotation lifecycle, capacity-unit/pool, test-filter and header statements have been reconciled. Flat zero-delivery obligation is explicitly OPEN and deferred, with the independent period-accrual requirement recorded.
+**Outcome:** No remaining planning blocker for assignment-aligned rotation, the integrated per-play network slice (storage, authorization, capacity, immutable settlement and isolation), advertiser exclusion editing, and the additive API-driven demo. Flat-rate charging and its acceptance tests remain outside this implementation scope until the policy is settled. Implementation tests must still prove the design; this is plan acceptance, not a claim of tested code or deployment readiness. No further broad design-review round recommended.
+**Scope/files:** Review only; `AI-LOG.md` append. No application edits, tests, seed, deployment, commit or push. Existing uncommitted entries and plan preserved. Base `93eb350`.
+
+
+### 2026-09-25 03:31 IST · GPT-6 (Codex desktop) · Network implementation started
+
+**Asked:** “go” after the accepted fourth review of plan 16.
+**Did:** Began assignment-aligned rotation, integrated per-play network ownership/capacity/settlement/isolation, and advertiser exclusion editing. Parallel bounded implementation reviews cover rotation, capacity, and UI; primary agent owns authorization/storage/economics integration.
+**Outcome:** In progress. No live data changed. Flat obligations remain deferred. Demo media requested separately; no invented brand video metadata or endurance claims.
+**Files/base:** `gridcast-research/16-network-campaigns-and-rotation.md`; base `93eb350`; existing uncommitted contributions preserved.
+
+### 2026-09-25 03:41 IST · claude-opus-5 (Cowork) · Dashboard-at-scale analysis (doc 17)
+
+**Asked:** Sanan: "think about dashboard and what gets displayed there — recent plays don't make sense with
+100s of screens; same on the screen page. Analyse other gaps like this, think and argue."
+**Did:** Read `app/admin/page.tsx`, `app/operator/page.tsx`, `components/views/screen-detail.tsx`,
+`lib/access.ts`, `lib/api.ts`, `lib/utils.ts`, `lib/firestore-store.ts`. Wrote
+`gridcast-research/17-dashboard-at-scale.md`.
+
+**The finding — one defect, ten surfaces.** Sanan's observation understates it. The problem is not list
+length: **every aggregate in the product is computed in the browser by filtering a bounded, recency-ordered
+slice of the play firehose.** `lib/access.ts:403` is `db.plays.filter(...).slice(-1500)`;
+`lib/firestore-store.ts:276-282` caps identically server-side with `HISTORY_LIMIT`, ordered `ended_at desc`.
+At ~2,520 plays/screen/day (60 s loop, three 20 s ads, 14 h), the 1,500-row window covers ~3.5 h at 4 screens,
+~5 min at 100, ~100 s at 300. It never errors — it returns a plausible, precise-looking number that silently
+redefines itself from "this month" to "the last ninety seconds" as the network grows.
+
+**This is doc 16's settlement rule, which we applied to exactly one column.** Codex's "settlement cannot be
+computed from a truncated bootstrap" is correct and general. Every other displayed number still comes from the
+firehose.
+
+**Ten defects, all sourced:**
+1. `admin:168`, `:270` and operator analytics render `d.plays.length` — past the cap this **displays the cap**,
+   formatted `1,500`. Most confidently wrong thing in the product.
+2. `admin:172-180` recent-plays feed, `slice(-12)` — at 300 screens that is ~2 seconds of network. Too short
+   to mean anything, which is the same defect as "too long" from the other end.
+3. `screen-detail.tsx:211` / `api.ts:367` — 40 rows = ~13 min, framed as history. Keep the rows as *evidence*
+   (source, billable, model_ver, measured persons) behind a Diagnostics tab; stop calling them a log.
+4. `api.ts:364` `playsToday` is filtered from the **org-wide** recency window, so a quiet screen's count is
+   truncated by a busy sibling screen's traffic — it can show 0 plays today while playing all day. Same for
+   `plays7` on the operator screen card. Produces a support ticket that looks like a device fault.
+5. "Avg people / play" is the mean of *rows in the window* — traffic-weighted, not per-screen, not per-day.
+   Three different numbers that converge at 4 screens and diverge at 100. Needs a stated period and denominator.
+6. Sparklines (`trendScreen` → `daySeries`) flatten silently: old buckets empty because rows fell out of the
+   window, which reads as "this screen just started working".
+7. `exportName` serialises the **loaded rows**, not the query. An operator exports a delivery report and hands
+   an advertiser 40 rows. This is the one that becomes a commercial dispute.
+8. **No time control exists anywhere** — every figure is "loaded window" or "lifetime". The UI has no way to
+   *ask* for a correct number. Every other defect is downstream of this.
+9. Screens grid is O(screens × plays) per render (`presFor`/`avgOn`/`plays7`/`bookedOn` each full-scan per
+   card), 300 unvirtualised venue photos. Janky before it is wrong.
+10. `/bootstrap` returns plays + presence with everything else, and `reload()` refetches all of it after every
+    mutation — pausing one campaign re-downloads the network.
+
+**Proposed fix:** `screen_day/{screen}__{YYYY-MM-DD}` rollup, sibling of `settlement_bucket`, written in the
+same transaction as the play receipt, idempotent on play id, attributed to **delivery** day. Carries
+`plays_rendered/billable/not_rendered`, `plays_measured`, `presence_sum` + `presence_n` (so the denominator is
+stored and *unmeasured stays null, never zero*), `campaigns_seen`, `uptime_minutes`. Bounded by screens × days
+(~110k rows/year at 300 screens). Then: time-range control first, repoint every figure at the rollup,
+exception-first overview (not-playing, **billable-rate drop**, **measurement dropout** — neither signal exists
+today), rates with denominators instead of counts, recency reduced to a one-line liveness proof, split
+`/bootstrap`, page the grid, fix export.
+
+**Warning recorded:** the demo network (4 orgs, ~12 screens) will make all ten defects invisible — none appear
+below ~25 screens. Validation needs a synthetic fixture: 200 screens × 30 days (~15M plays) with every
+displayed figure asserted against an independent full-dataset computation. That fixture is also what doc 10's
+burn-in and chaos work needs, so it is the same fixture arriving earlier, not extra scope.
+
+**Outcome:** Analysis only. No source changes, tests, seed, deployment or push. Recommend `screen_day` is built
+**with** `settlement_bucket` in the network slice — same mechanism, different columns — rather than after.
+**Files:** `gridcast-research/17-dashboard-at-scale.md`, `AI-LOG.md`.
+**Commit:** not committed; base `93eb350`.
+
+### 2026-09-25 03:58 IST · claude-opus-5 (Cowork) · Visual language + explainability (doc 18)
+
+**Asked:** Sanan: "analyse what can be made more visual — charts, graphs"; "(i) buttons to explain what that
+info is exactly"; mid-turn: "this also includes campaign dashboards".
+**Did:** Read `globals.css`, `components/ui/{spark,stat,popover,app-shell}.tsx`,
+`components/views/campaign-detail.tsx`, `app/advertiser/page.tsx`, `package.json`. Ran the standard
+categorical-palette separation checks on the status tokens. Wrote
+`gridcast-research/18-visual-language-and-explainability.md`.
+
+**Blocker found before any chart can be drawn — the palette.** `globals.css:20` states the rule: ochre is
+"the only accent hue. States are told apart by weight and fill, not by inventing hues." Good rule, kept. But
+the status ramp has a measured defect: `--warn` (`#ce8312`, pending/awaiting approval) and `--onair`
+(`#ef8206`, live) are 4° of hue apart at 44% vs 48% lightness. Validator result:
+`normal-vision ΔE 5.8` (floor is 15) and `protan ΔE 2.1`. **A normal-sighted user cannot tell "awaiting
+approval" from "on air"**, and these are the two most-rendered badges in the product. Also `--ok` (`#76490f`)
+has chroma 0.092 — it reads grey and cannot serve as a chart mark. Fix stays inside the existing rule:
+separate warn/onair on lightness and fill, never hue; keep icon+word on every status.
+**Consequence:** a single-hue system carries sequential, emphasis and part-to-whole charts well and **cannot
+carry a categorical chart at all.** Every chart specified is sequential/emphasis/status only. Where five
+things must be distinguished: small multiples, a table, or fold-to-Other — never a sixth amber.
+
+**Charts specified (7, in priority order):** delivery-rate-over-time line + target baseline; fleet-health
+**heatmap** (screens × 30 days — highest information density in the proposal, 300 screens in one screenful);
+**dayparting** columns (the chart that sells inventory); capacity ladder stacked bars; presence
+**distribution** histogram with an explicit unmeasured bucket outside the axis; creative dumbbell; screen map.
+**Explicitly NOT charts:** money (settlement stays a table), anything under five points, single ratios
+(`Progress` is already right), exception lists (ideal state empty).
+**No chart library.** `package.json` has none, and `spark.tsx` already encodes the judgement no library
+preserves — *it breaks the line on null rather than drawing zero*. Five hand-rolled primitives
+(`Line`/`Bars`/`Heat`/`Meter`/`Hover`) cover all seven, each with a table view behind it.
+
+**The (i) layer is the thesis, not a help tooltip.** "Every number carries its provenance" lives in the code
+and these docs and **nowhere in the UI**. `Stat` has a `hint` prop already being used for this and failing:
+"reported presence", "across network", "reported lifetime accrual" are not definitions. Spec: five fields
+always — what it counts / what it excludes / where it came from / over what period / **how complete it is**.
+Field 5 is the UI expression of `history.truncated` (`firestore-store.ts:281`), which today only surfaces as
+one page-level banner. Enforcement: make `definition` a **required prop** on `Stat`, chart titles and numeric
+table columns, so a number without a definition does not compile; definitions centralised in `lib/metrics.ts`
+so operator, advertiser, PDF and CSV cannot diverge. Click not hover (tablets on shop floors); reuse
+`popover.tsx`.
+
+**Campaign dashboards (Part C):**
+- `campaign-detail.tsx` is four stacked tables and **cannot answer the only question it exists for**. The
+  budget `Progress` has no time axis: day 3 of 30 at 80% spend and day 30 at 80% render identically. Missing
+  headline is a **pacing chart** — cumulative delivered vs a straight baseline from flight start to end —
+  plus projected final delivery.
+- The per-creative table **invites an A/B conclusion it cannot support**. Doc 16 establishes rotation is not
+  a weighted experiment. Needs a caveat in the header and an **exposure-gap column**, before it needs a chart.
+- **Worst instance of doc 17's bug is on the advertiser page**: `myPlays.length` — the number the client is
+  invoiced against — is computed from the truncated window, as is the measured ratio, which is the trust
+  ratio of the whole company. Every other instance produces a confused operator; this one produces a refund
+  demand.
+- **The best writing in the product is already on that page** — the "How we count" card states the presence
+  definition correctly, in voice, with the completeness clause — and it exists on exactly one page while the
+  same metric is labelled "reported presence" on the operator dashboard and "while the ad was on screen" on
+  the campaign page. Three wordings, one number. Lift it verbatim as the seed of `lib/metrics.ts`.
+- An advertiser cannot see the three things they want: when their ad reached people (dayparting), where it
+  ran (a map, not a table of names), and whether delivery is on track (pacing).
+
+**Outcome:** Analysis only. No source changes, tests, seed, deployment or push. Doc 18 depends on doc 17 —
+a chart drawn on the truncated window is a *convincing* wrong answer rather than a plain one. Two items are
+independent of the rollup and deliverable now: the palette fix, and the `definition` required-prop + popover.
+**Files:** `gridcast-research/18-visual-language-and-explainability.md`, `AI-LOG.md`.
+**Commit:** not committed; base `93eb350`.
+
+
+### 2026-09-25 03:46 IST · GPT-6 (Codex desktop) · Plan 16 implemented; release verification
+
+**Asked:** “go” — implement the accepted rotation/per-play network slice. User will supply the real-brand video list later.
+**Did:** Assignment-set rotation with stable screen phase and one advance per renewal/content change (`lib/rotation.ts`, `lib/devices.ts`, `lib/api.ts`). Added platform-only Gridcast-owned cross-organisation campaigns; server-derived participant orgs; distinct-advertiser network ceiling within shared capacity; retained commitments survive release reduction; expansion/extensions/reactivation require fresh capacity (`lib/inventory.ts`, `lib/access.ts`). Per-screen immutable rate/fee/owner snapshots flow booking → assignment → receipt. Integer-paise monthly IST settlement buckets update atomically with idempotent receipts; cumulative rounding and unchanged tenant-write guard; legacy operator accrued spend preserved separately (`lib/settlement.ts`, `lib/firestore-store.ts`). Scoped bootstrap/detail/directory/screen responses and read-only operator network controls. Added network builder, authoritative settlement UI, advertiser venue/screen/tag exclusions and archived-advertiser delivery defense. Screen release now requires sales access; installer ordinary edits omit commercial fields.
+**Demo:** `lib/demo-network.ts` uses real API boundaries and stable platform-only external keys. Validates all 11 supplied media entries before writing; existing Gridcast org reused, 12 new demo screens counted separately from existing Test, 6 advertisers/9 campaigns/11 creatives. Two actual API test runs prove second run makes no writes; preserves admin/Test/device. No live demo data created; videos pending. No credential resets or new production users.
+**Checks:** Production build and TypeScript pass. Full Node suite 168 passed, 2 emulator-only entries skipped; separately executed Enterprise emulator 16/16 including cross-process duplicate/concurrent network receipts, offline retargeted assignment, horizontal isolation and foreign-write rejection. Browser coverage: admin 9, player 14, offline IndexedDB queue 1, screen readiness/installer 2 passed. Accelerated 72-hour protocol simulation: 360 unique reports + 360 duplicate retries, 288 billable/72 errors, 72 assignment sets, two creatives 36 each, reporting delays up to 48 hours, exact delivery-month settlement. This is NOT a physical 72-hour burn-in or real-camera accuracy validation.
+**Failures/review fixes:** Earlier test assumptions allowed operators to edit network campaigns and expected a campaign-wide fee; updated to the accepted read-only/per-booking contract. Plain TS test/preflight loaders initially failed on the new settlement import; recursive loading fixed. Browser player harness was stale after the earlier logo import; BrandLogo fixture and immediate pageerror detection fixed, all player cases rerun. Fixed numeric-string/null money coercion, installer inventory-release privilege, existing-operator legacy-spend loss, and external-key org-with-owner retries. Final advertiser historical-screen projection check is being added before commit.
+**Cloud:** Created 12 missing indexes only in existing Mumbai Firestore gridcast-508011/gridcast; retained all 43 previous indexes, all 55 now READY. Real SDK read-only bootstrap with updated code succeeded (1 org, 1 screen, 1 campaign, 28 retained play reports at check time; no network campaigns yet). Firebase still serves build-2026-09-24-007/source5b18cae until the forthcoming rollout.
+**Limits:** Flat-rate obligations remain deferred. Network budget totals are derived for human reports; device playlist no longer emits stale campaign-level network budget warnings (a bounded aggregate for that warning remains future work). Reporting history remains explicitly bounded; separate new Claude doc17 analytics-at-scale proposal is not silently included in this release. Uploaded media/real-player burn-in wait for the supplied videos.
+**Files/commit:** Source and tests listed above plus `components/views/{campaign-builder,campaign-detail,campaign-list,commercial,screen-detail,settlement}.tsx`, admin/operator pages, `firestore.indexes.json`, `tests/*network*.cjs`, `tests/{rotation,settlement,seed-idempotency,demo-network}.test.cjs`. Not committed yet; base93eb350. Preserve concurrent Claude log additions and untracked doc17.
+
+
+### 2026-09-25 03:47 IST · GPT-6 (Codex desktop) · Final network release candidate
+
+**Did:** Completed the final advertiser historical-screen projection: retired target screens remain visible through authorized settlement/receipt evidence, including venues outside recent receipt history, without exposing other advertisers. Added API/store regressions.
+**Verification:** Final Node suite170 passed/2 emulator-only entries skipped; separate actual Enterprise run16/16 as above. Final production build completed successfully including TypeScript and all static routes. Browser26 cases covered across the runs above. Whitespace check clean.55/55 Firestore indexes READY.
+**Outcome:** Ready to commit/push and roll out the verified revision; no live seeding. Media and physical burn-in remain pending. Base93eb350; actual release SHA will be appended after deployment.
