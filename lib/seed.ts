@@ -31,6 +31,9 @@ function mkScreen(
 }
 
 export function seed() {
+  if (process.env.NODE_ENV === 'production') throw new Error('Demo seeding is not allowed in production');
+  const demoPassword = process.env.GC_DEMO_PASSWORD;
+  if (!demoPassword || demoPassword.length < 12) throw new Error('Set GC_DEMO_PASSWORD (at least 12 characters) to initialize local demo data');
   const orgs = [
     { id: 'org_gridcast', name: 'Gridcast', legal_name: 'Gridcast Media Networks Pvt Ltd', type: 'gridcast',
       platform_fee_pct: 0, status: 'active', gstin: '', pan: '', state_code: 'Chandigarh (04)',
@@ -48,9 +51,8 @@ export function seed() {
       support_email: '', phone: '+91 98720 44551', website: '', payout_method: 'upi', upi_id: '',
       created_at: nowISO() },
   ];
-  // demo credentials — every seeded account uses the same password so the
-  // prototype can be handed to someone without a password list
-  const withPw = (u: any, pw = 'gridcast') => { const { salt, hash } = hashPassword(pw); return { ...u, password_salt: salt, password_hash: hash, must_change: false, status: 'active' }; };
+  // Explicit local demo credentials; never used to initialize a hosted environment.
+  const withPw = (u: any, pw = demoPassword) => { const { salt, hash } = hashPassword(pw); return { ...u, password_salt: salt, password_hash: hash, auth_version: 0, demo_account: true, must_change: false, status: 'active' }; };
   const users = [
     withPw({ id: 'u_admin', org_id: 'org_gridcast', name: 'Sanan', email: 'sanan@xrom.in', role: 'platform_admin' }),
     withPw({ id: 'u_op1', org_id: 'org_sec17', name: 'Ravi Mehta', email: 'ravi@sector17media.in', role: 'owner', phone: '+91 98150 00112' }),
@@ -112,7 +114,7 @@ export function seed() {
       name: 'Gridcast baseline', description: 'Applies to every screen on the network. Measurement and privacy settings are locked here.',
       tags: ['baseline'], target_platform: ['android', 'windows', 'web'], status: 'active',
       values: {
-        sample_interval_s: 2, model: 'yolox-tiny', confidence_min: 0.45,
+        sample_interval_s: 2, model: 'coco-ssd', confidence_min: 0.45,
         measure_during_play_only: true, camera_fail_mode: 'unmeasured', presence_metric: 'avg_persons',
         upload_frames: 'never', retain_frames: false, face_recognition: false, reidentify: false, demographics: false,
         heartbeat_s: 30, enable_ssl: true, sync_measure_leader_only: true,
@@ -159,7 +161,7 @@ export function seed() {
           const avg = Math.max(0, base + drift * (13 - day) + (rand() - 0.5) * 1.6);
           presence.push({ id: uid('prs'), play_id: play.id, org_id: scr.org_id, screen_id: sid,
             measured: true, avg_persons: Math.round(avg * 10) / 10, sample_count: Math.round(dur / 2000),
-            model_ver: 'coco-ssd@2.2.3', at: at.toISOString() });
+            source: 'synthetic_demo', model_ver: null, at: at.toISOString() });
         }
       }
     }

@@ -8,7 +8,7 @@ import type { NavGroupData, NavItemData } from '@/components/ui/sidebar-nav';
 const settingsItem = (caps: string[] = ['org', 'money', 'team']): NavItemData => ({
   id: 'settings', title: 'Settings', icon: Settings, shortcut: '⌘,',
   children: [
-    { id: 'set-org', title: 'Organisation', icon: Building2 },
+    ...(caps.includes('org') ? [{ id: 'set-org', title: 'Organisation', icon: Building2 }] : []),
     ...(caps.includes('money') ? [{ id: 'set-billing', title: 'Billing & payouts', icon: CreditCard }] : []),
     ...(caps.includes('team') ? [{ id: 'set-team', title: 'Team & users', icon: UserCog }] : []),
     { id: 'set-api', title: 'API keys', icon: Terminal, soon: true },

@@ -8,10 +8,14 @@ import crypto from 'crypto';
  * never trusts a client-supplied role, only what it can verify in the signature.
  */
 
-const SECRET = process.env.GC_AUTH_SECRET
-  // a deployment without a secret still works, but every restart invalidates
-  // sessions and the value is not private — set GC_AUTH_SECRET in production
-  || 'gridcast-dev-secret-set-GC_AUTH_SECRET-in-production';
+// Production must never sign sessions with a source-visible fallback. Local sessions
+// use a process-random key unless a developer supplies one explicitly.
+const localSecret = crypto.randomBytes(32).toString('hex');
+export function assertAuthConfigured() {
+  if (process.env.NODE_ENV === 'production' && (process.env.GC_AUTH_SECRET || '').length < 32)
+    throw new Error('GC_AUTH_SECRET must be configured with at least 32 characters');
+}
+function secret() { assertAuthConfigured(); return process.env.GC_AUTH_SECRET || localSecret; }
 
 const ITERATIONS = 60_000;
 const DAYS = 7;
@@ -32,28 +36,30 @@ export function verifyPassword(password: string, salt: string, hash: string) {
 
 const b64 = (s: string) => Buffer.from(s).toString('base64url');
 const unb64 = (s: string) => Buffer.from(s, 'base64url').toString();
-const sign = (payload: string) => crypto.createHmac('sha256', SECRET).update(payload).digest('base64url');
+const sign = (payload: string) => crypto.createHmac('sha256', secret()).update(payload).digest('base64url');
 
-export type Claims = { uid: string; role: string; org: string; exp: number };
+export type Claims = { uid: string; role: string; org: string; exp: number; ver: number };
 
 export function issueToken(user: any): string {
   const claims: Claims = {
     uid: user.id, role: user.role, org: user.org_id,
-    exp: Date.now() + DAYS * 864e5,
+    exp: Date.now() + DAYS * 864e5, ver: user.auth_version || 0,
   };
   const payload = b64(JSON.stringify(claims));
   return `${payload}.${sign(payload)}`;
 }
 
 export function readToken(token?: string | null): Claims | null {
-  if (!token || !token.includes('.')) return null;
+  if (!token || token.length > 4096 || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)) return null;
   const [payload, sig] = token.split('.');
   const expect = sign(payload);
-  if (sig.length !== expect.length) return null;
-  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expect))) return null;
+  const a = Buffer.from(sig), b = Buffer.from(expect);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
   try {
     const claims = JSON.parse(unb64(payload)) as Claims;
-    return claims.exp > Date.now() ? claims : null;
+    return typeof claims.uid === 'string' && typeof claims.org === 'string' &&
+      typeof claims.role === 'string' && Number.isInteger(claims.ver) && claims.ver >= 0 &&
+      Number.isFinite(claims.exp) && claims.exp > Date.now() ? claims : null;
   } catch { return null; }
 }
 

@@ -1,3 +1,4 @@
+import animate from 'tailwindcss-animate';
 import type { Config } from 'tailwindcss';
 
 const config: Config = {
@@ -30,6 +31,6 @@ const config: Config = {
       animation: { 'accordion-down': 'accordion-down .2s ease-out', 'accordion-up': 'accordion-up .2s ease-out' },
     },
   },
-  plugins: [require('tailwindcss-animate')],
+  plugins: [animate],
 };
 export default config;

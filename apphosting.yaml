@@ -1,0 +1,26 @@
+# Firestore and video objects live in Mumbai. Existing App Hosting remains Singapore.
+runConfig:
+  minInstances: 0
+  memoryMiB: 1024
+
+env:
+  - variable: GC_AUTH_SECRET
+    secret: gcAuthSecret
+    availability:
+      - RUNTIME
+  - variable: GC_STORE
+    value: firestore
+    availability:
+      - RUNTIME
+  - variable: GC_FIREBASE_PROJECT
+    value: gridcast-508011
+    availability:
+      - RUNTIME
+  - variable: GC_FIRESTORE_DATABASE
+    value: gridcast
+    availability:
+      - RUNTIME
+  - variable: GC_MEDIA_BUCKET
+    value: gridcast-508011-media-india
+    availability:
+      - RUNTIME

@@ -1,4 +1,5 @@
 'use client';
+import { HistoryNotice } from '@/components/views/history-notice';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { tabFor } from '@/lib/roles';
 import { api, session, type SessionUser } from '@/lib/client';
@@ -15,6 +16,8 @@ import { Card } from '@/components/ui/card';
 import { Input, Field, Select } from '@/components/ui/input';
 import { StatusBadge, Empty, SoonPage } from '@/components/views/bits';
 import { ScreenDetail } from '@/components/views/screen-detail';
+import { ScreenOnboarding } from '@/components/views/screen-onboarding';
+import { GroupManager } from '@/components/views/groups';
 import { CampaignDetail } from '@/components/views/campaign-detail';
 import { CampaignBuilder } from '@/components/views/campaign-builder';
 import type { CmdItem } from '@/components/ui/command-palette';
@@ -76,10 +79,10 @@ export default function Admin() {
     { label: 'Resume', run: async rows => { for (const c of rows) await api(`/campaign/${c.id}`, { status: 'active' }); }, undo: restoreStatus },
   ];
   const screenBulk: BulkAction<any>[] = [
-    { label: 'Activate', run: async rows => { for (const x of rows) await api(`/screen/${x.id}`, { ...x, status: 'active' }); },
-      undo: async rows => { for (const x of rows) await api(`/screen/${x.id}`, x); } },
-    { label: 'Pause', run: async rows => { for (const x of rows) await api(`/screen/${x.id}`, { ...x, status: 'paused' }); },
-      undo: async rows => { for (const x of rows) await api(`/screen/${x.id}`, x); },
+    { label: 'Activate', run: async rows => { for (const x of rows) await api(`/screen/${x.id}`, { status: 'active' }); },
+      undo: async rows => { for (const x of rows) await api(`/screen/${x.id}`, { status: x.status }); } },
+    { label: 'Pause', run: async rows => { for (const x of rows) await api(`/screen/${x.id}`, { status: 'paused' }); },
+      undo: async rows => { for (const x of rows) await api(`/screen/${x.id}`, { status: x.status }); },
       confirm: 'Pause {n} screen(s) across the fleet?' },
   ];
   const nameOf = (arr: any[], id: string, fb: string) => arr.find((x: any) => x.id === id)?.name ?? fb;
@@ -100,9 +103,12 @@ export default function Admin() {
       breadcrumb={trail} cmdItems={cmdItems} onGo={go}
       user={{ name: user.name, role: user.role }}>
 
+      <HistoryNotice history={d.history} />
       {view === 'configs' && <ConfigList user={user} onOpen={id => go('cfg/' + id)} onChanged={() => reload()} />}
       {view.startsWith('cfg/') && <ConfigEditor id={view.slice(4)} user={user} onGo={go} onChanged={() => reload()} />}
 
+      {view === 'groups' && <GroupManager boot={d} user={user} onChanged={reload} />}
+      {view === 'new-screen' && <ScreenOnboarding boot={d} user={user} onGo={go} onDone={async(s:any)=>{await reload();go('s/'+s.id);}} />}
       {view.startsWith('s/') && <ScreenDetail id={view.slice(2)} onGo={go} onChanged={reload} />}
       {view.startsWith('c/') && <CampaignDetail id={view.slice(2)} boot={d} onGo={go} onChanged={reload} />}
       {view === 'new' && <CampaignBuilder boot={d} user={user} onGo={go} onDone={async (c: any) => { await reload(); go('c/' + c.id); }} />}
@@ -113,7 +119,7 @@ export default function Admin() {
           <PageHead title="Platform overview" sub={`${d.screens.length} screens · ${d.orgs.length - 1} operators · ${d.campaigns.filter(isLive).length} live campaigns`} />
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Stat label="Screens" value={d.screens.length} hint={`${d.screens.filter((s: any) => s._status.state === 'live').length} on air`} />
-            <Stat label="Plays logged" value={d.plays.length.toLocaleString('en-IN')} hint="across network" />
+            <Stat label="Play reports" value={d.plays.length.toLocaleString('en-IN')} hint="across network" />
             <Stat label="Avg people / play" value={measured.length ? (measured.reduce((a: number, b: any) => a + b.avg_persons, 0) / measured.length).toFixed(1) : '—'} hint={`${measured.length} measured`} />
             <Stat label="Spend accrued" value={inr(d.campaigns.reduce((s: number, c: any) => s + c.accrued_spend, 0))} hint={`of ${inr(d.campaigns.reduce((s: number, c: any) => s + c.committed_budget, 0))} committed`} />
           </div>
@@ -147,16 +153,15 @@ export default function Admin() {
       </>)}
 
       {view === 'screens' && (<>
-        <PageHead title="All screens" sub={orgFilter === 'all' ? 'Every screen across every organisation' : `Filtered to ${currentOrg.name}`} />
+        <PageHead title="All screens" sub={orgFilter === 'all' ? 'Every screen across every organisation' : `Filtered to ${currentOrg.name}`} actions={<><Button variant="outline" onClick={()=>go('groups')}>Screen groups</Button><Button onClick={()=>go('new-screen')}>Add screen</Button></>} />
         <DataTable cols={[
           { className: 'min-w-[168px]', label: 'Screen', sort: (s: any) => s.name, render: (s: any) => <><button onClick={() => go('s/' + s.id)} className="text-left font-medium text-primary hover:underline">{s.name}</button><div className="text-[12px] text-muted-foreground">{s.address}</div></> },
-          { label: 'Code', render: (s: any) => <span className="font-mono">{s.code}</span> },
           { label: 'Org', render: (s: any) => <span className="text-muted-foreground">{orgName(s.org_id)}</span> },
           { label: 'Type', render: (s: any) => <><Badge variant="muted">{s.venue_type}</Badge> <span className="text-[12px] text-muted-foreground">{s.size_in}&quot;</span></> },
           { label: 'State', sort: (s: any) => s._status.state, render: (s: any) => <StatusBadge st={s._status} /> },
           { label: 'Camera', render: (s: any) => s.has_camera ? <Badge variant="ok">yes</Badge> : <Badge variant="warn">none</Badge> },
           { label: 'Running', num: true, render: (s: any) => { const n = d.campaigns.filter((c: any) => c.screen_ids.includes(s.id) && isLive(c)).length;
-            return n ? <><b>{n}</b> <span className="text-muted-foreground">of {s.advertiser_slots}</span></> : <span className="text-muted-foreground">idle</span>; } },
+            return n ? <><b>{n}</b> <span className="text-muted-foreground">campaigns</span></> : <span className="text-muted-foreground">idle</span>; } },
           { label: 'People / play', render: (s: any) => <Spark data={trendScreen(s.id)} /> },
           { label: 'Monthly', num: true, sort: (s: any) => s.monthly_value, render: (s: any) => inr(s.monthly_value) },
         ]} rows={byOrg(d.screens)} rowId={(s: any) => s.id} exportName="all-screens" onDone={reload} bulk={screenBulk}
@@ -216,7 +221,7 @@ export default function Admin() {
           { label: 'Org', render: (v: any) => <span className="text-muted-foreground">{orgName(v.org_id)}</span> },
           { label: 'Status', render: (v: any) => { const s = d.screens.find((x: any) => x.id === v.screen_id); return <StatusBadge st={s?._status} />; } },
           { label: 'Last heartbeat', render: (v: any) => <span className="font-mono text-[12px] text-muted-foreground">{fmtDate(v.last_heartbeat_at)}</span> },
-          { label: 'Plays', num: true, render: (v: any) => d.plays.filter((p: any) => p.screen_id === v.screen_id).length },
+          { label: 'Play reports', num: true, render: (v: any) => d.plays.filter((p: any) => p.screen_id === v.screen_id).length },
           { label: 'App', render: (v: any) => <span className="font-mono text-[12px] text-muted-foreground">v{v.app_ver}</span> },
         ]} rows={byOrg(d.devices)} rowId={(x: any) => x.id} exportName="devices" empty="No devices paired yet. Open /player and enter a screen code."
           facets={[{ label: 'Status', get: (x: any) => x.status }]} />
@@ -236,7 +241,7 @@ export default function Admin() {
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Stat label="Organisations" value={d.orgs.length} />
           <Stat label="Screens" value={d.screens.length} hint={`${d.screens.filter((s: any) => s.has_camera).length} with camera`} />
-          <Stat label="Plays" value={d.plays.length.toLocaleString('en-IN')} />
+          <Stat label="Play reports" value={d.plays.length.toLocaleString('en-IN')} />
           <Stat label="Network inventory" value={inr(d.screens.reduce((s: number, x: any) => s + x.monthly_value, 0))} hint="per month at full sell-through" />
         </div>
         <SectionHead>By organisation</SectionHead>

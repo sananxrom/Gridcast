@@ -1,0 +1,6 @@
+COCO-SSD model served for on-device person counting.
+Upstream library: https://github.com/tensorflow/tfjs-models/tree/master/coco-ssd
+Model weights: https://storage.googleapis.com/tfjs-models/savedmodel/ssdlite_mobilenet_v2/
+The TensorFlow Authors. Apache License 2.0 (see LICENSE).
+Gridcast does not alter the downloaded model JSON or weight shards.
+Source URLs and file SHA-256 values are recorded in provenance.json.

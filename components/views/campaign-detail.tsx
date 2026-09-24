@@ -1,4 +1,5 @@
 'use client';
+import { HistoryNotice } from '@/components/views/history-notice';
 import React, { useEffect, useState } from 'react';
 import { api } from '@/lib/client';
 import { inr, fmtDate } from '@/lib/utils';
@@ -31,6 +32,8 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
     </div>
   );
   const c = d.campaign;
+  const mayEdit = (boot.caps ?? []).includes('sales');
+  const mayMoney = (boot.caps ?? []).includes('money');
   const pct = c.committed_budget ? Math.round((c.accrued_spend / c.committed_budget) * 100) : 0;
   const rate = c.rate_type === 'flat'
     ? `${inr(c.committed_budget)} flat`
@@ -40,17 +43,17 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
     setErr('');
     if (!f.screen_ids.length) return setErr('Pick at least one screen.');
     if (!f.creative_ids.length) return setErr('Pick at least one creative.');
-    await api(`/campaign/${id}`, {
+    try { await api(`/campaign/${id}`, {
       name: f.name, starts_at: f.starts_at, ends_at: f.ends_at,
       committed_budget: Number(f.committed_budget) || 0, rate_type: f.rate_type,
       rate_value: f.rate_type === 'per_play' ? Number(f.rate_value) || 0 : 0,
-      invoice_status: f.invoice_status, screen_ids: f.screen_ids, creative_ids: f.creative_ids,
+      ...(mayMoney ? { invoice_status: f.invoice_status } : {}), screen_ids: f.screen_ids, creative_ids: f.creative_ids,
     });
-    setEdit(false); await load(); onChanged();
+    setEdit(false); await load(); onChanged(); }catch(e){setErr((e as Error).message);}
   };
   const toggleStatus = async () => {
-    await api(`/campaign/${id}`, { status: c.status === 'active' ? 'paused' : 'active' });
-    await load(); onChanged();
+    setErr('');try { await api(`/campaign/${id}`, { status: c.status === 'active' ? 'paused' : 'active' });
+    await load(); onChanged(); }catch(e){setErr((e as Error).message);}
   };
   const tick = (arr: string[], v: string) => arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v];
   const mine = boot.creatives.filter((x: any) => x.advertiser_id === c.advertiser_id);
@@ -64,12 +67,14 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
         actions={<>
           <Badge variant={c.status === 'active' ? 'ok' : 'muted'}>{c.status}</Badge>
           {c.campaign_type === 'network' && <Badge variant="default">network</Badge>}
-          <Button variant="outline" size="sm" onClick={() => setEdit(!edit)}>Edit</Button>
-          <Button variant="outline" size="sm" onClick={toggleStatus}>{c.status === 'active' ? 'Pause' : 'Resume'}</Button>
+          {mayEdit && <Button variant="outline" size="sm" onClick={() => setEdit(!edit)}>Edit</Button>}
+          {mayEdit && <Button variant="outline" size="sm" onClick={toggleStatus}>{c.status === 'active' ? 'Pause' : 'Resume'}</Button>}
         </>}
       />
 
-      {edit && f && (
+      <HistoryNotice history={d.history} />
+      {!edit && err && <p role="alert" className="mb-3 text-sm text-destructive">{err}</p>}
+      {edit && mayEdit && f && (
         <Card className="mb-5 border-primary/40 p-5">
           <h3 className="mb-3 text-[14px] font-semibold">Edit campaign</h3>
           <div className="mb-3 flex flex-wrap gap-3">
@@ -87,15 +92,15 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
               <Field label="Rate per play (₹)"><Input type="number" step="0.01" value={f.rate_value} onChange={e => setF({ ...f, rate_value: e.target.value })} /></Field>
             )}
             <Field label="Committed budget (₹)"><Input type="number" value={f.committed_budget} onChange={e => setF({ ...f, committed_budget: e.target.value })} /></Field>
-            <Field label="Invoice status">
+            {mayMoney && <Field label="Invoice status">
               <Select value={f.invoice_status} onChange={e => setF({ ...f, invoice_status: e.target.value })}>
                 {['not_invoiced','invoiced','part_paid','paid','written_off'].map(v => <option key={v} value={v}>{v.replace(/_/g, ' ')}</option>)}
               </Select>
-            </Field>
+            </Field>}
           </div>
           <Label>Screens</Label>
           <div className="mb-3 max-h-52 overflow-y-auto rounded-lg border border-border/60">
-            {boot.screens.map((s: any) => (
+            {boot.screens.filter((s: any) => s.org_id === c.org_id).map((s: any) => (
               <label key={s.id} className="flex cursor-pointer items-center gap-2.5 border-b border-border/50 px-3 py-2 text-[13px] last:border-0 hover:bg-black/[0.02]">
                 <input type="checkbox" checked={f.screen_ids.includes(s.id)} onChange={() => setF({ ...f, screen_ids: tick(f.screen_ids, s.id) })} />
                 <span className="flex-1 truncate">{s.name} <span className="text-muted-foreground">{s.address}</span></span>
@@ -114,7 +119,7 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
             ))}
           </div>
           <div className="rounded-lg bg-primary/[0.06] p-3 text-[12.5px] text-primary">
-            Changing screens or creatives affects delivery from the next schedule pull. Plays already recorded and spend already accrued are not altered.
+            Changing screens or creatives affects delivery from the next schedule pull. Existing screen bookings keep their agreed rate; a changed rate applies to newly added screens. Recorded plays and accrued spend are not altered.
           </div>
           <div className="sticky bottom-0 -mx-5 -mb-5 mt-4 flex items-center gap-2 border-t border-border bg-card/95 px-5 py-3 backdrop-blur">
             <Button onClick={save}>Save changes</Button>
@@ -125,10 +130,10 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
       )}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Plays delivered" value={d.totals.plays.toLocaleString('en-IN')} hint={`across ${d.byScreen.length} screen${d.byScreen.length === 1 ? '' : 's'}`} />
+        <Stat label="Play reports" value={d.totals.plays.toLocaleString('en-IN')} hint={`across ${d.byScreen.length} screen${d.byScreen.length === 1 ? '' : 's'}`} />
         <Stat label="Avg people / play" value={d.totals.avg === null ? '—' : d.totals.avg.toFixed(1)} hint="while the ad was on screen" />
-        <Stat label="Measured" value={<>{d.totals.measured}<span className="text-[15px] text-muted-foreground"> / {d.totals.plays}</span></>} hint="plays with a working camera" />
-        <Stat label="Spend" value={inr(c.accrued_spend)} hint={`of ${inr(c.committed_budget)} · ${rate}`} />
+        <Stat label="Measured" value={<>{d.totals.measured}<span className="text-[15px] text-muted-foreground"> / {d.totals.plays}</span></>} hint="reports with presence samples" />
+        <Stat label="Spend" value={inr(c.accrued_spend)} hint={`of ${inr(c.committed_budget)} · new bookings: ${rate}`} />
       </div>
       <Progress className="mt-3" value={pct} hot={pct >= 80} />
 
@@ -137,7 +142,8 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
         cols={[
           { label: 'Screen', render: (r: any) => <><div className="font-medium">{r.screen.name}</div><div className="text-[12px] text-muted-foreground">{r.screen.address}</div></> },
           { label: 'Venue', render: (r: any) => <Badge variant="muted">{r.screen.venue_type}</Badge> },
-          { label: 'Plays', num: true, render: (r: any) => r.plays },
+          {label:'Booking',render:(r:any)=>{const b=c.bookings?.find((x:any)=>x.screen_id===r.screen.id);return b?<span className="text-xs">{b.slots_per_loop} appearances / loop<br/>{b.rate_type==='per_play'?`${inr(b.rate_value)} / play`:b.rate_type==='flat'?'Agreed flat rate':'Rate unavailable'}</span>:<span className="text-xs text-muted-foreground">Legacy booking</span>;}},
+          { label: 'Play reports', num: true, render: (r: any) => r.plays },
           { label: 'Share', num: true, render: (r: any) => { const p = d.totals.plays ? Math.round(r.plays / d.totals.plays * 100) : 0; return <div className="flex items-center justify-end gap-2">{p}%<Progress value={p} className="w-16" /></div>; } },
           { label: 'Avg people', num: true, render: (r: any) => r.avg === null ? <span className="text-muted-foreground">—</span> : <b>{r.avg.toFixed(1)}</b> },
         ]}
@@ -148,18 +154,19 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
         cols={[
           { label: 'Creative', render: (r: any) => <div className="flex items-center gap-3"><Thumb id={r.creative.youtube_id} w={58} /><div><div className="font-medium">{r.creative.name}</div><div className="font-mono text-[11.5px] text-muted-foreground">{r.creative.duration_s}s</div></div></div> },
           { label: 'Approval', render: (r: any) => <Badge variant={r.creative.approval_status === 'approved' ? 'ok' : r.creative.approval_status === 'rejected' ? 'destructive' : 'warn'}>{r.creative.approval_status}</Badge> },
-          { label: 'Plays', num: true, render: (r: any) => r.plays },
+          { label: 'Play reports', num: true, render: (r: any) => r.plays },
           { label: 'Avg people', num: true, render: (r: any) => r.avg === null ? <span className="text-muted-foreground">—</span> : <b>{r.avg.toFixed(1)}</b> },
         ]}
         rows={d.byCreative} rowId={(r: any) => r.creative.id} exportName="campaign-creatives" empty="No creatives on this campaign" />
 
-      <SectionHead hint="· every play, auditable">Play log</SectionHead>
+      <SectionHead hint="· loaded reports">Play log</SectionHead>
       <DataTable
         cols={[
           { label: 'When', render: (p: any) => <span className="font-mono text-[12px] text-muted-foreground">{fmtDate(p.ended_at, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span> },
           { label: 'Screen', render: (p: any) => d.byScreen.find((s: any) => s.screen.id === p.screen_id)?.screen.name ?? '—' },
           { label: 'Creative', render: (p: any) => d.byCreative.find((c2: any) => c2.creative.id === p.creative_id)?.creative.name ?? '—' },
           { label: 'Duration', num: true, render: (p: any) => `${Math.round(p.duration_ms / 1000)}s` },
+          {label:'Evidence',render:(p:any)=><span className="text-xs text-muted-foreground">{p.source==='seed'?'synthetic demo':p.source||'unknown source'} · {p.billable===true?'billable':p.billable===false?'non-billable':'billing unverified'}<br/>{p.presence?.measured?p.presence.model_ver||'model unspecified':'not measured'}</span>},
           { label: 'People present', num: true, render: (p: any) => p.presence?.measured
               ? <><b>{p.presence.avg_persons.toFixed(1)}</b> <span className="text-[11.5px] text-muted-foreground">({p.presence.sample_count})</span></>
               : <span className="text-muted-foreground">not measured</span> },

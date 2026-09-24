@@ -1,0 +1,11 @@
+rules_version = '2';
+// Empty Gridcast database: no client collections or queries are authorized.
+// The application currently uses its server API, not the Firestore web SDK.
+// Future server access uses IAM and must enforce lib/access.ts separately.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

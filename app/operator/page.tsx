@@ -1,6 +1,8 @@
 'use client';
+import { HistoryNotice } from '@/components/views/history-notice';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { tabFor } from '@/lib/roles';
+import { campaignInterval } from '@/lib/inventory';
 import { api, session, type SessionUser } from '@/lib/client';
 import { inr, isLive, ytId, daySeries } from '@/lib/utils';
 import { operatorNav } from '@/lib/nav';
@@ -19,6 +21,9 @@ import { ConfigList, ConfigEditor } from '@/components/views/config-views';
 import { ProfilePage, OrgPage, PayoutPage, TeamPage } from '@/components/views/account';
 import { useDirtyForm, SaveBar } from '@/components/ui/form';
 import { ScreenDetail } from '@/components/views/screen-detail';
+import { ScreenOnboarding } from '@/components/views/screen-onboarding';
+import { GroupManager } from '@/components/views/groups';
+import { CreativeUpload } from '@/components/views/creative-upload';
 import { CampaignDetail } from '@/components/views/campaign-detail';
 import { CampaignBuilder } from '@/components/views/campaign-builder';
 import type { CmdItem } from '@/components/ui/command-palette';
@@ -58,19 +63,19 @@ export default function Operator() {
 
   const advName = (id: string) => d.advertisers.find((a: any) => a.id === id)?.name ?? '—';
   const liveOn = (sid: string) => d.campaigns.filter((c: any) => c.screen_ids.includes(sid) && isLive(c));
-  const bookedOn = (sid: string) => d.campaigns.filter((c: any) => c.screen_ids.includes(sid) && c.status !== 'complete');
+  const bookedOn = (sid: string) => d.campaigns.filter((c: any) => {if(!c.screen_ids.includes(sid)||!['active','pending','paused'].includes(c.status))return false;try{const [start,end]=campaignInterval(c);return start<=Date.now()&&Date.now()<end;}catch{return false;}});
   const playsOn = (sid: string, cid: string) => d.plays.filter((p: any) => p.screen_id === sid && p.campaign_id === cid).length;
 
   const alerts = [
-    ...d.screens.filter((s: any) => s._status.state === 'offline' || s._status.state === 'stalled')
-      .map((s: any) => ({ kind: 'Screen', tone: 'destructive', text: `${s.name} is ${s._status.label}`, go: 's/' + s.id })),
+    ...d.screens.filter((s: any) => s._status?.state === 'offline' || s._status?.state === 'stalled')
+      .map((s: any) => ({ kind: 'Screen', tone: 'destructive', text: `${s.name} is ${s._status?.label}`, go: 's/' + s.id })),
     ...d.campaigns.filter((c: any) => c.committed_budget && c.accrued_spend / c.committed_budget >= 0.8 && c.status === 'active')
       .map((c: any) => ({ kind: 'Budget', tone: 'warn', text: `${c.name} is at ${Math.round(c.accrued_spend / c.committed_budget * 100)}% of budget`, go: 'c/' + c.id })),
     ...d.creatives.filter((c: any) => c.approval_status === 'pending' && c.org_id === user.org_id)
       .map((c: any) => ({ kind: 'Approval', tone: 'warn', text: `${c.name} is awaiting approval`, go: 'creatives' })),
   ];
 
-  const caps: string[] = d.caps ?? ['screens', 'sales', 'money', 'team', 'org'];
+  const caps: string[] = d.caps ?? [];
   const nav = operatorNav({ inbox: alerts.length }, caps);
   const orgs = [{ id: user.org_id, name: user.orgName, type: 'operator' }];
   const titleOf: Record<string, string> = { overview: 'Overview', screens: 'My screens', groups: 'Screen groups', advertisers: 'Advertisers', campaigns: 'Campaigns', creatives: 'Creatives', settlement: 'Settlement', inbox: 'Inbox', analytics: 'Analytics', reports: 'Reports', profile: 'Profile', configs: 'Device configs', settings: 'Organisation', 'set-org': 'Organisation', 'set-billing': 'Billing & payouts', 'set-team': 'Team & users', 'set-api': 'API keys', 'set-hooks': 'Webhooks' };
@@ -81,7 +86,7 @@ export default function Operator() {
     return daySeries(d.presence.filter((x: any) => x.measured && pids.has(x.play_id)).map((x: any) => ({ at: x.at, value: x.avg_persons })));
   };
   const setCampaign = async (c: any, patch: any) => { await api(`/campaign/${c.id}`, patch); reload(); };
-  const setScreen = async (x: any, patch: any) => { await api(`/screen/${x.id}`, { ...x, ...patch }); reload(); };
+  const setScreen = async (x: any, patch: any) => { await api(`/screen/${x.id}`, patch); reload(); };
   const STATUS_CHOICES = [
     { value: 'active', label: 'Active', dot: 'hsl(var(--ok))' },
     { value: 'paused', label: 'Paused', dot: 'hsl(var(--warn))' },
@@ -99,14 +104,16 @@ export default function Operator() {
   const campaignBulk: BulkAction<any>[] = [
     { label: 'Pause', run: async rows => { for (const c of rows) await api(`/campaign/${c.id}`, { status: 'paused' }); }, undo: restoreC('status') },
     { label: 'Resume', run: async rows => { for (const c of rows) await api(`/campaign/${c.id}`, { status: 'active' }); }, undo: restoreC('status') },
-    { label: 'Mark invoiced', run: async rows => { for (const c of rows) await api(`/campaign/${c.id}`, { invoice_status: 'invoiced' }); }, undo: restoreC('invoice_status') },
-    { label: 'Mark paid', run: async rows => { for (const c of rows) await api(`/campaign/${c.id}`, { invoice_status: 'paid' }); }, undo: restoreC('invoice_status') },
+    ...(caps.includes('money') ? [
+    { label: 'Mark invoiced', run: async (rows: any[]) => { for (const c of rows) await api(`/campaign/${c.id}`, { invoice_status: 'invoiced' }); }, undo: restoreC('invoice_status') },
+    { label: 'Mark paid', run: async (rows: any[]) => { for (const c of rows) await api(`/campaign/${c.id}`, { invoice_status: 'paid' }); }, undo: restoreC('invoice_status') },
+    ] : []),
   ];
   const screenBulk: BulkAction<any>[] = [
-    { label: 'Activate', run: async rows => { for (const x of rows) await api(`/screen/${x.id}`, { ...x, status: 'active' }); },
-      undo: async rows => { for (const x of rows) await api(`/screen/${x.id}`, x); } },
-    { label: 'Pause', run: async rows => { for (const x of rows) await api(`/screen/${x.id}`, { ...x, status: 'paused' }); },
-      undo: async rows => { for (const x of rows) await api(`/screen/${x.id}`, x); },
+    { label: 'Activate', run: async rows => { for (const x of rows) await api(`/screen/${x.id}`, { status: 'active' }); },
+      undo: async rows => { for (const x of rows) await api(`/screen/${x.id}`, { status: x.status }); } },
+    { label: 'Pause', run: async rows => { for (const x of rows) await api(`/screen/${x.id}`, { status: 'paused' }); },
+      undo: async rows => { for (const x of rows) await api(`/screen/${x.id}`, { status: x.status }); },
       confirm: 'Pause {n} screen(s)? They stop receiving new plays.' },
   ];
   const nameOf = (arr: any[], id: string, fb: string) => arr.find((x: any) => x.id === id)?.name ?? fb;
@@ -127,12 +134,14 @@ export default function Operator() {
       orgs={orgs} currentOrg={orgs[0]} onOrgSelect={() => {}} breadcrumb={trail}
       cmdItems={cmdItems} onGo={go} user={{ name: user.name, role: user.role }}>
 
-      {view === 'configs' && <ConfigList user={user} onOpen={id => go('cfg/' + id)} onChanged={() => reload()} />}
-      {view.startsWith('cfg/') && <ConfigEditor id={view.slice(4)} user={user} onGo={go} onChanged={() => reload()} />}
+      <HistoryNotice history={d.history} />
+      {view === 'configs' && caps.includes('screens') && <ConfigList user={user} onOpen={id => go('cfg/' + id)} onChanged={() => reload()} />}
+      {view.startsWith('cfg/') && caps.includes('screens') && <ConfigEditor id={view.slice(4)} user={user} onGo={go} onChanged={() => reload()} />}
 
+      {view === 'new-screen' && caps.includes('screens') && caps.includes('sales') && <ScreenOnboarding boot={d} user={user} onGo={go} onDone={async(s:any)=>{await reload();go('s/'+s.id);}} />}
       {view.startsWith('s/') && <ScreenDetail id={view.slice(2)} onGo={go} onChanged={() => reload()} />}
       {view.startsWith('c/') && <CampaignDetail id={view.slice(2)} boot={d} onGo={go} onChanged={() => reload()} />}
-      {view === 'new' && <CampaignBuilder boot={d} user={user} onGo={go} onDone={async (c: any) => { await reload(); go('c/' + c.id); }} />}
+      {view === 'new' && caps.includes('sales') && <CampaignBuilder boot={d} user={user} onGo={go} onDone={async (c: any) => { await reload(); go('c/' + c.id); }} />}
 
       {view.startsWith('a/') && (() => {
         const a = d.advertisers.find((x: any) => x.id === view.slice(2));
@@ -145,7 +154,7 @@ export default function Operator() {
             { label: 'Dates', render: (c: any) => <span className="block whitespace-nowrap font-mono text-[12px] leading-snug text-muted-foreground">{c.starts_at}<br />→ {c.ends_at}</span> },
             { label: 'Type', render: (c: any) => <Badge variant={c.campaign_type === 'network' ? 'default' : 'muted'}>{c.campaign_type === 'network' ? 'network' : 'yours'}</Badge> },
             { label: 'Screens', num: true, render: (c: any) => c.screen_ids.length },
-            { label: 'Plays', num: true, render: (c: any) => d.plays.filter((p: any) => p.campaign_id === c.id).length },
+            { label: 'Play reports', num: true, render: (c: any) => d.plays.filter((p: any) => p.campaign_id === c.id).length },
             { label: 'Budget', num: true, render: (c: any) => { const p = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
               return <div className="flex flex-col items-end gap-1 whitespace-nowrap"><span>{inr(c.accrued_spend)}</span><span className="text-[11.5px] text-muted-foreground">of {inr(c.committed_budget)}</span><Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
             { label: 'Status', render: (c: any) => isLive(c) ? <Badge variant="onair" blip>current</Badge> : <Badge variant="muted">{c.status}</Badge> },
@@ -157,7 +166,7 @@ export default function Operator() {
             actions={<Badge variant={a.org_id === user.org_id ? 'muted' : 'default'}>{a.org_id === user.org_id ? 'your client' : 'brought by Gridcast'}</Badge>} />
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Stat label="Live campaigns" value={cur.length} hint={`${cs.length} all time`} />
-            <Stat label="Total plays" value={cs.reduce((s: number, c: any) => s + d.plays.filter((p: any) => p.campaign_id === c.id).length, 0)} hint="across all campaigns" />
+            <Stat label="Play reports" value={cs.reduce((s: number, c: any) => s + d.plays.filter((p: any) => p.campaign_id === c.id).length, 0)} hint="across all campaigns" />
             <Stat label="Committed" value={inr(cs.reduce((s: number, c: any) => s + c.committed_budget, 0))} hint="total booked" />
             <Stat label="Accrued" value={inr(cs.reduce((s: number, c: any) => s + c.accrued_spend, 0))} hint={a.org_id === user.org_id ? 'you keep 100%' : 'less Gridcast fee'} />
           </div>
@@ -169,10 +178,10 @@ export default function Operator() {
       {view === 'overview' && (<>
         <PageHead title={user.orgName} sub={`${d.screens.length} screens · ${d.advertisers.length} advertisers · ${d.campaigns.filter(isLive).length} live campaigns`} />
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Stat label="Monthly inventory" value={inr(d.screens.reduce((s: number, x: any) => s + x.monthly_value, 0))} hint="at full sell-through" />
-          <Stat label="Accrued this period" value={inr(d.campaigns.reduce((s: number, c: any) => s + c.accrued_spend, 0))} hint="across live campaigns" />
-          <Stat label="Screens on air" value={`${d.screens.filter((s: any) => s._status.state === 'live').length}/${d.screens.length}`} hint="paired and playing" />
-          <Stat label="Avg people / play" value={(() => { const m = d.presence.filter((p: any) => p.measured); return m.length ? (m.reduce((a: number, b: any) => a + b.avg_persons, 0) / m.length).toFixed(1) : '—'; })()} hint="verified presence" />
+          {caps.includes('sales') && <Stat label="Monthly inventory" value={inr(d.screens.reduce((s: number, x: any) => s + x.monthly_value, 0))} hint="at full sell-through" />}
+          {caps.includes('sales') && <Stat label="Accrued this period" value={inr(d.campaigns.reduce((s: number, c: any) => s + c.accrued_spend, 0))} hint="across live campaigns" />}
+          {caps.includes('screens') && <Stat label="Screens on air" value={`${d.screens.filter((s: any) => s._status?.state === 'live').length}/${d.screens.length}`} hint="paired and playing" />}
+          <Stat label="Avg people / play" value={(() => { const m = d.presence.filter((p: any) => p.measured); return m.length ? (m.reduce((a: number, b: any) => a + b.avg_persons, 0) / m.length).toFixed(1) : '—'; })()} hint="reported presence" />
         </div>
         <Card className="mt-4 border-primary/25 bg-primary/[0.04] p-4 text-[13px] text-primary">
           <b>You keep 100% of what you sell.</b> Gridcast takes no cut on campaigns you bring to your own screens. A fee applies only if you release slots to the network and Gridcast brings you a client.
@@ -180,13 +189,13 @@ export default function Operator() {
         <SectionHead>Your screens</SectionHead>
         <DataTable cols={[
           { className: 'min-w-[168px]', label: 'Screen', sort: (s: any) => s.name, render: (s: any) => <><button onClick={() => go('s/' + s.id)} className="text-left font-medium text-primary hover:underline">{s.name}</button><div className="text-[12px] text-muted-foreground">{s.address}</div></> },
-          { label: 'State', sort: (s: any) => s._status.state, render: (s: any) => <StatusBadge st={s._status} /> },
+          { label: 'State', sort: (s: any) => s._status?.state, render: (s: any) => s._status ? <StatusBadge st={s._status} /> : <span className="text-muted-foreground">—</span> },
           { label: 'People / play', sort: (s: any) => trendScreen(s.id).filter(Boolean).slice(-1)[0] ?? -1, render: (s: any) => <Spark data={trendScreen(s.id)} /> },
-          { label: 'Running', num: true, sort: (s: any) => liveOn(s.id).length, render: (s: any) => liveOn(s.id).length ? <><b>{liveOn(s.id).length}</b> <span className="text-muted-foreground">of {s.advertiser_slots}</span></> : <span className="text-muted-foreground">idle</span> },
-          { label: 'Per slot / mo', num: true, sort: (s: any) => s.slot_price_month, render: (s: any) => inr(s.slot_price_month) },
-        ]} rows={d.screens} rowId={(s: any) => s.id} exportName="screens" bulk={screenBulk} onDone={() => reload()}
+          { label: 'Running', num: true, sort: (s: any) => liveOn(s.id).length, render: (s: any) => liveOn(s.id).length ? <><b>{liveOn(s.id).length}</b> <span className="text-muted-foreground">campaigns</span></> : <span className="text-muted-foreground">idle</span> },
+          ...(caps.includes('sales') ? [{ label: 'Per slot / mo', num: true, sort: (s: any) => s.slot_price_month, render: (s: any) => inr(s.slot_price_month) }] : []),
+        ]} rows={d.screens} rowId={(s: any) => s.id} exportName="screens" bulk={caps.includes('screens') ? screenBulk : undefined} onDone={() => reload()}
           search={(s: any) => `${s.name} ${s.venue_name} ${s.address}`}
-          facets={[{ label: 'State', get: (s: any) => s._status.state }, { label: 'Venue', get: (s: any) => s.venue_type }]} />
+          facets={[{ label: 'State', get: (s: any) => s._status?.state ?? 'unavailable' }, { label: 'Venue', get: (s: any) => s.venue_type }]} />
       </>)}
 
       {view === 'screens' && (() => {
@@ -195,10 +204,10 @@ export default function Operator() {
         const plays7 = (sid: string) => { const cut = Date.now() - 7 * 864e5;
           return d.plays.filter((p: any) => p.screen_id === sid && new Date(p.ended_at || p.started_at).getTime() >= cut).length; };
         return (<>
-        <PageHead title="My screens" sub={`${d.screens.length} screens · ${inr(d.screens.reduce((a: number, x: any) => a + x.monthly_value, 0))} of monthly inventory`} />
+        <PageHead title="My screens" sub={caps.includes('sales') ? `${d.screens.length} screens · ${inr(d.screens.reduce((a: number, x: any) => a + x.monthly_value, 0))} of monthly inventory` : `${d.screens.length} screens`} actions={caps.includes('screens') && caps.includes('sales') ? <Button onClick={()=>go('new-screen')}>Add screen</Button> : undefined} />
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {d.screens.map((s: any) => {
-            const booked = bookedOn(s.id).length, pct = Math.round(booked / s.advertiser_slots * 100);
+            const booked = new Set(bookedOn(s.id).map((c:any)=>c.advertiser_id)).size, pct = Math.round(booked / s.advertiser_slots * 100);
             const avg = avgOn(s.id);
             const tags = [`${s.size_in}"`, s.location_tier, ...Object.entries(s.tags || {}).map(([k, v]) => `${k}:${v}`)];
             return (
@@ -206,7 +215,7 @@ export default function Operator() {
                 <button onClick={() => go('s/' + s.id)} className="block w-full text-left">
                   <ScreenPhoto src={s.photo_url} venue={s.venue_type} className="h-[172px] rounded-none border-0 border-b">
                     <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-2.5">
-                      <StatusBadge st={s._status} />
+                      {s._status && <StatusBadge st={s._status} />}
                       {s.network_available && <Badge variant="muted">{s.network_slots} network slots</Badge>}
                     </div>
                     <div className="absolute inset-x-0 bottom-0 bg-[linear-gradient(to_top,rgba(0,0,0,.72),transparent)] px-3 pb-2.5 pt-8">
@@ -218,9 +227,9 @@ export default function Operator() {
 
                 <div className="grid grid-cols-4 divide-x divide-border/60 border-b border-border/60">
                   {[['Slot price', inr(s.slot_price_month), '/mo'],
-                    ['Slots sold', `${booked}/${s.advertiser_slots}`, ''],
+                    ['Advertisers today', `${booked}/${s.advertiser_slots}`, ''],
                     ['Avg people', avg == null ? '—' : avg.toFixed(1), avg == null ? '' : '/play'],
-                    ['Plays 7d', String(plays7(s.id)), '']].map(([k, v, suf]) => (
+                    ['Plays 7d', String(plays7(s.id)), '']].filter(([k]) => k !== 'Slot price' || caps.includes('sales')).map(([k, v, suf]) => (
                     <div key={k} className="px-3 py-2.5">
                       <div className="text-[9.5px] font-semibold uppercase tracking-wider text-muted-foreground/70">{k}</div>
                       <div className="font-mono tnum text-[15px] font-semibold leading-tight">{v}<span className="text-[10.5px] font-normal text-muted-foreground">{suf}</span></div>
@@ -249,7 +258,7 @@ export default function Operator() {
         </>);
       })()}
 
-      {view === 'advertisers' && (() => {
+      {view === 'advertisers' && caps.includes('sales') && (() => {
         const mine = d.advertisers.filter((a: any) => a.org_id === user.org_id);
         const bygc = d.advertisers.filter((a: any) => a.org_id !== user.org_id);
         const row = (a: any) => { const cs = d.campaigns.filter((c: any) => c.advertiser_id === a.id);
@@ -280,7 +289,7 @@ export default function Operator() {
         </>);
       })()}
 
-      {view === 'campaigns' && (<>
+      {view === 'campaigns' && caps.includes('sales') && (<>
         <PageHead title="Campaigns" sub="Budgets are entered manually — the platform is a ledger, not a processor"
           actions={<Button onClick={() => go('new')}>+ New campaign</Button>} />
         <DataTable cols={[
@@ -293,7 +302,7 @@ export default function Operator() {
           { label: 'Budget', num: true, sort: (c: any) => (c.committed_budget ? c.accrued_spend / c.committed_budget : 0), render: (c: any) => { const p = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
             return <div className="flex flex-col items-end gap-1 whitespace-nowrap"><span>{inr(c.accrued_spend)}</span><span className="text-[11.5px] text-muted-foreground">of {inr(c.committed_budget)}</span><Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
           { label: 'Invoice', sort: (c: any) => c.invoice_status, render: (c: any) => (
-            <InlineSelect value={c.invoice_status} choices={INVOICE_CHOICES} onChange={v => setCampaign(c, { invoice_status: v })}>
+            <InlineSelect disabled={!caps.includes('money')} value={c.invoice_status} choices={INVOICE_CHOICES} onChange={v => setCampaign(c, { invoice_status: v })}>
               <Badge variant={c.invoice_status === 'paid' ? 'ok' : c.invoice_status === 'invoiced' ? 'warn' : 'muted'}>{c.invoice_status.replace(/_/g, ' ')}</Badge>
             </InlineSelect>) },
           { label: 'Status', sort: (c: any) => c.status, render: (c: any) => (
@@ -306,19 +315,11 @@ export default function Operator() {
                    { label: 'Invoice', get: (c: any) => c.invoice_status.replace(/_/g, ' ') }]} />
       </>)}
 
-      {view === 'creatives' && <Creatives d={d} user={user} onChanged={() => reload()} advName={advName} />}
+      {view === 'creatives' && caps.includes('sales') && <Creatives d={d} user={user} onChanged={() => reload()} advName={advName} />}
 
-      {view === 'groups' && (<>
-        <PageHead title="Screen groups" sub="Static lists and dynamic rules used to target campaigns" />
-        <DataTable cols={[
-          { label: 'Group', render: (g: any) => <span className="font-medium">{g.name}</span> },
-          { label: 'Type', render: (g: any) => <Badge variant={g.group_type === 'dynamic' ? 'default' : 'muted'}>{g.group_type}</Badge> },
-          { label: 'Rule', render: (g: any) => <span className="font-mono text-[12px] text-muted-foreground">{g.rule_json ? JSON.stringify(g.rule_json) : `${g.screen_ids.length} screens, hand-picked`}</span> },
-        ]} rows={d.groups} rowId={(g: any) => g.id} exportName="screen-groups" />
-        <div className="mt-4"><SoonPage title="Creating and editing groups" note="Rules resolve and are usable in the campaign builder today. The editor for creating new groups is not built yet." /></div>
-      </>)}
+      {view === 'groups' && <GroupManager boot={d} user={user} onChanged={()=>reload()} />}
 
-      {view === 'settlement' && (() => {
+      {view === 'settlement' && caps.includes('money') && (() => {
         const rows = d.campaigns.map((c: any) => {
           const gross = c.accrued_spend, fee = Math.round(gross * (c.platform_fee_pct / 100));
           const opGross = gross - fee;
@@ -356,7 +357,7 @@ export default function Operator() {
       {view === 'analytics' && (<>
         <PageHead title="Analytics" sub="Delivery and presence across your network" />
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Stat label="Plays all time" value={d.plays.length.toLocaleString('en-IN')} />
+          <Stat label="Play reports loaded" value={d.plays.length.toLocaleString('en-IN')} />
           <Stat label="Measured plays" value={d.presence.filter((p: any) => p.measured).length} hint="camera working" />
           <Stat label="Screens" value={d.screens.length} hint={`${d.screens.filter((s: any) => s.has_camera).length} with camera`} />
           <Stat label="Inventory value" value={inr(d.screens.reduce((s: number, x: any) => s + x.monthly_value, 0))} hint="per month at full sell-through" />
@@ -365,12 +366,12 @@ export default function Operator() {
         <DataTable cols={[
           { label: 'Screen', render: (s: any) => <button onClick={() => go('s/' + s.id)} className="text-left font-medium text-primary hover:underline">{s.name}</button> },
           { label: 'Venue', render: (s: any) => <Badge variant="muted">{s.venue_type}</Badge> },
-          { label: 'Plays', num: true, render: (s: any) => d.plays.filter((p: any) => p.screen_id === s.id).length },
+          { label: 'Play reports', num: true, render: (s: any) => d.plays.filter((p: any) => p.screen_id === s.id).length },
           { label: 'Avg people', num: true, sort: (s: any) => { const r = presFor(s.id); return r.length ? r.reduce((a: number, b: any) => a + b.avg_persons, 0) / r.length : -1; },
             render: (s: any) => { const r = presFor(s.id);
               return r.length ? <b>{(r.reduce((a: number, b: any) => a + b.avg_persons, 0) / r.length).toFixed(1)}</b> : <span className="text-muted-foreground">—</span>; } },
           { label: 'Last 7 days', render: (s: any) => <Spark data={trendScreen(s.id)} /> },
-          { label: 'Monthly value', num: true, sort: (s: any) => s.monthly_value, render: (s: any) => inr(s.monthly_value) },
+          ...(caps.includes('sales') ? [{ label: 'Monthly value', num: true, sort: (s: any) => s.monthly_value, render: (s: any) => inr(s.monthly_value) }] : []),
         ]} rows={d.screens} rowId={(s: any) => s.id} exportName="screen-performance"
           search={(s: any) => s.name} facets={[{ label: 'Venue', get: (s: any) => s.venue_type }]} />
         <div className="mt-4"><SoonPage title="Trends, dayparting and exports" note="Time-series charts, daypart breakdowns and CSV export are not built yet. The underlying play and presence data is already being collected." /></div>
@@ -378,9 +379,9 @@ export default function Operator() {
 
       {['reports'].includes(view) && <><PageHead title="Reports" /><SoonPage title="Scheduled and exportable reports" note="Per-advertiser PDF and CSV reports on a schedule. Not built yet — campaign pages already carry the same numbers." /></>}
       {view === 'profile' && <ProfilePage user={user} onSaved={() => { const u = session.get(); if (u) setUser(u); reload(); }} />}
-      {(view === 'settings' || view === 'set-org') && <OrgPage d={d} user={user} onSaved={() => { const u = session.get(); if (u) setUser(u); reload(); }} />}
+      {(view === 'settings' || view === 'set-org') && caps.includes('org') && <OrgPage d={d} user={user} onSaved={() => { const u = session.get(); if (u) setUser(u); reload(); }} />}
       {view === 'set-billing' && <PayoutPage d={d} user={user} onSaved={() => reload()} />}
-      {view === 'set-team' && <TeamPage user={user} onChanged={() => reload()} />}
+      {view === 'set-team' && caps.includes('team') && <TeamPage user={user} onChanged={() => reload()} />}
       {['set-api','set-hooks'].includes(view) && (<>
         <PageHead title={titleOf[view] ?? 'Settings'} />
         <SoonPage title="Not built yet"
@@ -415,42 +416,46 @@ function AddAdvertiser({ user, onAdded }: { user: SessionUser; onAdded: () => vo
 }
 
 function Creatives({ d, user, onChanged, advName }: { d: any; user: SessionUser; onChanged: () => void; advName: (id: string) => string }) {
-  const [f, setF] = useState({ adv: d.advertisers.filter((a: any) => a.org_id === user.org_id)[0]?.id ?? '', url: '', name: '', dur: '10' });
-  const [err, setErr] = useState('');
+  const [f, setF] = useState({ adv: d.advertisers.filter((a: any) => a.org_id === user.org_id)[0]?.id ?? '', url: '', name: '', dur: '10', source: 'upload', category: 'general' });
+  const [err, setErr] = useState(''), [busy,setBusy] = useState(false);
   const add = async () => {
-    const id = ytId(f.url); if (!id) return setErr('Not a YouTube URL or video ID.');
-    setErr('');
-    await api('/creative', { org_id: user.org_id, advertiser_id: f.adv, name: f.name || 'Untitled creative', category: 'general', youtube_id: id, duration_s: Number(f.dur) || 10, aspect: '16:9' });
-    setF({ ...f, url: '', name: '' }); onChanged();
+    setErr('');setBusy(true);
+    try {
+      if(!f.adv) throw new Error('Create or select an advertiser first.');
+      if(!f.name.trim()) throw new Error('Enter a creative name.');
+      let media:any={};
+      if(f.source==='youtube') {
+        const id=ytId(f.url); if(!id)throw new Error('Not a YouTube URL or video ID.');
+        const duration=Number(f.dur);if(!Number.isFinite(duration)||duration<=0)throw new Error('Enter a positive duration.');
+        media={youtube_id:id,duration_s:duration,aspect:'16:9'};
+      }
+      await api('/creative', { org_id: user.org_id, advertiser_id: f.adv, name: f.name.trim(), category: f.category.trim()||'general', ...media });
+      setF({ ...f, url: '', name: '' }); onChanged();
+    }catch(e){setErr((e as Error).message);}finally{setBusy(false);}
   };
   return (<>
-    <PageHead title="Creatives" sub="Ad variations — paste a YouTube link to add one" />
+    <PageHead title="Creatives" sub="Upload video variations or add a YouTube source. Each creative requires platform approval." />
     <Card className="mb-4 p-5">
       <div className="flex flex-wrap gap-3">
         <Field label="Advertiser"><Select value={f.adv} onChange={e => setF({ ...f, adv: e.target.value })}>
           {d.advertisers.filter((a: any) => a.org_id === user.org_id).map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </Select></Field>
-        <Field label="YouTube URL" className="flex-[2]"><Input value={f.url} onChange={e => setF({ ...f, url: e.target.value })} placeholder="https://youtube.com/watch?v=…" /></Field>
         <Field label="Name"><Input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} /></Field>
-        <Field label="Seconds" className="max-w-[110px]"><Input type="number" value={f.dur} onChange={e => setF({ ...f, dur: e.target.value })} /></Field>
+        <Field label="Category"><Input value={f.category} onChange={e=>setF({...f,category:e.target.value})}/></Field>
+        <Field label="Video source"><Select value={f.source} onChange={e=>setF({...f,source:e.target.value})}><option value="upload">Upload MP4 / WebM</option><option value="youtube">YouTube</option></Select></Field>
+        {f.source==='youtube'&&<><Field label="YouTube URL" className="flex-[2]"><Input value={f.url} onChange={e => setF({ ...f, url: e.target.value })} placeholder="https://youtube.com/watch?v=…" /></Field><Field label="Expected seconds" className="max-w-[140px]"><Input type="number" min="1" value={f.dur} onChange={e => setF({ ...f, dur: e.target.value })} /></Field></>}
       </div>
-      <div className="mt-3 flex items-center gap-3"><Button onClick={add}>Add creative</Button>{err && <span className="text-[12.5px] text-destructive">{err}</span>}</div>
+      {f.source==='upload'&&<p className="mt-3 text-sm text-muted-foreground">Create the creative, then choose “Upload video” on its row below. You can attach landscape and portrait variations to the same creative.</p>}
+      {f.source==='youtube'&&<p className="mt-3 text-xs text-muted-foreground">The entered duration is self-reported. Upload a file for server-verified dimensions and duration.</p>}
+      <div className="mt-3 flex items-center gap-3"><Button onClick={add} disabled={busy}>{busy?'Creating…':'Add creative'}</Button>{err && <span role="alert" className="text-[12.5px] text-destructive">{err}</span>}</div>
     </Card>
     <DataTable cols={[
       { label: 'Creative', render: (c: any) => <div className="flex items-center gap-3"><Thumb id={c.youtube_id} w={76} /><div><div className="font-medium">{c.name}</div><div className="text-[12px] text-muted-foreground">{advName(c.advertiser_id)}</div></div></div> },
-      { label: 'Source', render: (c: any) => <span className="font-mono text-[12px] text-muted-foreground">yt:{c.youtube_id}</span> },
-      { label: 'Length', num: true, render: (c: any) => `${c.duration_s}s` },
+      { label: 'Source', render: (c: any) => <span className="text-[12px] text-muted-foreground">{c.assets?.length?`${c.assets.length} uploaded variation${c.assets.length===1?'':'s'}`:c.youtube_id?'YouTube':'Awaiting upload'}</span> },
+      { label: 'Length', num: true, render: (c: any) => c.assets?.length?<span className="text-xs">{c.assets.map((a:any)=>`${a.duration_s ?? (a.duration_ms/1000)}s`).join(' / ')}</span>:c.duration_s?`${c.duration_s}s (reported)`:'—' },
       { label: 'Approval', render: (c: any) => <Badge variant={c.approval_status === 'approved' ? 'ok' : c.approval_status === 'rejected' ? 'destructive' : 'warn'}>{c.approval_status}</Badge> },
-      { label: '', render: (c: any) => c.org_id !== user.org_id ? <span className="text-[12px] text-muted-foreground">Gridcast</span>
-        : c.approval_status === 'pending'
-          ? <div className="flex gap-1.5"><Button size="sm" onClick={async () => { await api(`/creative/${c.id}/approve`, { status: 'approved' }); onChanged(); }}>Approve</Button>
-              <Button size="sm" variant="outline" onClick={async () => { await api(`/creative/${c.id}/approve`, { status: 'rejected' }); onChanged(); }}>Reject</Button></div>
-          : <Button size="sm" variant="ghost" onClick={async () => { await api(`/creative/${c.id}/approve`, { status: 'pending' }); onChanged(); }}>Revoke</Button> },
-    ]} rows={d.creatives} rowId={(c: any) => c.id} exportName="creatives" onDone={onChanged} bulk={[
-      { label: 'Approve', run: async (rows: any[]) => { for (const c of rows) if (c.org_id === user.org_id) await api(`/creative/${c.id}/approve`, { status: 'approved' }); } },
-      { label: 'Reject', variant: 'outline' as const, run: async (rows: any[]) => { for (const c of rows) if (c.org_id === user.org_id) await api(`/creative/${c.id}/approve`, { status: 'rejected' }); } },
-    ]} />
+      { label: 'Video', render: (c:any) => c.org_id===user.org_id?<CreativeUpload creativeId={c.id} onUploaded={()=>onChanged()}/>:<span className="text-xs text-muted-foreground">Managed by originating organisation</span> },
+      { label: 'Review', render: () => <span className="text-[12px] text-muted-foreground">Reviewed by Gridcast</span> },
+    ]} rows={d.creatives} rowId={(c: any) => c.id} exportName="creatives" />
   </>);
 }
-
-

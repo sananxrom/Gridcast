@@ -5,6 +5,7 @@ import { SidebarNav, type NavGroupData, type NavItemData, type OrgOption } from 
 import { CommandPalette, type CmdItem } from './command-palette';
 import { cn } from '@/lib/utils';
 import { TopProgress } from './loader';
+import { api, session } from '@/lib/client';
 
 export type Crumb = string | { label: string; go?: string };
 
@@ -36,7 +37,10 @@ export function AppShell({
 
   const handleSelect = (id: string) => {
     if (id === 'search') return setCmdOpen(true);
-    if (id === 'logout') { try { localStorage.removeItem('gc_user'); } catch {}; location.href = '/'; return; }
+    if (id === 'logout') {
+      api('/logout', {}).catch(() => {}).finally(() => { session.clear(); location.href = '/'; });
+      return;
+    }
     onSelect(id);
   };
 

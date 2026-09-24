@@ -1,74 +1,91 @@
-# Gridcast — Phase 1 Prototype
+# Gridcast — Phase 1 pilot build
 
-Next.js 14 (App Router) · TypeScript · Tailwind · shadcn-style components.
-Four surfaces over one API, with real webcam people-counting on the player.
+Next.js 15 App Router · React 18 · TypeScript · server-side Firestore transactions.
 
-## Run
-
-```bash
-npm install
-npm run dev          # → http://localhost:4000
-```
-
-Data persists to `data/db.json` locally. `POST /api/reset` reseeds.
-
-## Surfaces
-
-| Route | Who | What |
-|---|---|---|
-| `/` | — | Sign in — pick a demo account |
-| `/admin` | Sanan (Gridcast) | All orgs, screens, campaigns, approvals, device health |
-| `/operator` | Ravi / Priya | Own screens only: pricing, codes, advertisers, campaigns, creatives, settlement |
-| `/advertiser` | Fitline Gym | Read-only delivery |
-| `/player` | a screen | Enter screen code → plays the loop, counts people |
-
-## End to end
-
-1. Sign in as **Ravi Mehta** → *My screens* → copy a screen code.
-2. Open `/player` in another tab or on a phone → enter the code → allow the camera.
-3. Plays approved creatives on a loop, counting people every 2s.
-4. Counts appear live on the screen page, in Admin, and in the Advertiser view.
-
-Screen codes are **permanent** — replacing the box reuses the same code.
-
-## People counting
-
-TensorFlow.js + COCO-SSD (`lite_mobilenet_v2`) in the browser. Counts `person`
-detections above 0.5 confidence, samples every 2s, averages across a play, posts
-`avg_persons`.
-
-**This is presence sampling, not unique reach.** No tracking, no re-identification.
-A play with no camera is recorded `measured: false` with a null count — never zero,
-never estimated.
-
-Camera needs HTTPS or localhost. Vercel serves HTTPS.
-
-## Design
-
-- **Primary** `#0F766E` teal — settled / verified
-- **Warn** `#A16207` ochre — open / pending
-- **On air** amber — reserved for a screen that is live, nothing else
-- Cool-biased neutrals, dark mode via `.dark`
-
-Tokens live in `app/globals.css`; components in `components/ui` follow shadcn
-conventions (`components.json` is configured, so `npx shadcn@latest add …` works).
-
-## Deploy
-
-Push to GitHub, import in Vercel. No build config needed.
-
-Serverless has no writable filesystem — add **Upstash Redis** (Vercel → Storage)
-or data resets on every cold start. It sets `KV_REST_API_URL` / `KV_REST_API_TOKEN`
-automatically. `GET /api/_health` reports the active store.
-
-**After deploying over an older build**, reset once so the seed matches the schema:
+## Local development
 
 ```bash
-curl -X POST https://YOUR-APP.vercel.app/api/reset
+npm ci
+cp .env.example .env.local
+# Set a private GC_DEMO_PASSWORD (12+ characters) and GC_AUTH_SECRET (32+ characters).
+npm run dev
 ```
 
-## Not built
+A fresh local file database uses explicitly configured demo credentials. Existing
+files are never reset automatically. Demo data is synthetic and labeled. Production
+requires Firestore, a real signing secret and an explicitly provisioned account;
+production never seeds or resets a database.
 
-Unique reach, dwell, attention, demographics · dynamic pricing · RTB / OpenRTB ·
-automated billing · self-serve advertiser signup · group editor · report exports.
-Pages that will exist are in the nav marked **soon**.
+## Operator journey
+
+1. Create a screen, recording its operating window and advertiser capacity.
+2. Generate a one-use pairing code in screen details; enter it on `/player` within
+   ten minutes. Re-pairing revokes the old device credential.
+3. Create an advertiser and creative. Upload MP4/WebM video (up to 25 MB); the server
+   checks duration and dimensions. Platform approval remains a separate step.
+4. Book explicit appearances per screen and loop. Pending, active and paused bookings
+   reserve capacity; drafts, complete and cancelled bookings release it. Group selection
+   copies its current screen list into the campaign; membership never expands silently.
+5. Activate the campaign. Unused loop time is blank and never generates a play report.
+
+Legacy YouTube creatives are supported online. Uploaded video variants use the closest
+aspect ratio with letterboxing. Saved booking prices retain their original reference;
+changing a screen's quote does not rewrite past campaign agreements.
+
+## Measurement and delivery
+
+The browser runs COCO-SSD `2.2.3/lite_mobilenet_v2` with TensorFlow.js `4.22.0`.
+Model files are served from `public/models/coco-ssd`, with source and SHA-256 records.
+The applied confidence setting and two-second sampling interval govern counting.
+
+Presence means average people in front of the screen while an ad plays. It is not
+unique reach, attention or an impression count. A camera/model failure produces
+`measured:false`, a null count and zero samples. Only counts leave the device;
+remote camera previews and frame upload/read endpoints are removed.
+
+Reports carry device start/end times, server receipt, exact model/configuration version
+and source. Billability requires observed playback progress and duration; this remains
+a report from authenticated software, not hardware attestation or independently audited
+physical display. Camera accuracy still requires a real ground-truth test.
+
+The IndexedDB queue retains up to 5,000 reports and retries for 72 hours. Failed reports
+remain visible/exportable. Assignment validity is ten minutes: a disconnected player
+stops starting new ads when authorization expires. The queue does not provide offline
+YouTube playback or promise 30 minutes of uninterrupted offline video.
+
+## Data and cloud arrangement
+
+- Named Firestore database `gridcast`, Mumbai (`asia-south1`), Enterprise/native.
+- Private video bucket `gridcast-508011-media-india`, Mumbai, public access blocked.
+- Existing Firebase App Hosting backend remains Singapore. App Hosting currently offers
+  no India region; an India runtime would need a separate hosting migration.
+- Camera images and synthetic demo delivery are not imported into production.
+- Server APIs enforce ownership/capabilities. Direct client Firestore access is denied.
+- Writes are per-document transactions, including billing accrual and event deduplication.
+- Dashboard history is capped at 1,500 reports with visible truncation; it is not an
+  unlimited all-time analytics system. Domain reads stop safely at 2,000 records until
+  pagination is implemented. High-volume telemetry needs further repository scaling.
+
+`apphosting.yaml` declares the runtime configuration. Cloud preparation does not mean
+this code is live. Consult the latest `AI-LOG.md` entry and the through-WP5 handoff for
+actual rollout status. Deployment must preserve the current site until the tested build
+is deliberately rolled out; do not run a production reset.
+
+## Verification
+
+```bash
+npm test
+npx tsc --noEmit --incremental false
+npm run build
+node --test tests/device-queue.browser.cjs tests/player.browser.cjs
+```
+
+The browser tests use isolated Chrome and synthetic media/model results. Emulator tests
+are separately guarded to `FIRESTORE_EMULATOR_HOST=127.0.0.1:8185` and a demo project;
+they never target cloud data. See `tests/firestore-emulator.test.cjs`.
+
+## Still outside this build
+
+WP6 settlement/accounting; automated invoicing; advertiser self-signup; hardware-attested
+playback; validated camera accuracy; indefinite event analytics; full offline media caching.
+Budget exhaustion warns an operator and does not automatically stop campaigns.

@@ -9,3 +9,5 @@ data/db.json
 .DS_Store
 _scratch/
 *.tsbuildinfo
+firebase-debug.log
+.firebase/

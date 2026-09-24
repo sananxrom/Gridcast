@@ -1,7 +1,7 @@
 'use client';
 import React, { useEffect, useState } from 'react';
 import { UserPlus, KeyRound, Lock, Copy, Check } from 'lucide-react';
-import { api, session, type SessionUser } from '@/lib/client';
+import { api, session, token, type SessionUser } from '@/lib/client';
 import { PageHead, SectionHead } from '@/components/ui/app-shell';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -51,7 +51,8 @@ export function ProfilePage({ user, onSaved }: { user: SessionUser; onSaved: () 
     if (pw.next !== pw.again) return setPwState({ err: 'The two passwords do not match.' });
     setPwState({ busy: true });
     try {
-      await api('/password', { current: pw.current, next: pw.next });
+      const result = await api('/password', { current: pw.current, next: pw.next });
+      token.set(result.token);
       setPw({ current: '', next: '', again: '' });
       setPwState({ msg: 'Password changed.' });
     } catch (e: any) { setPwState({ err: e?.message || 'Could not change it' }); }
@@ -172,7 +173,8 @@ export function OrgPage({ d, user, onSaved }: { d: any; user: SessionUser; onSav
     </Card>
 
     <SaveBar {...fm} onSave={() => fm.save(async v => {
-      const o = await api(`/org/${user.org_id}`, v);
+      const { gstin, pan, state_code, ...profile } = v;
+      const o = await api(`/org/${user.org_id}`, money ? v : profile);
       const u = session.get(); if (u) session.set({ ...u, orgName: o.name });
       onSaved();
     })} onDiscard={fm.discard} />
@@ -263,6 +265,9 @@ export function TeamPage({ user, onChanged }: { user: SessionUser; onChanged: ()
   const [secret, setSecret] = useState<{ email: string; pw: string } | null>(null);
   const [err, setErr] = useState('');
   const mayManage = isCap(user, 'team');
+  const mayManageUser = (u: any) => mayManage && u.id !== user.id
+    && (user.role === 'platform_admin' || u.role !== 'platform_admin')
+    && (user.role !== 'manager' || !['owner', 'org_admin'].includes(u.role));
 
   const load = () => api('/team').then(setRows);
   useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
@@ -290,7 +295,7 @@ export function TeamPage({ user, onChanged }: { user: SessionUser; onChanged: ()
           <><div className="font-medium">{u.name}{u.id === user.id && <span className="ml-2 text-[11.5px] text-muted-foreground">you</span>}</div>
             <div className="text-[12px] text-muted-foreground">{u.email}</div></>) },
         { label: 'Role', sort: (u: any) => u.role, render: (u: any) =>
-          mayManage && u.id !== user.id && u.role !== 'advertiser_viewer'
+          mayManageUser(u) && u.role !== 'advertiser_viewer'
             ? <InlineSelect value={u.role} choices={choices}
                 onChange={v => act(() => api(`/user/${u.id}/role`, { role: v }))}>
                 <Badge variant="muted">{roleLabel(u.role)}</Badge>
@@ -309,7 +314,7 @@ export function TeamPage({ user, onChanged }: { user: SessionUser; onChanged: ()
         { label: 'Status', render: (u: any) => u.status === 'disabled'
           ? <Badge variant="destructive">disabled</Badge>
           : u.must_change ? <Badge variant="warn">password not set</Badge> : <Badge variant="ok">active</Badge> },
-        { label: '', render: (u: any) => mayManage && u.id !== user.id ? (
+        { label: '', render: (u: any) => mayManageUser(u) ? (
           <div className="flex gap-2 whitespace-nowrap">
             <button onClick={() => act(async () => { const r = await api(`/user/${u.id}/newpassword`, {}); setSecret({ email: r.email, pw: r.temp_password }); })}
               className="text-[12px] font-medium text-primary hover:underline">Reset password</button>

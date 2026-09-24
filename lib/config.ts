@@ -1,3 +1,4 @@
+import { groupMatches } from './inventory';
 /**
  * Device configuration — the settings that describe how a player and its screen
  * behave, resolved by layering rather than stored on the screen itself.
@@ -127,9 +128,9 @@ export const SETTINGS: Setting[] = [
   T('sample_interval_s', 'Sample interval', 'measurement', 'number', 2, { common: true, unit: 's', locked: true,
     lockReason: 'Measurement consistency — screens must be comparable',
     info: 'How often a frame is sampled during a play. Every presence figure on the platform assumes this value.' }),
-  T('model', 'Detection model', 'measurement', 'select', 'yolox-tiny', { common: true, options: ['yolox-tiny', 'yolox-s', 'coco-ssd'], locked: true,
+  T('model', 'Detection model', 'measurement', 'select', 'coco-ssd', { common: true, options: ['coco-ssd'], locked: true,
     lockReason: 'Recorded against every measurement as model_ver',
-    info: 'Apache-2.0 licensed. Stamped on each presence record so a number can always be traced to the model that produced it.' }),
+    info: 'COCO-SSD 2.2.3, lite_mobilenet_v2. The actual model version and configuration revision are recorded with every measured play.' }),
   T('confidence_min', 'Confidence floor', 'measurement', 'number', 0.45, { locked: true,
     lockReason: 'Moves every number on the platform',
     info: 'Detections below this confidence are discarded.' }),
@@ -164,8 +165,8 @@ export const SETTINGS: Setting[] = [
     lockReason: 'Not implemented',
     info: 'A person seen twice is counted twice. That is a deliberate honesty choice, not a limitation.' }),
   T('demographics', 'Demographic inference', 'privacy', 'derived', false, { locked: true, lockReason: 'Not implemented' }),
-  T('preview_frames', 'Setup preview', 'privacy', 'toggle', false, { common: true,
-    info: 'Streams frames to the dashboard while aiming the camera. Expires automatically after 30 minutes.' }),
+  T('preview_frames', 'Remote camera preview', 'privacy', 'derived', false, { common: true, locked: true, lockReason: 'Camera images stay on the device',
+    info: 'Camera setup is available only on the physical player. No frames are uploaded.' }),
 
   // ------------------------------------------------------------ connectivity
   T('sync_interval_min', 'Sync interval', 'connectivity', 'number', 5, { common: true, unit: 'min',
@@ -181,7 +182,7 @@ export const SETTINGS: Setting[] = [
   T('work_offline', 'Work offline', 'connectivity', 'toggle', false, { common: true,
     info: 'Stop contacting the server entirely and play from cache. For a screen on a dead connection.' }),
   T('offline_buffer_plays', 'Offline play buffer', 'connectivity', 'number', 5000, {
-    info: 'Plays stored locally while offline and sent when the link returns. Nothing is lost.' }),
+    info: 'Completed play reports wait locally for up to 72 hours. A full queue stops new playback until space is available. This does not cache YouTube videos.' }),
   T('heartbeat_s', 'Heartbeat interval', 'connectivity', 'number', 30, { unit: 's', locked: true,
     lockReason: 'Drives live / not responding / offline across the platform',
     info: 'A screen is “not responding” after 90s without a heartbeat, and offline after 900s.' }),
@@ -304,10 +305,7 @@ export function applicable(screen: any, groups: any[], configs: any[]): any[] {
   const memberOf = (g: any) => {
     if (g.org_id !== screen.org_id) return false;
     if (g.group_type === 'static') return (g.screen_ids || []).includes(screen.id);
-    const r = g.rule_json || {};
-    return (!r.venue_types || r.venue_types.includes(screen.venue_type))
-      && (!r.min_size || Number(screen.size_in) >= r.min_size)
-      && (!r.location_tier || screen.location_tier === r.location_tier);
+    return groupMatches(screen, g.rule_json || {});
   };
   const myGroups = new Set(groups.filter(memberOf).map((g: any) => g.id));
 
@@ -330,10 +328,12 @@ export function resolve(screen: any, groups: any[], configs: any[]): Resolved {
   const out: Resolved = {};
   for (const s of SETTINGS) out[s.key] = { value: s.def, source: null };
 
+  for (const k of ['operating_hours','loop_length_s','slot_duration_s']) if (screen[k] !== undefined) out[k] = { value: screen[k], source: null };
   for (const c of applicable(screen, groups, configs)) {
     for (const [k, v] of Object.entries(c.values || {})) {
-      if (!BY_KEY[k]) continue;                                   // unknown key, ignore
+      if (!Object.hasOwn(BY_KEY, k)) continue;                                   // unknown key, ignore
       if (BY_KEY[k].locked && c.layer !== 'platform') continue;    // locks are absolute
+      if (BY_KEY[k].ctl === 'derived') continue;
       out[k] = { value: v, source: { config_id: c.id, name: c.name, layer: c.layer } };
     }
   }
@@ -350,10 +350,11 @@ export function flatten(r: Resolved): Record<string, any> {
  * priority decides — but the editor should say so out loud.
  */
 export function conflicts(screen: any, groups: any[], configs: any[]) {
-  const seen: Record<string, any[]> = {};
+  const seen: Record<string, any[]> = Object.create(null);
   const out: { key: string; configs: { id: string; name: string }[] }[] = [];
   for (const c of applicable(screen, groups, configs)) {
     for (const k of Object.keys(c.values || {})) {
+      if (!Object.hasOwn(BY_KEY, k)) continue;
       (seen[k] ||= []).push(c);
     }
   }

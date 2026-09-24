@@ -1,17 +1,57 @@
+import { openMedia, mediaUrl } from './media';
 import * as store from './store';
+import { AccessError, authorize, bootstrap, publicUser, orgView, screenView, advertiserView, capabilities, redact } from './access';
 import { seed, uid, nowISO, code6 } from './seed';
 import * as cfg from './config';
+import { deviceRoute, deviceIdFromToken, pairingCodeHash, issuePairing, revokeDevices } from './devices';
+import { InventoryError, validateScreenInput, reverseCalculate, validateBooking, eligibility, groupMatches, defaultSlotsPerLoop } from './inventory';
 import { can, ROLES, PLATFORM_ADMIN, ADVERTISER, tabFor } from './roles';
-import { hashPassword, verifyPassword, issueToken, readToken, tempPassword, throttled, noteFailure, clearFailures, type Claims } from './auth';
+import { hashPassword, verifyPassword, issueToken, readToken, tempPassword, throttled, noteFailure, clearFailures, assertAuthConfigured, type Claims } from './auth';
 
 let db: any = null;
 async function load() {
   if (db) return db;
   db = await store.read();
-  if (!db) { db = seed(); await store.write(db); }
+  if (!db) {
+    if (process.env.NODE_ENV === 'production') throw new AccessError(503, 'Database must be provisioned before serving production');
+    db = seed(); await store.write(db);
+  }
   return db;
 }
 const save = () => store.write(db);
+const bumpConfig = () => { db.settings ||= {}; db.settings.config_revision = (db.settings.config_revision || 0) + 1; };
+function freezeBookings(c: any, old: any[] = []) {
+  if (typeof c.name !== 'string' || !c.name.trim()) throw new AccessError(400, 'Campaign name is required');
+  if (!['per_play','flat'].includes(c.rate_type) || typeof c.rate_value !== 'number' || !Number.isFinite(c.rate_value) || c.rate_value < 0 || typeof c.committed_budget !== 'number' || !Number.isFinite(c.committed_budget) || c.committed_budget < 0) throw new AccessError(400, 'Enter a valid campaign price and budget');
+  c.bookings = validateBooking(c, db.campaigns, inventoryScreens(), db.creatives).map((b: any) => {
+    const previous = old.find((x: any) => x.screen_id === b.screen_id);
+    const screen = db.screens.find((x: any) => x.id === b.screen_id);
+    return { ...b, rate_value: previous?.rate_value ?? c.rate_value, rate_type: previous?.rate_type ?? c.rate_type, rate_version: previous?.rate_version ?? screen.rate_version ?? 'legacy', booked_at: previous?.booked_at ?? nowISO(), pricing_source: previous?.pricing_source ?? 'agreed_campaign_rate' };
+  });
+}
+const inventoryScreens = () => db.screens.map((s: any) => { const v = cfg.flatten(resolveFor(s)); return { ...s, loop_length_s: v.loop_length_s, slot_duration_s: v.slot_duration_s }; });
+function validateInventory() { for (const c of db.campaigns) validateBooking(c, db.campaigns, inventoryScreens(), db.creatives); }
+function playlistFor(screen: any, _device?: any) {
+  const config = cfg.flatten(resolveFor(screen));
+  const items: any[] = [], decisions: any[] = [], loopAdvertisers: any[] = [];
+  for (const campaign of db.campaigns.filter((c: any) => c.screen_ids?.includes(screen.id))) {
+    const advertiser = db.advertisers.find((a: any) => a.id === campaign.advertiser_id);
+    const eligible: any[] = [];
+    for (const id of campaign.creative_ids || []) {
+      const creative = db.creatives.find((x: any) => x.id === id);
+      const result = eligibility({ screen, campaign, creative, advertiser, settings: db.settings, config, loopAdvertisers });
+      decisions.push({ campaign_id: campaign.id, creative_id: id, eligible: result.eligible, reason: result.reason, rejected_at_step: result.rejected_at_step, warnings: result.warnings, letterbox: result.letterbox });
+      if (result.eligible) eligible.push({ result, creative });
+    }
+    const booking = campaign.bookings?.find((b: any) => b.screen_id === screen.id);
+    for (let n = 0; eligible.length && n < (booking?.slots_per_loop ?? defaultSlotsPerLoop(screen)); n++) {
+      const { result, creative } = eligible[n % eligible.length], asset = result.asset;
+      items.push({ campaign_id: campaign.id, campaign_name: campaign.name, creative_id: creative.id, creative_name: creative.name, advertiser: advertiser?.name || '—', youtube_id: asset.youtube_id, duration_s: asset.duration_s, rate_value: booking?.rate_value ?? campaign.rate_value, rate_type: booking?.rate_type ?? campaign.rate_type, letterbox: result.letterbox, asset_id: asset.asset_id, asset_url: asset.storage_path ? mediaUrl(asset) : undefined, width: asset.width, height: asset.height });
+    }
+    if (eligible.length && advertiser) loopAdvertisers.push(advertiser);
+  }
+  return { items, config, config_version: db.settings?.config_revision || 1, decisions };
+}
 const scope = (rows: any[], orgId: string, isAdmin: boolean) => (isAdmin ? rows : rows.filter(r => r.org_id === orgId));
 
 /** Configs visible to a caller: their own, plus the platform baseline they inherit. */
@@ -27,7 +67,7 @@ function lockedViolations(c: any): string[] {
 const resolveFor = (screen: any) => cfg.resolve(screen, db.groups || [], db.configs || []);
 
 export function screenStatus(screen: any) {
-  const dev = db.devices.find((d: any) => d.screen_id === screen.id);
+  const dev = db.devices.find((d: any) => d.screen_id === screen.id && d.status !== 'revoked');
   if (!dev) return { state: 'unpaired', label: 'not paired', device: null, age_s: null };
   const age = (Date.now() - new Date(dev.last_heartbeat_at).getTime()) / 1000;
   const state = age < 90 ? 'live' : age < 900 ? 'stalled' : 'offline';
@@ -36,34 +76,70 @@ export function screenStatus(screen: any) {
 
 type Res = { status?: number; body: any };
 
-const OPEN = new Set(['_health', 'login', 'pair', 'reset']);
+const OPEN = new Set(['GET _health', 'POST login']);
 
-export async function handle(method: string, seg: string[], q: URLSearchParams, body: any, token?: string | null): Promise<Res> {
+// Serialize this process's mutations and refresh from the shared store each time.
+// This reduces stale reads; it is NOT a replacement for cross-instance transactions (WP4).
+let queue: Promise<unknown> = Promise.resolve();
+export function handle(method: string, seg: string[], q: URLSearchParams, body: any, token?: string | null, clientKey?: string | null): Promise<Res> {
+  const run = async (): Promise<Res> => {
+    try {
+      assertAuthConfigured();
+      if (process.env.NODE_ENV === 'production' && store.mode !== 'firestore')
+        return { status: 503, body: { error: 'Durable storage must be configured' } };
+      if (!body || typeof body !== 'object' || Array.isArray(body))
+        return { status: 400, body: { error: 'Expected a JSON object' } };
+      const claims = readToken(token);
+      return await store.transact({ method, path: seg, uid: claims?.uid,
+        deviceId: deviceIdFromToken(token) || undefined,
+        loginEmail: seg.join('/') === 'login' ? String(body.email || '').trim().toLowerCase() : undefined,
+        pairingCodeHash: seg.join('/') === 'pair' ? pairingCodeHash(String(body.code || '')) : undefined,
+        playUid: typeof body.play_uid === 'string' ? body.play_uid : undefined,
+        seqNo: body.seq_no, assignmentId: body.assignment_id }, async () => {
+        db = null;
+        const result = await dispatch(method, seg, q, body, token, clientKey);
+        const actor = claims ? db?.users.find((u: any) => u.id === claims.uid) : null;
+        if (actor) result.body = redact(result.body, actor);
+        return result;
+      });
+    } catch (e) {
+      if (e instanceof AccessError || e instanceof InventoryError || e instanceof store.StoreError) return { status: e.status, body: { error: e.message } };
+      if (e instanceof Error && e.message.startsWith('Set GC_DEMO_PASSWORD'))
+        return { status: 503, body: { error: e.message } };
+      if (e instanceof Error && e.message.startsWith('GC_AUTH_SECRET'))
+        return { status: 503, body: { error: 'Authentication is not configured' } };
+      throw e;
+    }
+  };
+  const result = queue.then(run, run);
+  queue = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+async function dispatch(method: string, seg: string[], q: URLSearchParams, body: any, token?: string | null, clientKey?: string | null): Promise<Res> {
   await load();
   const p = seg.join('/');
   const claims = readToken(token);
-  const me = claims ? db.users.find((u: any) => u.id === claims.uid) : null;
-
-  // the player is a device, not a person: playlist and play reporting are
-  // reached with a screen id it already holds, so they stay open
-  const deviceRoute = seg[0] === 'playlist' || p === 'play' || p === 'nowplaying'
-    || (seg[0] === 'screen' && seg[2] === 'frame');
-
-  if (!OPEN.has(p) && !deviceRoute && !me)
+  const candidate = claims ? db.users.find((u: any) => u.id === claims.uid) : null;
+  const me = candidate && candidate.status !== 'disabled' &&
+    claims!.ver === (candidate.auth_version || 0) &&
+    db.orgs.some((o: any) => o.id === candidate.org_id && o.status !== 'disabled') ? candidate : null;
+  const transport = deviceRoute(db, method, seg, body, token, { playlist: playlistFor, clientKey: clientKey || undefined });
+  if (transport) { if (transport.changed) await save(); return { status: transport.status, body: transport.body }; }
+  if (!OPEN.has(`${method} ${p}`) && !me)
     return { status: 401, body: { error: 'Sign in to continue' } };
-
-  // a caller is only ever the user their token names
   const actor = me;
   const isAdmin = actor?.role === 'platform_admin';
+  if (!OPEN.has(`${method} ${p}`)) body = authorize(db, actor, method, seg, body, q);
 
-  if (method === 'GET' && p === '_health') return { body: { ok: true, store: store.mode, plays: db.plays.length } };
+  if (method === 'GET' && p === '_health') return { body: { ok: true, store: store.mode, database: process.env.GC_FIRESTORE_DATABASE || null, schema_version: 1 } };
   if (method === 'POST' && p === 'login') {
     const email = String(body.email || '').trim().toLowerCase();
     const wait = throttled(email);
     if (wait) return { status: 429, body: { error: `Too many attempts. Try again in ${Math.ceil(wait / 60)} minute(s).` } };
 
     const u = db.users.find((x: any) => String(x.email || '').toLowerCase() === email);
-    const ok = u && u.status !== 'disabled' && verifyPassword(String(body.password || ''), u.password_salt, u.password_hash);
+    const ok = u && u.status !== 'disabled' && db.orgs.some((o: any) => o.id === u.org_id && o.status !== 'disabled') && verifyPassword(String(body.password || ''), u.password_salt, u.password_hash);
     if (!ok) { noteFailure(email); return { status: 401, body: { error: 'Email or password is not right.' } }; }
 
     // the tab the person chose must match the account, so a mistyped address
@@ -103,7 +179,7 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
     const owners = db.users.filter((x: any) => x.org_id === u.org_id && ['owner', 'org_admin'].includes(x.role) && x.status !== 'disabled');
     if (owners.length === 1 && owners[0].id === u.id && role !== 'owner')
       return { status: 400, body: { error: 'This is the only owner. Promote someone else first.' } };
-    u.role = role; await save(); return { body: { ok: true, role } };
+    u.role = role; u.auth_version = (u.auth_version || 0) + 1; await save(); return { body: { ok: true, role } };
   }
 
   if (method === 'POST' && seg[0] === 'user' && seg[1] && seg[2] === 'status') {
@@ -113,6 +189,7 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
     if (!isAdmin && u.org_id !== actor!.org_id) return { status: 403, body: { error: 'Not your organisation.' } };
     if (u.id === actor!.id) return { status: 400, body: { error: 'You cannot disable yourself.' } };
     u.status = body.status === 'disabled' ? 'disabled' : 'active';
+    u.auth_version = (u.auth_version || 0) + 1;
     await save(); return { body: { ok: true, status: u.status } };
   }
 
@@ -125,6 +202,7 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
     const pw = tempPassword();
     const { salt, hash } = hashPassword(pw);
     u.password_salt = salt; u.password_hash = hash; u.must_change = true;
+    u.auth_version = (u.auth_version || 0) + 1;
     await save(); return { body: { temp_password: pw, email: u.email } };
   }
 
@@ -145,6 +223,7 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
     if (next.length < 8) return { status: 400, body: { error: 'Use at least 8 characters.' } };
     const { salt, hash } = hashPassword(next);
     actor.password_salt = salt; actor.password_hash = hash; actor.must_change = false;
+    actor.auth_version = (actor.auth_version || 0) + 1;
     await save();
     return { body: { ok: true, token: issueToken(actor) } };
   }
@@ -181,103 +260,37 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
       org_id: u.org_id, org: db.orgs.find((o: any) => o.id === u.org_id)?.name, last_login_at: u.last_login_at })) };
   }
 
-  if (method === 'GET' && p === 'bootstrap') {
-    const u = actor!;
-    const isAdmin = u.role === 'platform_admin';
-    const camps = scope(db.campaigns, u.org_id, isAdmin);
-    const refAdv = new Set(camps.map((c: any) => c.advertiser_id));
-    const refCr = new Set(camps.flatMap((c: any) => c.creative_ids));
-    const ownAdv = scope(db.advertisers, u.org_id, isAdmin);
-    const ownCr = scope(db.creatives, u.org_id, isAdmin);
-    return { body: {
-      user: u, org: db.orgs.find((o: any) => o.id === u.org_id), isAdmin, orgs: db.orgs,
-      screens: scope(db.screens, u.org_id, isAdmin).map((s: any) => ({ ...s, _status: screenStatus(s) })),
-      advertisers: isAdmin ? ownAdv : [...ownAdv, ...db.advertisers.filter((a: any) => refAdv.has(a.id) && !ownAdv.some((o: any) => o.id === a.id))],
-      creatives: isAdmin ? ownCr : [...ownCr, ...db.creatives.filter((c: any) => refCr.has(c.id) && !ownCr.some((o: any) => o.id === c.id))],
-      campaigns: camps, groups: scope(db.groups || [], u.org_id, isAdmin),
-      devices: scope(db.devices, u.org_id, isAdmin),
-      plays: scope(db.plays, u.org_id, isAdmin).slice(-1500),
-      presence: db.presence.slice(-1500),
-      settings: db.settings || {},
-      configs: scopeConfigs(u.org_id, isAdmin),
-      caps: (['screens','sales','money','team','org','platform'] as const).filter(c => can(u.role, c)),
-    } };
+  if (method === 'GET' && p === 'bootstrap') return { body: redact(bootstrap(db, actor, screenStatus), actor) };
+  if (method === 'POST' && p === 'logout') {
+    actor.auth_version = (actor.auth_version || 0) + 1;
+    await save(); return { body: { ok: true } };
   }
 
-  if (method === 'POST' && p === 'pair') {
-    const code = String(body.code || '').trim().toUpperCase();
-    const screen = db.screens.find((s: any) => s.code === code);
-    if (!screen) return { status: 404, body: { error: 'Invalid screen code' } };
-    let device = db.devices.find((d: any) => d.screen_id === screen.id);
-    if (!device) { device = { id: uid('dev'), org_id: screen.org_id, screen_id: screen.id, app_ver: '0.2.0', last_heartbeat_at: nowISO(), status: 'online', created_at: nowISO() }; db.devices.push(device); }
-    device.last_heartbeat_at = nowISO(); device.status = 'online';
-    await save(); return { body: { device, screen, token: device.id } };
-  }
-
-  if (method === 'GET' && seg[0] === 'playlist') {
-    const screen = db.screens.find((s: any) => s.id === seg[1]);
-    if (!screen) return { status: 404, body: { error: 'no screen' } };
-    const t = new Date().toISOString().slice(0, 10);
-    const items: any[] = [];
-    for (const c of db.campaigns) {
-      if (!c.screen_ids.includes(screen.id) || c.status !== 'active' || c.starts_at > t || c.ends_at < t) continue;
-      for (const crid of c.creative_ids) {
-        const cr = db.creatives.find((x: any) => x.id === crid);
-        if (!cr || cr.approval_status !== 'approved') continue;
-        if ((screen.exclusions?.categories || []).includes(cr.category)) continue;
-        const adv = db.advertisers.find((a: any) => a.id === cr.advertiser_id);
-        items.push({ campaign_id: c.id, campaign_name: c.name, creative_id: cr.id, creative_name: cr.name, advertiser: adv?.name || '—', youtube_id: cr.youtube_id, duration_s: cr.duration_s, rate_value: c.rate_value });
-      }
-    }
-    return { body: { config: cfg.flatten(resolveFor(screen)), screen, items, loop_length_s: screen.loop_length_s } };
-  }
-
-  if (method === 'POST' && p === 'nowplaying') {
-    const dev = db.devices.find((d: any) => d.screen_id === body.screen_id);
-    if (!dev) return { status: 404, body: { error: 'no device' } };
-    dev.now_playing = { campaign_id: body.campaign_id, creative_id: body.creative_id, duration_s: body.duration_s, started_at: nowISO() };
-    dev.last_heartbeat_at = nowISO(); dev.status = 'online';
-    return { body: { ok: true } };
-  }
-
-  if (method === 'POST' && p === 'play') {
-    const screen = db.screens.find((s: any) => s.id === body.screen_id);
-    if (!screen) return { status: 404, body: { error: 'no screen' } };
-    const play = { id: uid('ply'), org_id: screen.org_id, screen_id: body.screen_id, campaign_id: body.campaign_id, creative_id: body.creative_id, started_at: new Date(Date.now() - (body.duration_ms || 10000)).toISOString(), ended_at: nowISO(), duration_ms: body.duration_ms || 10000, billable: true, server_received_at: nowISO() };
-    db.plays.push(play);
-    db.presence.push({ id: uid('prs'), play_id: play.id, org_id: screen.org_id, screen_id: body.screen_id, measured: !!body.measured, avg_persons: body.measured ? body.avg_persons : null, sample_count: body.sample_count || 0, model_ver: 'coco-ssd@2.2.3', at: nowISO() });
-    const c = db.campaigns.find((x: any) => x.id === body.campaign_id);
-    if (c && c.rate_type === 'per_play') c.accrued_spend = Math.round((c.accrued_spend + (c.rate_value || 0)) * 100) / 100;
-    else if (c && c.rate_type === 'flat') {
-      const st = new Date(c.starts_at).getTime(), en = new Date(c.ends_at).getTime();
-      const total = Math.max(1, (en - st) / 86400000);
-      const gone = Math.min(total, Math.max(0, (Date.now() - st) / 86400000));
-      c.accrued_spend = Math.round(c.committed_budget * (gone / total));
-    }
-    const dev = db.devices.find((x: any) => x.screen_id === body.screen_id);
-    if (dev) { dev.last_heartbeat_at = nowISO(); dev.status = 'online'; }
-    await save(); return { body: { ok: true, play_id: play.id } };
-  }
-
-  if (method === 'GET' && seg[0] === 'campaign' && seg[1]) {
+  if (method === 'GET' && seg[0] === 'campaign' && seg[1] && !seg[2]) {
     const c = db.campaigns.find((x: any) => x.id === seg[1]);
     if (!c) return { status: 404, body: { error: 'not found' } };
     const plays = db.plays.filter((x: any) => x.campaign_id === c.id);
     const byPlay = Object.fromEntries(db.presence.map((x: any) => [x.play_id, x]));
-    const agg = (rows: any[]) => { const m = rows.map(r => byPlay[r.id]).filter((x: any) => x?.measured);
-      return { plays: rows.length, measured: m.length, avg: m.length ? m.reduce((a: number, b: any) => a + b.avg_persons, 0) / m.length : null }; };
+    // Rendered, measured and billable are three separate questions and are reported as three numbers.
+    // A slot that played in full but failed a billing check is delivery that happened and was not charged;
+    // collapsing it into either "plays" or "not rendered" alone would misstate one side or the other.
+    const agg = (all: any[]) => { const shown = all.filter((r: any) => r.rendered !== false);
+      const m = shown.map(r => byPlay[r.id]).filter((x: any) => x?.measured);
+      return { plays: shown.length, not_rendered: all.length - shown.length,
+        billable: all.filter((r: any) => r.billable !== false).length, measured: m.length,
+        avg: m.length ? m.reduce((a: number, b: any) => a + b.avg_persons, 0) / m.length : null }; };
     return { body: {
-      campaign: c, advertiser: db.advertisers.find((a: any) => a.id === c.advertiser_id) || null,
-      org: db.orgs.find((o: any) => o.id === c.org_id) || null, totals: agg(plays),
+      history: db.history || { complete: true, scope: 'local_demo' }, campaign: c, advertiser: advertiserView(db.advertisers.find((a: any) => a.id === c.advertiser_id), actor),
+      org: orgView(db.orgs.find((o: any) => o.id === c.org_id), actor), totals: agg(plays),
       byScreen: c.screen_ids.map((id: string) => db.screens.find((s: any) => s.id === id)).filter(Boolean)
-        .map((s: any) => ({ screen: s, ...agg(plays.filter((p: any) => p.screen_id === s.id)) })),
+        .map((s: any) => ({ screen: screenView(s, actor), ...agg(plays.filter((p: any) => p.screen_id === s.id)) })),
       byCreative: c.creative_ids.map((id: string) => db.creatives.find((x: any) => x.id === id)).filter(Boolean)
         .map((cr: any) => ({ creative: cr, ...agg(plays.filter((p: any) => p.creative_id === cr.id)) })),
       plays: plays.slice(-300).reverse().map((p: any) => ({ ...p, presence: byPlay[p.id] || null })),
     } };
   }
 
-  if (method === 'GET' && seg[0] === 'screen' && seg[1]) {
+  if (method === 'GET' && seg[0] === 'screen' && seg[1] && !seg[2]) {
     const screen = db.screens.find((s: any) => s.id === seg[1]);
     if (!screen) return { status: 404, body: { error: 'not found' } };
     const st = screenStatus(screen);
@@ -305,9 +318,11 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
         started_at: n.started_at, duration_s: n.duration_s, elapsed_s: (Date.now() - new Date(n.started_at).getTime()) / 1000 };
     }
     const resolved = resolveFor(screen);
-    return { body: { screen, status: st, nowPlaying: np, campaigns: camps,
+    return { body: { history: db.history || { complete: true, scope: 'local_demo' }, config_version: db.settings?.config_revision || 1, device: can(actor.role, 'screens') ? st.device : null, eligibility: playlistFor(screen).decisions, screen: screenView(screen, actor), caps: capabilities(actor),
+      status: can(actor.role, 'screens') ? st : { state: st.state, label: st.label, age_s: st.age_s },
+      nowPlaying: np, campaigns: camps, advertisers: db.advertisers.filter((a: any) => a.org_id === screen.org_id || db.campaigns.some((c: any) => c.org_id === screen.org_id && c.advertiser_id === a.id)).map((a: any) => ({ id: a.id, name: a.name })),
       config: resolved,
-      frameUrl: (db.frames || []).find((f: any) => f.screen_id === screen.id && Date.now() - new Date(f.at).getTime() < 30 * 60_000)?.data ?? null,
+
       configStack: cfg.applicable(screen, db.groups || [], db.configs || []).map((c: any) => ({ id: c.id, name: c.name, layer: c.layer, keys: Object.keys(c.values || {}).length })),
       configConflicts: cfg.conflicts(screen, db.groups || [], db.configs || []),
       pricingDrift: cfg.pricingDrift(screen, resolved),
@@ -320,12 +335,13 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
   if (method === 'POST' && seg[0] === 'campaign' && seg[1] && !seg[2]) {
     const c = db.campaigns.find((x: any) => x.id === seg[1]);
     if (!c) return { status: 404, body: { error: 'not found' } };
-    for (const k of ['name','starts_at','ends_at','committed_budget','rate_type','rate_value','status','invoice_status','screen_ids','creative_ids']) if (k in body) c[k] = body[k];
-    await save(); return { body: c };
+    const previousBookings = c.bookings || [];
+    for (const k of ['name','starts_at','ends_at','committed_budget','rate_type','rate_value','status','invoice_status','screen_ids','creative_ids','bookings','dayparts']) if (k in body) c[k] = body[k];
+    freezeBookings(c, previousBookings); await save(); return { body: c };
   }
   if (method === 'POST' && p === 'campaign') {
     const c = { id: uid('cmp'), created_at: nowISO(), accrued_spend: 0, status: 'active', campaign_type: 'operator', platform_fee_pct: 0, fee_basis: 'gross', invoice_status: 'not_invoiced', ...body };
-    db.campaigns.push(c); await save(); return { body: c };
+    freezeBookings(c); db.campaigns.push(c); await save(); return { body: c };
   }
   if (method === 'POST' && seg[0] === 'creative' && seg[2] === 'approve') {
     const cr = db.creatives.find((x: any) => x.id === seg[1]);
@@ -333,8 +349,20 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
     cr.approval_status = body.status || 'approved'; cr.approved_at = nowISO();
     await save(); return { body: cr };
   }
+  if (seg[0] === 'creative' && seg[2] === 'asset') {
+    const creative = db.creatives.find((c: any) => c.id === seg[1]);
+    if (method === 'GET') return { body: { org_id: creative.org_id } };
+    const asset = openMedia(body.proof || '', 'upload');
+    if (!asset || asset.creative_id !== creative.id || asset.org_id !== creative.org_id) throw new AccessError(400, 'Invalid verified asset');
+    if ((creative.assets || []).length >= 8) throw new AccessError(400,'A creative may have up to eight video variants');
+    db.assets ||= []; db.assets.push(asset);
+    creative.assets ||= []; creative.assets.push({ ...asset, uri: 'gridcast:' + asset.id });
+    creative.duration_s = Math.max(...creative.assets.map((a: any) => a.duration_s));
+    creative.aspect = asset.aspect; creative.approval_status = 'pending'; creative.metadata_source = 'server_ffprobe';
+    validateInventory(); await save(); return { status: 201, body: { creative, asset } };
+  }
   if (method === 'POST' && p === 'creative') {
-    const c = { id: uid('cr'), created_at: nowISO(), approval_status: 'pending', content_source: 'advertiser', ...body };
+    const c = { metadata_source: 'operator_declared', id: uid('cr'), created_at: nowISO(), approval_status: 'pending', content_source: 'advertiser', ...body };
     db.creatives.push(c); await save(); return { body: c };
   }
   if (method === 'POST' && p === 'advertiser') {
@@ -350,20 +378,42 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
   if (method === 'POST' && seg[0] === 'screen' && seg[1] && !seg[2]) {
     const s = db.screens.find((x: any) => x.id === seg[1]);
     if (!s) return { status: 404, body: { error: 'not found' } };
-    Object.assign(s, body);
-    s.monthly_value = Math.round(s.venue_base * s.size_factor * s.location_factor * s.exposure_factor);
-    s.slot_price_month = Math.round(s.monthly_value / (s.advertiser_slots || 10));
+    if ('exposure_source' in body && body.exposure_source !== 'estimated') throw new AccessError(400, 'Exposure estimates cannot be marked measured by a manual edit');
+    const merged = { ...s, ...body };
+    const legacyHours = typeof merged.operating_hours === 'number' && !('operating_hours' in body);
+    validateScreenInput({ ...merged, status: merged.status === 'paused' ? 'inactive' : merged.status, operating_hours: legacyHours ? { from: '00:00', to: '00:00' } : merged.operating_hours });
+    for (const [key, value] of Object.entries(body)) s[key] = value;
+    const reprice = ['venue_base','size_factor','location_factor','exposure_factor','advertiser_slots'].some(k => k in body);
+    if (reprice) {
+      s.monthly_value = Math.round(s.venue_base * s.size_factor * s.location_factor * s.exposure_factor);
+      s.slot_price_month = Math.round(s.monthly_value / (s.advertiser_slots || 10));
+      s.rate_version = uid('rate'); s.pricing_source = 'derived';
+    }
+    validateInventory(); bumpConfig();
     await save(); return { body: s };
   }
+  if (method === 'POST' && p === 'screens') {
+    const screen: any = { ...validateScreenInput(body), id: uid('scr'), org_id: body.org_id, created_at: nowISO(), rate_version: uid('rate') };
+    if (body.rate_seed) {
+      const rate = reverseCalculate({ ...body.rate_seed, venue_base: screen.venue_base, size_factor: screen.size_factor, loop_length_s: screen.loop_length_s, slot_duration_s: screen.slot_duration_s });
+      Object.assign(screen, { rate_seed: rate, advertiser_slots: rate.advertiser_slots, monthly_value: rate.seed_monthly_value, slot_price_month: rate.seed_slot_price_month, pricing_source: 'derived_from_self_reported_revenue' });
+    }
+    db.screens.push(screen); const pairing = issuePairing(db, screen); bumpConfig(); await save();
+    return { status: 201, body: { screen, pairing } };
+  }
+  if (method === 'POST' && seg[0] === 'screens' && seg[1]) {
+    const screen = db.screens.find((s: any) => s.id === seg[1]);
+    if (seg[2] === 'pairing') { const pairing = issuePairing(db, screen); await save(); return { body: pairing }; }
+    revokeDevices(db, screen.id); await save(); return { body: { ok: true } };
+  }
   if (method === 'POST' && p === 'group/resolve') {
-    const g = (db.groups || []).find((x: any) => x.id === body.group_id);
-    if (!g) return { body: { screen_ids: [] } };
-    if (g.group_type === 'static') return { body: { screen_ids: g.screen_ids } };
-    const r = g.rule_json || {};
-    return { body: { screen_ids: db.screens.filter((s: any) => s.org_id === (body.org_id || g.org_id)
-      && (!r.venue_types || r.venue_types.includes(s.venue_type))
-      && (!r.min_size || Number(s.size_in) >= r.min_size)
-      && (!r.location_tier || s.location_tier === r.location_tier)).map((s: any) => s.id) } };
+    const g = db.groups.find((x: any) => x.id === body.group_id);
+    return { body: { screen_ids: db.screens.filter((s: any) => s.org_id === g.org_id && (g.group_type === 'static' ? g.screen_ids.includes(s.id) : groupMatches(s, g.rule_json))).map((s: any) => s.id) } };
+  }
+  if (method === 'POST' && seg[0] === 'group') {
+    const g = seg[1] ? db.groups.find((x: any) => x.id === seg[1]) : { id: uid('grp'), created_at: nowISO(), ...body };
+    if (seg[1]) Object.assign(g, body); else db.groups.push(g);
+    validateInventory(); bumpConfig(); await save(); return { body: g };
   }
   if (method === 'POST' && p === 'org') {
     const o = { id: uid('org'), type: 'operator', platform_fee_pct: 10, status: 'active', created_at: nowISO(), ...body };
@@ -389,8 +439,8 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
     if (can(actor?.role, 'money'))
       for (const k of ['gstin', 'pan', 'state_code', 'payout_method', 'upi_id', 'payout_note']) if (k in body) o[k] = body[k];
     // only the platform may move an operator's fee
-    if ('platform_fee_pct' in body && body._as === 'platform_admin') o.platform_fee_pct = Number(body.platform_fee_pct) || 0;
-    await save(); return { body: o };
+    if ('platform_fee_pct' in body && isAdmin) o.platform_fee_pct = Number(body.platform_fee_pct) || 0;
+    await save(); return { body: orgView(o, actor) };
   }
   if (method === 'POST' && seg[0] === 'user' && seg[1]) {
     const u = db.users.find((x: any) => x.id === seg[1]);
@@ -400,7 +450,7 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
     if (u.id !== actor!.id && !can(actor?.role, 'team'))
       return { status: 403, body: { error: 'You can only edit your own profile.' } };
     for (const k of ['name', 'email', 'phone']) if (k in body) u[k] = body[k];
-    await save(); return { body: u };
+    await save(); return { body: publicUser(u) };
   }
   if (method === 'GET' && p === 'settings') return { body: db.settings || {} };
   if (method === 'POST' && p === 'settings') {
@@ -417,7 +467,7 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
       target_platform: ['android'], status: 'active', values: {}, created_at: nowISO(), ...body };
     const bad = lockedViolations(c);
     if (bad.length) return { status: 403, body: { error: `Locked settings cannot be set below the platform layer: ${bad.join(', ')}` } };
-    db.configs.push(c); await save(); return { body: c };
+    db.configs.push(c); bumpConfig(); validateInventory(); await save(); return { body: c };
   }
   /** Assign one config to many screens by creating or moving screen-layer overrides. */
   if (method === 'POST' && p === 'config/assign') {
@@ -436,7 +486,7 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
       own.values = { ...own.values, ...src.values };
       own.updated_at = nowISO();
     }
-    await save(); return { body: { ok: true, screens: (body.screen_ids || []).length } };
+    bumpConfig(); validateInventory(); await save(); return { body: { ok: true, screens: (body.screen_ids || []).length } };
   }
   if (method === 'POST' && seg[0] === 'config' && seg[1] && !seg[2]) {
     const c = db.configs.find((x: any) => x.id === seg[1]);
@@ -447,29 +497,12 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
     for (const k of ['name', 'description', 'tags', 'layer', 'target_id', 'priority', 'target_platform', 'values', 'status'])
       if (k in body) c[k] = body[k];
     c.updated_at = nowISO();
-    await save(); return { body: c };
+    bumpConfig(); validateInventory(); await save(); return { body: c };
   }
   if (method === 'POST' && seg[0] === 'config' && seg[1] && seg[2] === 'delete') {
     db.configs = db.configs.filter((x: any) => x.id !== seg[1]);
-    await save(); return { body: { ok: true } };
+    bumpConfig(); validateInventory(); await save(); return { body: { ok: true } };
   }
-  /** Setup preview: the player posts a still while aiming the camera. */
-  if (method === 'POST' && seg[0] === 'screen' && seg[1] && seg[2] === 'frame') {
-    const screen = db.screens.find((x: any) => x.id === seg[1]);
-    if (!screen) return { status: 404, body: { error: 'not found' } };
-    const r = resolveFor(screen);
-    if (!r.preview_frames?.value) return { status: 403, body: { error: 'Setup preview is off for this screen' } };
-    db.frames = (db.frames || []).filter((f: any) => f.screen_id !== screen.id);
-    db.frames.push({ screen_id: screen.id, data: String(body.data || '').slice(0, 900_000), at: nowISO() });
-    await save(); return { body: { ok: true } };
-  }
-  if (method === 'GET' && seg[0] === 'screen' && seg[1] && seg[2] === 'frame') {
-    const f = (db.frames || []).find((x: any) => x.screen_id === seg[1]);
-    // a still is only good while it is fresh; a stale aim is worse than none
-    if (!f || Date.now() - new Date(f.at).getTime() > 30 * 60_000) return { body: { data: null } };
-    return { body: { data: f.data, at: f.at } };
-  }
-
   /** Set or clear keys on a screen's own override config, creating it on demand. */
   if (method === 'POST' && seg[0] === 'screen' && seg[1] && seg[2] === 'config') {
     const screen = db.screens.find((x: any) => x.id === seg[1]);
@@ -487,6 +520,7 @@ export async function handle(method: string, seg: string[], q: URLSearchParams, 
     own.values = { ...own.values, ...(body.values || {}) };
     for (const k of body.unset || []) delete own.values[k];
     own.updated_at = nowISO();
+    bumpConfig(); validateInventory();
     if (!Object.keys(own.values).length) db.configs = db.configs.filter((x: any) => x.id !== own.id);
     await save();
     return { body: { config: resolveFor(screen), stack: cfg.applicable(screen, db.groups || [], db.configs || []).map((c: any) => ({ id: c.id, name: c.name, layer: c.layer })) } };

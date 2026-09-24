@@ -17,6 +17,7 @@ const SUMMARY = ['operating_hours', 'loop_length_s', 'slot_duration_s', 'sync_in
   'daily_restart', 'restart_times', 'sample_interval_s', 'detection_zone', 'camera_source', 'work_offline'];
 import { ScreenPreview, DayBar, LoopBar, ZoneEditor } from '@/components/ui/config-visuals';
 import { cn } from '@/lib/utils';
+import { LOCKED_KEYS } from '@/lib/config';
 
 type Setting = {
   key: string; label: string; group: string; ctl: string; unit?: string;
@@ -299,8 +300,9 @@ export function ConfigList({ user, onOpen, onChanged }: {
           render: (c: any) => <>{Object.keys(c.values || {}).length} <span className="text-muted-foreground">of 116</span></> },
         { label: 'Platforms', render: (c: any) => <span className="font-mono text-[11.5px] text-muted-foreground">{(c.target_platform || []).join(' · ')}</span> },
         { label: 'Priority', num: true, sort: (c: any) => c.priority ?? 0, render: (c: any) => c.priority ?? 0 },
-        { label: '', render: (c: any) => Object.keys(c.values || {}).length
-          ? <button onClick={() => setAssign(c)} className="whitespace-nowrap text-[12px] font-medium text-primary hover:underline">Copy to screens</button>
+        { label: '', render: (c: any) => Object.keys(c.values || {}).some(k => LOCKED_KEYS.includes(k))
+          ? <span className="text-[12px] text-muted-foreground">Inherited from platform</span>
+          : Object.keys(c.values || {}).length ? <button onClick={() => setAssign(c)} className="whitespace-nowrap text-[12px] font-medium text-primary hover:underline">Copy to screens</button>
           : <span className="text-[12px] text-muted-foreground">empty</span> },
         { label: 'Tags', render: (c: any) => (c.tags || []).length
           ? <div className="flex flex-wrap gap-1">{c.tags.map((t: string) => <span key={t} className="rounded border border-border/70 bg-muted px-1.5 py-0.5 font-mono text-[10.5px] text-muted-foreground">{t}</span>)}</div>
@@ -389,10 +391,18 @@ export function ConfigEditor({ id, user, onGo, onChanged }: {
 
   const dirty = JSON.stringify(values) !== JSON.stringify(conf.values || {});
   const isPlatform = conf.layer === 'platform';
-  const canEdit = (s: Setting) => !s.locked || (isPlatform && user.role === 'platform_admin');
+  const mayEditConfig = !isPlatform || user.role === 'platform_admin';
+  const canEdit = (s: Setting) => mayEditConfig && (!s.locked || (isPlatform && user.role === 'platform_admin'));
 
-  const setKey = (k: string, v: any) => { setValues(p => ({ ...p, [k]: v })); setSaved(false); setErr(''); };
-  const unset = (k: string) => setValues(p => { const n = { ...p }; delete n[k]; return n; });
+  const setKey = (k: string, v: any) => {
+    const setting = schema.settings.find(x => x.key === k);
+    if (!setting || !canEdit(setting)) return;
+    setValues(p => ({ ...p, [k]: v })); setSaved(false); setErr(''); };
+  const unset = (k: string) => {
+    const setting = schema.settings.find(x => x.key === k);
+    if (!setting || !canEdit(setting)) return;
+    setValues(p => { const n = { ...p }; delete n[k]; return n; });
+  };
 
   const needle = q.trim().toLowerCase();
   const shown = schema.settings.filter(s =>
@@ -436,18 +446,18 @@ export function ConfigEditor({ id, user, onGo, onChanged }: {
           if (!items.length) return null;
           const isSet = (k: string) => k in values;
           const row = (x: Setting) => (
-            <SettingRow key={x.key} s={x} isSet={isSet(x.key)}
+            <SettingRow key={x.key} s={canEdit(x) ? { ...x, locked: false } : x} isSet={isSet(x.key)}
               value={isSet(x.key) ? values[x.key] : x.def}
               editable={canEdit(x)}
               onChange={v => setKey(x.key, v)}
-              onReset={isSet(x.key) ? () => unset(x.key) : undefined} />
+              onReset={isSet(x.key) && canEdit(x) ? () => unset(x.key) : undefined} />
           );
           return (
             <GroupCard key={g.id} group={g}
               common={items.filter(x => x.common || isSet(x.key))}
               advanced={items.filter(x => !x.common && !isSet(x.key))}
               forceOpen={!!needle}
-              visual={!needle ? <GroupVisual group={g.id}
+              visual={!needle && mayEditConfig ? <GroupVisual group={g.id}
                 get={k => (k in values ? values[k] : schema.settings.find(x => x.key === k)?.def)}
                 set={(k, v) => setKey(k, v)} /> : undefined}
               renderRow={row} />
@@ -456,9 +466,9 @@ export function ConfigEditor({ id, user, onGo, onChanged }: {
       </div>
     </div>
 
-    <SaveBar dirty={dirty} saving={saving} saved={saved} err={err}
+    {mayEditConfig && <SaveBar dirty={dirty} saving={saving} saved={saved} err={err}
       note={`${count} setting${count === 1 ? '' : 's'} carried by this config.`}
-      onSave={save} onDiscard={() => setValues({ ...(conf.values || {}) })} />
+      onSave={save} onDiscard={() => setValues({ ...(conf.values || {}) })} />}
   </>);
 }
 
@@ -553,7 +563,7 @@ export function ScreenConfig({ screenId, d, onChanged }: {
     schema.settings.filter(x => x.group === g.id && resolved[x.key]?.source).length]));
 
   return (<>
-    {drift.length > 0 && (
+    {drift.length > 0 && (d.caps ?? []).includes('sales') && (
       <Card className="mb-4 border-warn/40 bg-warn/[0.06] p-4">
         <div className="text-[13px] font-semibold text-warn">Pricing inputs changed since this rate was set</div>
         <div className="mt-2 space-y-1 text-[12.5px]">

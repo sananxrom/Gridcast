@@ -7,7 +7,21 @@
       ".git",
       "firebase-debug.log",
       "firebase-debug.*.log",
-      "functions"
+      "functions",
+      ".next",
+      "data",
+      ".env*",
+      ".agents",
+      ".claude",
+      ".firebase",
+      "Claude outputs",
+      "gridcast-research",
+      "AI-LOG.md",
+      "tests",
+      "playwright-report",
+      "test-results",
+      "*.tsbuildinfo",
+      "apphosting.emulator.yaml"
     ]
   },
   "emulators": {
@@ -20,5 +34,12 @@
       "enabled": true
     },
     "singleProjectMode": true
+  },
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json",
+    "edition": "enterprise",
+    "database": "gridcast",
+    "location": "asia-south1"
   }
 }
