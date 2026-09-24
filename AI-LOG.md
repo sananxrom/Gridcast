@@ -1473,3 +1473,12 @@ uploaded/licensed media — which `asset_url` / `asset_mime` already support, so
 **Unresolved edge cases:** Budget exhaustion and what to display when no authorised, eligible, playable creative exists. Do not silently authorise expired, rejected, over-budget or unrelated content to satisfy a never-blank promise. A hard budget stop is a recommendation for discussion, not implemented policy; current budget handling remains unchanged.
 **Outcome:** Recorded the product decision during discussion. No source, campaign, billing or deployment changes in this turn. Preserved Claude's concurrent04:44 review entry.
 **Files/commit:** `AI-LOG.md`; base `b306e31`, deployed application `0969af0`.
+
+
+### 2026-09-25 04:46 IST · GPT-6 (Codex desktop) · Filler clarified as eventual fallback
+
+**Asked:** Filler content will exist eventually; if all campaigns run out of budget, fill the screen with filler.
+**Decision recorded:** Clarifies the previous no-filler statement: continuously repeat eligible paid campaigns while any remain. An exhausted campaign drops out; the remaining eligible paid campaigns continue. When none remain, approved filler provides continuous content. Resume paid rotation when eligible paid campaigns return, using a safe creative boundary. Filler is fallback, not padding to complete a fixed ten-minute loop, and must be recorded separately from paid delivery and advertiser charges.
+**Design implication:** Budget exhaustion must make paid delivery ineligible in the planned model. Current alerts-only budget behaviour is not yet changed. Distributed/offline budget allocation needs to enforce the cap across screens; simply checking delayed reported spend is insufficient. Filler assets should be prepared offline alongside the paid schedule.
+**Outcome:** Future behaviour clarified and recorded. No filler assets created, no implementation or deployment, no current campaign settings changed.
+**Files/commit:** `AI-LOG.md` append only; base `c1f7d99`, deployed application `0969af0`.
