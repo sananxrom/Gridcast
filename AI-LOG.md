@@ -1409,3 +1409,67 @@ of these decisions and are not in git.
 **Decision recorded:** Extend the duration-based scheduling proposal: video duration comes from the media file; still-image display duration is editable on the creative and defaults to20 seconds. Both must satisfy the destination screen's operator-defined minimum/maximum. An out-of-range default or manual value must be flagged for that placement, not silently changed. The selected image duration reserves airtime; actual visible display time determines delivery evidence and the presence sampling window.
 **Outcome:** Requirement recorded for the proposed structural change. No image upload/player support implemented, no existing creative modified and no deployment made.
 **Files/commit:** `AI-LOG.md` append only; base `bd2dccf`, deployed application `0969af0`.
+
+### 2026-09-25 04:44 IST · claude-opus-5 (Cowork) · Correction accepted; image creatives weaken `rendered`
+
+**Asked:** Sanan: "check log."
+**Did:** Read Codex's 04:17 → 04:37 entries. Checked `lib/devices.ts` and `app/player/page.tsx` against the
+new image-creative requirement. No changes made.
+
+**My claim was wrong and Codex corrected it.** At 04:14 I wrote that `dda3a8c` was committed but not
+deployed and the demo not seeded. Codex had deployed it as `build-2026-09-24-009` and seeded live. My note
+was already stale when written — I read git and the log, not the live rollout, and stated a deployment
+status I had not verified. Current application is `0969af0` / `build-2026-09-24-010`. Demo is live: 4 orgs,
+13 screens, 8 advertisers, 13 creatives, 8 campaigns, with before/after hashes showing existing records
+untouched. Good catch on the ₹0.15 → ₹0 rate-rounding display bug, which only surfaced because real demo
+economics used sub-rupee rates.
+
+**New finding — the image-creative requirement (04:37) quietly weakens the trust layer.**
+`rendered = completed && durationValid && mediaValid` (`lib/devices.ts:210`). The three predicates are
+independent *for video*:
+- `durationValid` (`:178`) checks wall-clock playing time.
+- `mediaValid` (`:177`) checks **media-timeline progress** — `media_started_s` / `media_ended_s`, sourced
+  from the YouTube player's `getCurrentTime()` or `<video>.currentTime`.
+
+**A still image has no media timeline.** To emit a receipt at all, the player would have to synthesise
+`mediaStart = 0, mediaEnd = duration_s` from the same wall-clock timer `durationValid` already reads — at
+which point `mediaValid` becomes a tautology and two of the three `rendered` predicates collapse into one.
+An image receipt would then be strictly weaker evidence than a video receipt while being indistinguishable
+from one in the data.
+
+Concretely: a stalled `<video>` reports `error` and a frozen `currentTime`; a failed image decode on a naive
+timer reports a clean `ended`. `mediaValid` exists precisely to catch the frozen-playback case, and for
+images it would catch nothing.
+
+**Proposed fix (not implemented, for the same discussion Codex opened):** prove **decode and paint**, not
+time. `img.decode()` resolving, `naturalWidth/naturalHeight` > 0 and matching the creative's declared
+dimensions — the exact image analogue of the `videoWidth/videoHeight` check already at
+`app/player/page.tsx:366` — plus a `requestAnimationFrame`-sampled visibility check over the display window.
+Record that as its own evidence kind (e.g. `media_evidence: 'image_decode'` vs `'media_timeline'`) so the
+receipt states which proof it carries. **Never let an image emit a synthetic media timeline that looks like a
+video's** — that would put two different strengths of evidence behind one identical-looking field, which is
+the one thing this trust layer exists to prevent.
+
+**Second note on the duration-scheduling proposal (04:36):** `app/player/page.tsx:239` mirrors `slotUnits`
+client-side —`reservedSeconds = Math.ceil(item.duration_s / baseSlot) * baseSlot`. Any change to rounding
+must change in both places or reserved playback time and accounted airtime diverge silently. Codex was right
+to flag that doc 16 deliberately preserved this rounding; changing it is a contract change, not a refactor.
+
+**Third — the live demo cannot exercise offline playback, at all.** All nine creatives are YouTube embeds,
+and Codex is correct that YouTube policy forbids caching them. The existing offline queue stores **receipts,
+not media**: today's offline resilience is about *reporting*, not *playback*. That distinction is easy to
+oversell and should be stated plainly wherever it is claimed. Offline playback work needs its own fixture of
+uploaded/licensed media — which `asset_url` / `asset_mime` already support, so the path exists.
+
+**Outcome:** Read-only. No source changes, tests, seed, deployment or push.
+**Files:** `AI-LOG.md`. Application `0969af0`; log base `b306e31`.
+
+
+### 2026-09-25 04:44 IST · GPT-6 (Codex desktop) · Continuous rotation selected in scheduling discussion
+
+**Asked:** Simply restart after the campaigns finish; keep the screen occupied, no filler, and give brands more airtime.
+**Decision recorded:** User prefers continuous rotation of eligible paid creatives, immediately repeating after the final creative, without waiting for a fixed ten-minute cycle or inserting house/filler content. This supersedes the earlier discussion recommendation to fill unused loop time with house content. Retain the user's image duration requirement (editable,20-second default) and creative-duration/screen-limit direction.
+**Consequences discussed:** Repetition increases delivery frequency and, under existing per-play pricing, can increase accrued spend. Extra appearances are not extra unique people. Booking frequency/capacity calculations, rotation, device assignments, media preparation and reporting must agree with the new model; this must not be described as merely changing a gap setting. Preloading/caching is still required to avoid loading gaps. Existing YouTube demo media cannot guarantee offline continuity.
+**Unresolved edge cases:** Budget exhaustion and what to display when no authorised, eligible, playable creative exists. Do not silently authorise expired, rejected, over-budget or unrelated content to satisfy a never-blank promise. A hard budget stop is a recommendation for discussion, not implemented policy; current budget handling remains unchanged.
+**Outcome:** Recorded the product decision during discussion. No source, campaign, billing or deployment changes in this turn. Preserved Claude's concurrent04:44 review entry.
+**Files/commit:** `AI-LOG.md`; base `b306e31`, deployed application `0969af0`.
