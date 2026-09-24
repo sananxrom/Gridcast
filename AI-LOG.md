@@ -868,3 +868,9 @@ about hardest, because it makes the ledger quietly unreliable exactly where it m
 **Verification:** Typecheck and production build PASS. Full suite: 109 entries, 108 pass, one emulator entry skipped. Admin browser suite 5/5 pass, including creative save/cancel and existing client/upload/approval/campaign workflows. New endpoint regression covers cross-tenant denial, protected fields, invalid values, audit, approval reset, uploaded metadata and archived advertiser restrictions. `git diff --check` PASS. No test failures.
 **Files:** `components/views/commercial.tsx`, `lib/access.ts`, `lib/api.ts`, `tests/authorization.test.cjs`, `tests/admin.browser.cjs`, `AI-LOG.md`.
 **Commit/release:** Base `fdb0817`; committing this scoped change on `codex/gridcast-trust-layer-wp5` and releasing to the existing Firebase backend. Deployment outcome to be appended. No live creative records modified for testing.
+
+
+### 2026-09-25 01:50 IST · GPT-6 (Codex desktop) · Creative editor live on Firebase
+
+**Outcome:** Released `8184d10b0aedff30603a63b610398a47b85b206e` to Firebase `gridcast-backend`, `build-2026-09-24-004`: READY, rollout SUCCEEDED, 100% traffic. Previous build `003` remains available. Fetched live `/admin` and its referenced JavaScript bundles: Edit creative name, Save creative and approval-warning controls are present. `/api/_health` returned 200, Firestore database `gridcast`, ok=true. No live customer creative was edited for verification. Local save/cancel and endpoint checks passed as recorded above; temporary test server stopped.
+**Files/commit:** `AI-LOG.md` completion append; application commit `8184d10`. Log-only follow-up commit on the same review branch, no additional deployment required.
