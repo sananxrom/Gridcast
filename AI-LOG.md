@@ -1401,3 +1401,11 @@ of these decisions and are not in git.
 **Proposal, not implementation approval:** Exact verified creative duration; per-screen accepted duration range; bookings expressed as appearances and reserved airtime; background download/verification of all required media for a bounded authorised period; prepare the next video before handoff; activate complete schedule versions at safe boundaries. Preserve advertiser/network ceilings, rotation and promised frequency. Fill unused airtime with approved house content rather than silently increasing paid plays. Cached media must not outlive playback authorisation; cached schedule and receipt limits need explicit design. Browser storage readiness must be visible and recoverable.
 **Constraint:** YouTube embeds remain online demo sources. Offline-capable production requires original uploaded/licensed media files; YouTube API policies prohibit caching/downloading audiovisual content without approval and offline playback. Checked official developer policies and MDN storage persistence/eviction documentation.
 **Outcome:** Discussion only. No source, config, inventory, booking or deployment changes. No new offline guarantee. Application remains0969af0; log basefe4ee1d.
+
+
+### 2026-09-25 04:37 IST · GPT-6 (Codex desktop) · Image creative duration requirement
+
+**Asked:** Image creatives must support manually configured duration, defaulting to20 seconds.
+**Decision recorded:** Extend the duration-based scheduling proposal: video duration comes from the media file; still-image display duration is editable on the creative and defaults to20 seconds. Both must satisfy the destination screen's operator-defined minimum/maximum. An out-of-range default or manual value must be flagged for that placement, not silently changed. The selected image duration reserves airtime; actual visible display time determines delivery evidence and the presence sampling window.
+**Outcome:** Requirement recorded for the proposed structural change. No image upload/player support implemented, no existing creative modified and no deployment made.
+**Files/commit:** `AI-LOG.md` append only; base `bd2dccf`, deployed application `0969af0`.
