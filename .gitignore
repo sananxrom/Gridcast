@@ -11,3 +11,6 @@ _scratch/
 *.tsbuildinfo
 firebase-debug.log
 .firebase/
+
+# Regenerable local codebase-memory graph artifacts
+.codebase-memory/
