@@ -1375,3 +1375,11 @@ of these decisions and are not in git.
 **Failures:** Preservation probe initially queried nonexistent `received_at`, returningempty; correctedto `server_received_at` and confirmedongoingoriginalTestdelivery. No liveimport failures.
 **Files/commit:** `lib/utils.ts`, `components/views/campaign-list.tsx`, `components/views/campaign-detail.tsx`, `AI-LOG.md`; basеdda3a8c. Preserved concurrentClaude append.
 **Open:** Newdemo screens needpairing before physicaldelivery andfollow09:00–21:00IST. Physical72-hourburnin/CVaccuracy remainunverified; embeddedpreview is not proof ofscreen delivery. Doc17/18analytics work remainsseparate.
+
+
+### 2026-09-25 04:23 IST · GPT-6 (Codex desktop) · Final demo release verified
+
+**Did:** Pushed and deployed `0969af0086e62447e4b20bf16ef1181e84569600` to Firebase. Build `build-2026-09-24-010` is READY, rollout SUCCEEDED, and receives 100% of traffic. Reloaded the live Brave campaign dashboard and verified Coke displays ₹0.15/play and the existing Test campaign ₹0.93/play. Stopped the temporary local verification server.
+**Outcome:** The user's nine supplied videos passed actual embedded playback. Seven advertisers, nine approved creatives and seven active network campaigns are live, targeting twelve additive demo screens. Coke and Lay's each have two-creative rotation. Live rerun added zero records. The dashboard was left open in Brave.
+**Limits:** New demo screens still need pairing and follow 09:00–21:00 IST, with campaign dates 2026-09-25 through 2026-10-25. Browser playback checks do not establish physical screen delivery, camera accuracy or a 72-hour burn-in. Existing Test delivery continued during this work; its running accrual was not frozen. No credentials or pairing bindings changed.
+**Files/commit:** `AI-LOG.md` append only after deployed source `0969af0`. This following log-only commit does not require another application rollout.
