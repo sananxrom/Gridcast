@@ -1482,3 +1482,78 @@ uploaded/licensed media — which `asset_url` / `asset_mime` already support, so
 **Design implication:** Budget exhaustion must make paid delivery ineligible in the planned model. Current alerts-only budget behaviour is not yet changed. Distributed/offline budget allocation needs to enforce the cap across screens; simply checking delayed reported spend is insufficient. Filler assets should be prepared offline alongside the paid schedule.
 **Outcome:** Future behaviour clarified and recorded. No filler assets created, no implementation or deployment, no current campaign settings changed.
 **Files/commit:** `AI-LOG.md` append only; base `c1f7d99`, deployed application `0969af0`.
+
+### 2026-09-25 04:52 IST · claude-opus-5 (Cowork) · Continuous rotation: five consequences, verified in source
+
+**Asked:** Sanan: "check log." (Reviewing Codex's 04:44 continuous-rotation and 04:46 filler-fallback
+decisions.)
+**Did:** Read both entries; checked `lib/devices.ts:188-210`, `lib/inventory.ts:260` and the doc 16 capacity
+model against them. No changes made. Codex's consequence list is right as far as it goes; these five are
+either missing from it or understated, and all five are verified against current source.
+
+**1 — Continuous rotation dissolves the unit the entire capacity ledger is written in.**
+Doc 16 took four review rounds to settle: `advertiser_slots` / `network_slots` = distinct advertisers;
+`physicalCapacity` and `slots_per_loop` = **appearances per loop**. "Per loop" is not a detail of those two —
+it is their unit. Remove the fixed loop and `slots_per_loop`, `defaultSlotsPerLoop` and `physicalCapacity`
+have no referent at all. This is not "must agree with the new model"; the noun ceases to denote.
+The distinct-advertiser counts survive untouched. The appearance unit must be **replaced**, not adjusted —
+the natural substitutes are share of airtime or appearances per hour, and whichever is chosen has to be
+stated once in code and once in doc 16, which currently says the opposite.
+
+**2 — `withinAssignment` provides no budget protection whatsoever, and will be mistaken for some.**
+`lib/devices.ts:190`: `assignmentCap = floor(assignmentWindow / slotMs) + 1`. It is derived purely from
+**physical time** — "how many times could this creative fit in its 1-hour window." For a 15 s creative that
+is **241 plays per assignment period**. Under a fixed 10-minute loop at 6 appearances, a campaign actually
+plays ~36/hour, so the cap sat ~6.7× above real usage and read as a generous anti-replay ceiling. Under
+continuous rotation with one eligible campaign, the campaign genuinely plays ~240/hour — and the cap permits
+it exactly. The ceiling that looked like a safety margin was margin only because the loop was doing the
+limiting. Remove the loop and the safety margin was never there.
+
+**3 — Per-play spend becomes inversely proportional to sell-through, which no advertiser agreed to.**
+With N eligible campaigns on a screen, each gets roughly 240/N plays per hour. So the **same campaign, same
+rate, same screen** burns budget ~6.7× faster when it is the only thing booked than when the screen is full.
+At the live demo's ₹0.15/play: one campaign alone on one screen over a 12-hour day is ~2,880 plays ≈ **₹432**,
+against ~₹65 under the previous loop model. An advertiser's delivery and bill now depend on the operator's
+sell-through — a variable they cannot see, did not agree to, and which moves against them precisely when the
+screen is emptiest. **This is the thing that will produce a dispute**, and it is the strongest argument for
+booking share-of-voice (or a per-campaign frequency/pacing cap) rather than raw appearances.
+
+**4 — Budget exhaustion is a warning today, and continuous rotation makes the overrun maximal.**
+`lib/inventory.ts:260` raises `budget_exhausted_manual_action` — a warning. Nothing stops delivery. Assignments
+live an hour (`ASSIGNMENT_TTL = 3600e3`) and backlogs are accepted for 72 hours (`BACKLOG_TTL`), so a screen
+may legitimately keep playing an exhausted campaign for an hour after exhaustion, and an offline screen far
+longer. Under continuous rotation the screen spends that hour playing the exhausted campaign **as fast as it
+physically can**. The overspend is worst exactly where it is least acceptable.
+**The hook already exists:** `assignment_uses` is a per-assignment allowance counter written on the device
+document in the receipt transaction. Mint the assignment with a cap derived from **remaining budget**, not
+only from physical time — `min(physicalCap, floor(remaining_budget / rate))`, apportioned across the screens
+the campaign is live on. That enforces the cap at the edge, offline, without trusting delayed reported spend,
+which Codex correctly says is insufficient.
+
+**5 — Filler must be excluded from delivery and still measured.**
+Filler occupies the camera. Those presence samples must never be attributed to an advertiser — and they are
+genuinely valuable as venue footfall, which is a sellable number. Record filler plays with a null
+`campaign_id` and a distinct source, and give doc 17's `screen_day` rollup separate filler counters, so
+footfall is neither lost nor contaminating advertiser figures. Filler airtime also still consumes
+`withinThroughput` (§2's 10% margin), so it cannot be treated as free.
+
+**One correction to my own doc 17 ordering:** `withinThroughput` is `spent + played <= HOUR * 1.1` — 66
+minutes of playback per playback hour. Under a loop with gaps a screen used perhaps half of that. Under
+continuous rotation it runs at ~60 min/hour **by design**, leaving 10% for clock jitter, duplicate retries
+and rounding. That check was written as an abuse ceiling; continuous rotation makes it a production operating
+constraint, and it should be re-tested at the new operating point before the model ships.
+
+**Outcome:** Read-only. No source changes, tests, seed, deployment or push. Recommendation: settle the
+capacity unit (§1) and the share-of-voice vs appearances question (§3) before any implementation — they
+change the booking contract, not the player.
+**Files:** `AI-LOG.md`. Application `0969af0`; log base `4fdd416`.
+
+
+### 2026-09-25 04:50 IST · GPT-6 (Codex desktop) · Reviewed Claude's continuous-rotation consequences
+
+**Asked:** Check the latest log.
+**Verified:** Claude's04:52 review correctly identifies that the current assignment replay ceiling is based on physical duration, not money (`lib/devices.ts`), and budget exhaustion currently warns rather than stops (`lib/inventory.ts`). Fixed-loop capacity/frequency assumptions must be replaced explicitly for continuous rotation.
+**Corrections/qualifications:** (1)72-hour backlog acceptance permits late reporting, not72-hour authorised playback. Assignments have a one-hour validity; the player checks expiry before starting items and the server validates reported start time against that window. Therefore “an offline screen far longer” is not established by BACKLOG_TTL. (2)Filler camera measurements are presence, not footfall, unique visitors or reach. They may be recorded separately without attributing them to advertisers. (3)A receipt-side assignment counter alone cannot enforce an offline spending allowance. The server must atomically reserve budget across screens/assignments, the player must persist and enforce its allowance before each play, and the server must validate/reconcile receipts without prematurely reissuing reserved funds. (4)The review's6.7× example compares a six-appearance fixed-loop assumption, not the live demo's explicit one appearance per campaign per loop (`lib/demo-network.ts`). (5)Continuous rounds can retain explicit relative turns/weights; removing fixed wall-clock loops does not by itself require switching the commercial product to share of airtime. That remains a product choice.
+**Recommendation:** Keep the user's continuous paid rotation and filler fallback direction. Describe allocation clearly; retain actual per-play charges only with explicit budget protection and agreed pacing. Filler must not create advertiser charges or contaminate paid presence; continuity/throughput and offline restart need dedicated tests.
+**Outcome:** Source-backed review only. No source, booking, deployment or live-data changes. Preserved Claude's concurrent entry.
+**Files/commit:** `AI-LOG.md`; base `4fdd416`, deployed application `0969af0`.
