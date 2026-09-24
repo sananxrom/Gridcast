@@ -905,3 +905,11 @@ about hardest, because it makes the ledger quietly unreliable exactly where it m
 
 **Outcome:** Firebase `build-2026-09-24-006` READY, rollout SUCCEEDED, 100% traffic, source `d86d4d8e0149669223ecf7cab9ad1f752d437471`. Live brand SVG, SVG favicon, ICO and Apple icon all return 200 and match release bytes. Live sign-in HTML uses versioned solid asset and 24px wordmark. Local preview tab/server cleaned up. No deployment failures.
 **Files/commit:** Application `d86d4d8`; `AI-LOG.md` completion append in log-only follow-up commit.
+
+
+### 2026-09-25 02:33 IST · GPT-6 (Codex desktop) · Sidebar subtitle spacing and scope explanation
+
+**Asked:** Reduce the gap between Gridcast and Platform; explain All organisations versus Gridcast.
+**Did:** Reduced organisation-name bottom margin from 4px to 2px and applied compact line-height after font-size classes so class merging retains it. Explained All organisations is the master-admin overview across tenants; Gridcast selects the platform's own organisation for records it owns. Organisation selection does not change the signed-in admin role; creation requires explicit ownership scope. No scope/permission behavior changed.
+**Verification:** Production build/typecheck and diff checks PASS; checked merged classes retain `mb-0.5 leading-none`. No new tests for this one-line spacing change; no failures.
+**Files/commit:** `components/ui/sidebar-nav.tsx`, `AI-LOG.md`; base `d8cdb93`, scoped Firebase release follows.

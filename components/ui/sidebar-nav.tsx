@@ -40,7 +40,7 @@ function OrgSwitcher({ orgs, current, onSelect, collapsed }: {
         <div className="flex items-center gap-3 overflow-hidden">
           <OrgMark current={current} />
           <div className="flex flex-col overflow-hidden">
-            <span className={cn("mb-1 max-w-[130px] truncate font-medium leading-none", current.type === 'gridcast' && current.name === 'Gridcast' ? "text-lg font-semibold tracking-tight" : "text-[13px]")}>{current.name}</span>
+            <span className={cn("max-w-[130px] truncate font-medium", current.type === 'gridcast' && current.name === 'Gridcast' ? "text-lg font-semibold tracking-tight" : "text-[13px]", "mb-0.5 leading-none")}>{current.name}</span>
             <span className="text-[11px] leading-none text-muted-foreground">
               {current.type === 'gridcast' ? 'Platform' : 'Operator'}
             </span>
