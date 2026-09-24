@@ -5,20 +5,21 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 const path = require('node:path');
 const moduleObject = { exports: {} };
-new Function('require','module','exports', ts.transpileModule(fs.readFileSync(path.join(__dirname, '../lib/devices.ts'), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText)(require,moduleObject,moduleObject.exports);
+new Function('require','module','exports', ts.transpileModule(fs.readFileSync(path.join(__dirname, '../lib/devices.ts'), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText)(name=>name.startsWith('.')?require('./load-lib.cjs')(name.slice(2)):require(name),moduleObject,moduleObject.exports);
 const { issuePairing, pairingCodeHash, deviceIdFromToken, deviceRoute, revokeDevices, playRecordId } = moduleObject.exports;
 const MODEL = 'coco-ssd@2.2.3/lite_mobilenet_v2';
 function fixture() {
   let now = Date.parse('2026-09-24T00:00:00.000Z');
   const db = { orgs: [{id:'org1',status:'active'},{id:'org2',status:'active'}], screens: [{id:'screen1',org_id:'org1',status:'active',has_camera:true},{id:'screen2',org_id:'org2',status:'active'}], devices: [], device_assignments: [], plays: [], presence: [], campaigns: [{id:'campaign1',org_id:'org1',advertiser_id:'advertiser1',rate_type:'per_play',rate_value:9,accrued_spend:0}] };
   let config = { model:'coco-ssd', sample_interval_s:2, count_ceiling:50, camera_fail_mode:'continue' };
-  const options = () => ({ now, clientKey:crypto.randomUUID(), playlist: () => ({ items:[{campaign_id:'campaign1',creative_id:'creative1',duration_s:10,youtube_id:'example',rate_value:2}],config,config_version:3 }) });
+  const item = {campaign_id:'campaign1',creative_id:'creative1',duration_s:10,youtube_id:'example',rate_value:2};
+  const options = () => ({ now, clientKey:crypto.randomUUID(), playlist: () => ({ items:[item],config,config_version:3 }) });
   const call = (method, route, body={}, token) => { const r=deviceRoute(db,method,route.split('/'),body,token,options());return {...r,status:r?.status||200}; };
   const pair = (sid='screen1') => { const screen=db.screens.find(s=>s.id===sid);const code=issuePairing(db,screen,now);const r=call('POST','pair',{code:code.code}); assert.equal(r.status,200);return r.body; };
   const paired=pair(), assignment=call('GET','playlist/screen1',{},paired.token).body.items[0];
   const event = (patch={}) => ({play_uid:crypto.randomUUID(),seq_no:1,assignment_id:assignment.assignment_id,campaign_id:'campaign1',creative_id:'creative1',config_version:3,started_at_device:'2026-09-24T00:00:00.000Z',ended_at_device:'2026-09-24T00:00:10.000Z',playing_duration_ms:10000,media_started_s:0,media_ended_s:10,ended_reason:'ended',server_clock_offset_ms:0,measured:true,avg_persons:2,sample_count:5,model_ver:MODEL,...patch});
   now+=11000;
-  return {db,call,pair,paired,assignment,event,advance:n=>{now+=n},config};
+  return {db,call,pair,paired,assignment,event,item,advance:n=>{now+=n},config};
 }
 test('one-time pairing uses only stored hash, rotates credential, rejects re-use and legacy code',()=>{
  const f=fixture(),s=f.db.screens[0],old=f.paired.token;
@@ -88,4 +89,27 @@ test('delivery after72hours rejected but accepted play stays idempotent beyondwi
  const f=fixture(),body=f.event();assert.equal(f.call('POST','play',body,f.paired.token).status,200);f.advance(73*3600e3);
  assert.equal(f.call('POST','play',body,f.paired.token).body.duplicate,true);
  assert.equal(f.call('POST','play',f.event({seq_no:2}),f.paired.token).status,409);
+});
+
+// Exercise both branches against arbitrary internal fields, not a denylist that grows after each leak.
+test('fresh and cached device playlists expose only playback fields while rates stay frozen server-side',()=>{
+ const f=fixture();
+ Object.assign(f.item,{advertiser:'Private client',campaign_name:'Private campaign',creative_name:'Private creative',rate_type:'per_play',rate_value:7,internal_future_secret:{value:'must never leave server'},org_id:'private-org',asset_id:'asset1',asset_url:'/api/media/signed-playback',width:1920,height:1080,letterbox:true,kind:'diagnostic'});
+ const fresh=f.call('GET','playlist/screen1',{},f.paired.token).body.items[0];
+ assert.notEqual(fresh.assignment_id,f.assignment.assignment_id,'rate changes must invalidate the prior assignment');
+ const cached=f.call('GET','playlist/screen1',{},f.paired.token).body.items[0];
+ assert.equal(cached.assignment_id,fresh.assignment_id,'second response exercises cached assignments');
+ const allowed=['campaign_id','creative_id','youtube_id','duration_s','asset_id','asset_url','width','height','letterbox','assignment_id','valid_until'].sort();
+ for(const served of [fresh,cached]){
+  assert.deepEqual(Object.keys(served).sort(),allowed);
+  assert.equal(served.asset_url,f.item.asset_url);assert.equal(served.youtube_id,'example');
+  assert.equal(served.width,1920);assert.equal(served.height,1080);assert.equal(served.letterbox,true);
+ }
+ const stored=f.db.device_assignments.find(a=>a.id===fresh.assignment_id);
+ assert.equal(stored.rate_value,7);assert.equal(stored.rate_type,'per_play');assert.equal(stored.advertiser_id,'advertiser1');
+ // A playback-only response can still be submitted, and later campaign edits do not rewrite its price.
+ f.db.campaigns[0].rate_value=999;
+ const result=f.call('POST','play',f.event({assignment_id:cached.assignment_id}),f.paired.token);
+ assert.equal(result.body.billable,true);assert.equal(f.db.campaigns[0].accrued_spend,7);
+ assert.equal(f.db.plays[0].rate_value,7);
 });

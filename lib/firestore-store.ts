@@ -6,13 +6,14 @@ import type { Firestore, Transaction } from 'firebase-admin/firestore';
 export type StoreContext = {
   method: string; path: string[]; uid?: string; deviceId?: string; loginEmail?: string;
   pairingCodeHash?: string; playUid?: string; seqNo?: number; assignmentId?: string;
+  orgId?: string; entity?: string; after?: string; limit?: number; targetOrg?: string;
 };
 export class StoreError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 const DOMAIN = ['orgs', 'users', 'screens', 'advertisers', 'creatives', 'campaigns', 'groups', 'devices', 'configs', 'assets'] as const;
-const EVENTS = ['plays', 'presence', 'device_assignments'] as const;
-const COLLECTIONS = [...DOMAIN, ...EVENTS];
+const EVENTS = ['plays', 'presence', 'device_assignments', 'audit', 'diagnostic_results'] as const;
+const COLLECTIONS = [...DOMAIN, ...EVENTS, 'diagnostic_assignments'];
 const DOMAIN_LIMIT = 2000;
 export const HISTORY_LIMIT = 1500;
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -68,6 +69,16 @@ export function createFirestoreStore(database: Firestore) {
     if (result.docs.length > limit) throw new StoreError(503, `${collection} requires pagination before it can be changed safely`);
     return result.docs.map((d: any) => d.data());
   }
+  async function page(tx: Transaction, collection: string, filters: [string, any, any][], context: StoreContext) {
+    let q: any = database.collection(collection);
+    for (const [key, op, value] of filters) q = q.where(key, op, value);
+    const limit = Math.min(100, Math.max(1, context.limit || 100));
+    if (context.after) q = q.where('id', '>', context.after);
+    const result: any = await tx.get(q.orderBy('id').limit(limit + 1));
+    const rows = result.docs.map((d: any) => d.data());
+    const items = rows.slice(0, limit);
+    return { items, has_more: rows.length > limit, next_cursor: rows.length > limit ? items.at(-1)?.id : null };
+  }
   async function referenced(tx: Transaction, collection: string, ids: any[], into: any[]) {
     const seen = new Set(into.map(row => keyFor(collection, row)));
     const missing = [...new Set(ids)].filter(id => validId(id) && !seen.has(id));
@@ -105,7 +116,16 @@ export function createFirestoreStore(database: Firestore) {
     }
     state.allowedOrg = actor?.org_id || device?.org_id || pairedScreen?.org_id;
     state.admin = actor?.role === 'platform_admin';
-    const orgId = state.allowedOrg;
+    let orgId = state.allowedOrg;
+    // Admin ownership is inferred from the target document, never trusted from a list page.
+    if (state.admin) {
+      const mapping: Record<string,string> = {screen:'screens',screens:'screens',campaign:'campaigns',advertiser:'advertisers',creative:'creatives',group:'groups',user:'users',config:'configs',org:'orgs'};
+      const collection = mapping[context.path[0]];
+      const target = collection && context.path[1] ? await readDoc(tx, collection, context.path[1]) : null;
+      orgId = context.orgId || (target ? (collection === 'orgs' ? target.id : target.org_id) : context.targetOrg) || (['team','invite','campaign','creative','advertiser','screens','group'].includes(context.path[0]) && !context.path[1] ? actor.org_id : undefined);
+    }
+    const scoped = !state.admin || !!orgId;
+    const globalPage = state.admin && !orgId && context.method === 'GET' && context.path[0] === 'bootstrap';
     const authOnly = ['login', 'me', 'password', 'logout'].includes(context.path[0]);
     const health = context.path.join('/') === '_health';
     if (actor) snapshot.users.push(actor);
@@ -113,25 +133,46 @@ export function createFirestoreStore(database: Firestore) {
       const organisation = await readDoc(tx, 'orgs', orgId);
       if (organisation) snapshot.orgs.push(organisation);
     }
+    if (actor) await referenced(tx, 'orgs', [actor.org_id], snapshot.orgs);
     if (health || (!orgId && !state.admin)) {
       state.readOnly = true;
+    } else if (['directory','audit'].includes(context.path[0]) && context.method === 'GET') {
+      const collection = context.path[0] === 'audit' ? 'audit' : context.entity || '';
+      if (!['orgs','advertisers','creatives','campaigns','screens','users','configs','groups','devices','assets','audit'].includes(collection)) throw new StoreError(400, 'Unknown directory');
+      const filters: [string,any,any][] = scoped ? [[collection === 'orgs' ? 'id' : 'org_id', '==', orgId]] : [];
+      snapshot.directory = await page(tx, collection, filters, context);
+      if (collection === 'audit') snapshot.audit = snapshot.directory.items;
+      if (collection === 'screens') {
+        // Public status-only projection: credential fields are never requested here.
+        for (const screen of snapshot.directory.items) {
+          const result = await tx.get(database.collection('devices').where('org_id','==',screen.org_id).where('screen_id','==',screen.id).select('id','screen_id','status','last_heartbeat_at').limit(DOMAIN_LIMIT + 1));
+          if (result.docs.length > DOMAIN_LIMIT) throw new StoreError(503,'Device status history requires cleanup');
+          snapshot.devices.push(...result.docs.map(d => d.data()));
+        }
+      }
     } else if (!authOnly) {
       const deviceRequest = !!device || !!pairedScreen;
       for (const collection of DOMAIN) {
         if (collection === 'orgs') {
-          if (state.admin) snapshot.orgs = await query(tx, 'orgs');
+          if (state.admin && !scoped) {
+            if (globalPage) { const p = await page(tx, 'orgs', [], context); snapshot.orgs = p.items; (snapshot.pagination ||= {}).orgs = { has_more:p.has_more,next_cursor:p.next_cursor }; }
+            else snapshot.orgs = await query(tx, 'orgs');
+          }
           continue;
         }
         if (deviceRequest && collection === 'users') continue;
         if (collection === 'configs') {
-          snapshot.configs = state.admin ? await query(tx, 'configs') : [
+          if (globalPage) {
+            const p = await page(tx,'configs',[],context); snapshot.configs=p.items;
+            (snapshot.pagination ||= {}).configs={has_more:p.has_more,next_cursor:p.next_cursor};
+          } else snapshot.configs = !scoped ? await query(tx, 'configs') : [
             ...await query(tx, 'configs', [['org_id', '==', orgId]]),
             ...await query(tx, 'configs', [['layer', '==', 'platform']]),
           ];
           snapshot.configs = [...new Map(snapshot.configs.map((c: any) => [c.id, c])).values()];
           continue;
         }
-        const filters: [string, any, any][] = state.admin ? [] : [['org_id', '==', orgId]];
+        const filters: [string, any, any][] = !scoped ? [] : [['org_id', '==', orgId]];
         if (deviceRequest && collection === 'screens') {
           const screen = pairedScreen || await readDoc(tx, 'screens', device.screen_id);
           snapshot.screens = screen && screen.org_id === orgId ? [screen] : [];
@@ -141,9 +182,33 @@ export function createFirestoreStore(database: Firestore) {
         if (deviceRequest && collection === 'devices') filters.push(['screen_id', '==', pairedScreen?.id || device.screen_id]);
         if (deviceRequest && ['advertisers', 'creatives', 'assets'].includes(collection)) continue;
         if (actor?.role === 'advertiser_viewer' && collection === 'campaigns') filters.push(['advertiser_id', '==', actor.advertiser_id || '__none__']);
-        snapshot[collection] = await query(tx, collection, filters);
+        if (globalPage) {
+          const p = await page(tx, collection, filters, context); snapshot[collection] = p.items;
+          (snapshot.pagination ||= {})[collection] = { has_more:p.has_more, next_cursor:p.next_cursor };
+        } else snapshot[collection] = await query(tx, collection, filters);
       }
-      if (context.assignmentId) {
+      // Keep the true authenticated actor and their organisation even in another organisation's context.
+      if (actor && !snapshot.users.some((u: any) => u.id === actor.id)) snapshot.users.push(actor);
+      if (actor) await referenced(tx, 'orgs', [actor.org_id], snapshot.orgs);
+      if (context.path[0] === 'advertiser' && context.path[1] && context.method === 'POST') {
+        const linked = await query(tx, 'campaigns', [['advertiser_id','==',context.path[1]]]);
+        snapshot.campaigns = [...new Map([...snapshot.campaigns, ...linked].map((c: any) => [c.id,c])).values()];
+      }
+      const diagnosticScreen = pairedScreen?.id || device?.screen_id || (context.path[0] === 'screen' ? context.path[1] : null);
+      if (diagnosticScreen && !device) {
+        const recent: any = await tx.get(database.collection('diagnostic_assignments').where('screen_id','==',diagnosticScreen).orderBy('requested_at','desc').limit(101));
+        const rows = recent.docs.map((d: any) => d.data());
+        const p = {items:rows.slice(0,100),has_more:rows.length>100,next_cursor:null};
+        snapshot.diagnostic_assignments = p.items;
+        await referenced(tx,'diagnostic_assignments', [context.path[3], ...snapshot.devices.map((d: any) => d.current_diagnostic_id)], snapshot.diagnostic_assignments);
+        snapshot.diagnostic_history = { complete:!p.has_more,next_cursor:p.next_cursor };
+        await referenced(tx,'diagnostic_results', snapshot.diagnostic_assignments.map((a: any) => a.id), snapshot.diagnostic_results);
+      }
+      if (device) {
+        await referenced(tx,'diagnostic_assignments',[device.current_diagnostic_id, context.assignmentId],snapshot.diagnostic_assignments);
+        await referenced(tx,'diagnostic_results',[context.assignmentId],snapshot.diagnostic_results);
+      }
+      if (context.assignmentId && !context.path[0].startsWith('diagnostic')) {
         await referenced(tx, 'device_assignments', [context.assignmentId], snapshot.device_assignments);
         const assignment = snapshot.device_assignments.find((a: any) => a.device_id === device?.id && a.org_id === orgId);
         // Offline events retain the issued campaign even if targeting changed later.
@@ -171,8 +236,8 @@ export function createFirestoreStore(database: Firestore) {
       // Device writes do not reread growing event history. Human reporting is bounded.
       if (!deviceRequest && context.method === 'GET' && ['bootstrap', 'screen', 'campaign'].includes(context.path[0])) {
         let q: any = database.collection('plays');
-        let scope = state.admin ? 'platform' : 'organisation';
-        if (!state.admin) q = q.where('org_id', '==', orgId);
+        let scope = !scoped ? 'platform' : 'organisation';
+        if (scoped) q = q.where('org_id', '==', orgId);
         if (context.path[0] === 'screen' && context.path[1]) { q = q.where('screen_id', '==', context.path[1]); scope = 'screen'; }
         if (context.path[0] === 'campaign' && context.path[1]) { q = q.where('campaign_id', '==', context.path[1]); scope = 'campaign'; }
         if (actor?.role === 'advertiser_viewer') q = q.where('advertiser_id', '==', actor.advertiser_id || '__none__');
@@ -186,6 +251,7 @@ export function createFirestoreStore(database: Firestore) {
         await referenced(tx, 'presence', snapshot.plays.map((p: any) => p.id), snapshot.presence);
       }
     }
+    if (snapshot.pagination) snapshot.pagination.partial = Object.values(snapshot.pagination).some((p: any) => p?.has_more);
     state.original = clone(snapshot);
     return state;
   }

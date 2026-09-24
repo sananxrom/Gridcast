@@ -107,7 +107,7 @@ export function ProfilePage({ user, onSaved }: { user: SessionUser; onSaved: () 
 
 /* -------------------------------------------------------- organisation --- */
 
-export function OrgPage({ d, user, onSaved }: { d: any; user: SessionUser; onSaved: () => void }) {
+export function OrgPage({ d, user, orgId, onSaved }: { d: any; user: SessionUser; orgId?:string; onSaved: () => void }) {
   const org = d.org || {};
   const money = isCap(user, 'money');
   const fm = useDirtyForm({
@@ -174,8 +174,8 @@ export function OrgPage({ d, user, onSaved }: { d: any; user: SessionUser; onSav
 
     <SaveBar {...fm} onSave={() => fm.save(async v => {
       const { gstin, pan, state_code, ...profile } = v;
-      const o = await api(`/org/${user.org_id}`, money ? v : profile);
-      const u = session.get(); if (u) session.set({ ...u, orgName: o.name });
+      const o = await api(`/org/${orgId??user.org_id}`, money ? v : profile);
+      const u = session.get(); if (u && o.id===u.org_id) session.set({ ...u, orgName: o.name });
       onSaved();
     })} onDiscard={fm.discard} />
   </>);
@@ -183,7 +183,7 @@ export function OrgPage({ d, user, onSaved }: { d: any; user: SessionUser; onSav
 
 /* ------------------------------------------------------------ payouts --- */
 
-export function PayoutPage({ d, user, onSaved }: { d: any; user: SessionUser; onSaved: () => void }) {
+export function PayoutPage({ d, user, orgId, onSaved }: { d: any; user: SessionUser; orgId?:string; onSaved: () => void }) {
   const org = d.org || {};
   const fm = useDirtyForm({
     payout_method: org.payout_method ?? 'upi', upi_id: org.upi_id ?? '', payout_note: org.payout_note ?? '',
@@ -253,13 +253,13 @@ export function PayoutPage({ d, user, onSaved }: { d: any; user: SessionUser; on
       Full decomposition per campaign is on the <b>Settlement</b> page.
     </p>
 
-    <SaveBar {...fm} onSave={() => fm.save(async v => { await api(`/org/${user.org_id}`, v); onSaved(); })} onDiscard={fm.discard} />
+    <SaveBar {...fm} onSave={() => fm.save(async v => { await api(`/org/${orgId??user.org_id}`, v); onSaved(); })} onDiscard={fm.discard} />
   </>);
 }
 
 /* --------------------------------------------------------------- team --- */
 
-export function TeamPage({ user, onChanged }: { user: SessionUser; onChanged: () => void }) {
+export function TeamPage({ user, orgId, boot, onChanged }: { user: SessionUser; orgId?:string|null; boot?:any; onChanged: () => void }) {
   const [rows, setRows] = useState<any[] | null>(null);
   const [adding, setAdding] = useState(false);
   const [secret, setSecret] = useState<{ email: string; pw: string } | null>(null);
@@ -269,9 +269,9 @@ export function TeamPage({ user, onChanged }: { user: SessionUser; onChanged: ()
     && (user.role === 'platform_admin' || u.role !== 'platform_admin')
     && (user.role !== 'manager' || !['owner', 'org_admin'].includes(u.role));
 
-  const load = () => api('/team').then(setRows);
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
-  if (!rows) return <Empty>Loading…</Empty>;
+  const load = () => { if(user.role==='platform_admin'&&!orgId){setRows([]);return Promise.resolve();} return api('/team'+(orgId?'?org='+encodeURIComponent(orgId):'')).then(setRows).catch(e=>setErr(e.message)); };
+  useEffect(() => { setRows(null);setAdding(false);setSecret(null);load(); /* eslint-disable-next-line */ }, [orgId]);
+  if (!rows) return <Empty>{err||'Loading…'}</Empty>;
 
   const act = async (fn: () => Promise<any>) => {
     setErr('');
@@ -282,18 +282,21 @@ export function TeamPage({ user, onChanged }: { user: SessionUser; onChanged: ()
   const choices = assignable(user.role).map(r => ({ value: r.id, label: r.label, hint: r.hint }));
 
   return (<>
-    <PageHead title="Team & users" sub="Who can reach what, inside your organisation"
-      actions={mayManage ? <Button onClick={() => setAdding(true)}><UserPlus className="size-3.5" />Add someone</Button> : undefined} />
+    <PageHead title="Team & users" sub={orgId ? `People in ${boot?.orgs?.find((o:any)=>o.id===orgId)?.name??user.orgName}` : "People across organisations"}
+      actions={mayManage ? <Button disabled={user.role==='platform_admin'&&!orgId} onClick={() => setAdding(true)}><UserPlus className="size-3.5" />Add someone</Button> : undefined} />
 
+    {user.role==='platform_admin'&&!orgId&&<p className="mb-4 text-sm text-muted-foreground">Select an organisation above to view and manage its team.</p>}
     {err && <Card className="mb-4 border-destructive/40 bg-destructive/[0.06] p-3.5 text-[12.5px] text-destructive">{err}</Card>}
     {secret && <OneTime email={secret.email} pw={secret.pw} onDone={() => setSecret(null)} />}
-    {adding && <AddPerson user={user} onDone={(s) => { setAdding(false); if (s) setSecret(s); load(); onChanged(); }} />}
+    {adding && <AddPerson user={user} orgId={orgId??user.org_id} boot={boot} onDone={(s) => { setAdding(false); if (s) setSecret(s); load(); onChanged(); }} />}
 
     <DataTable
       cols={[
         { label: 'Person', sort: (u: any) => u.name, className: 'min-w-[190px]', render: (u: any) => (
           <><div className="font-medium">{u.name}{u.id === user.id && <span className="ml-2 text-[11.5px] text-muted-foreground">you</span>}</div>
             <div className="text-[12px] text-muted-foreground">{u.email}</div></>) },
+        { label: 'Organisation', render: (u:any) => boot?.orgs?.find((o:any)=>o.id===u.org_id)?.name ?? u.org_id },
+        { label: 'Advertiser', render: (u:any) => u.advertiser_id ? boot?.advertisers?.find((a:any)=>a.id===u.advertiser_id)?.name ?? u.advertiser_id : '—' },
         { label: 'Role', sort: (u: any) => u.role, render: (u: any) =>
           mayManageUser(u) && u.role !== 'advertiser_viewer'
             ? <InlineSelect value={u.role} choices={choices}
@@ -346,13 +349,13 @@ export function TeamPage({ user, onChanged }: { user: SessionUser; onChanged: ()
   </>);
 }
 
-function AddPerson({ user, onDone }: { user: SessionUser; onDone: (s?: { email: string; pw: string }) => void }) {
-  const roles = assignable(user.role);
-  const fm = useDirtyForm({ name: '', email: '', phone: '', role: roles[roles.length - 1]?.id ?? 'installer' });
+function AddPerson({ user, orgId, boot, onDone }: { user: SessionUser; orgId:string; boot?:any; onDone: (s?: { email: string; pw: string }) => void }) {
+  const roles = [...assignable(user.role), {id:'advertiser_viewer',label:'Advertiser viewer',hint:'Only this advertiser’s campaign reports',caps:[]}];
+  const fm = useDirtyForm({ name: '', email: '', phone: '', role: 'installer', advertiser_id:'' });
   const chosen = ROLES.find(r => r.id === fm.f.role);
   return (
     <Card className="mb-4 border-primary/40 p-5">
-      <h3 className="mb-3 text-[14px] font-semibold">Add someone to {user.orgName}</h3>
+      <h3 className="mb-3 text-[14px] font-semibold">Add someone to {boot?.orgs?.find((o:any)=>o.id===orgId)?.name??user.orgName}</h3>
       <div className="flex flex-wrap gap-3">
         <Field label="Name"><Input value={fm.f.name} onChange={e => fm.set({ name: e.target.value })} /></Field>
         <Field label="Email"><Input type="email" value={fm.f.email} onChange={e => fm.set({ email: e.target.value })} placeholder="them@company.in" /></Field>
@@ -363,10 +366,13 @@ function AddPerson({ user, onDone }: { user: SessionUser; onDone: (s?: { email: 
           </Select>
         </Field>
       </div>
+      {fm.f.role==='advertiser_viewer'&&<Field label="Advertiser access"><Select aria-label="Advertiser access" value={fm.f.advertiser_id} onChange={e=>fm.set({advertiser_id:e.target.value})}><option value="">Choose advertiser…</option>{(boot?.advertisers??[]).filter((a:any)=>a.org_id===orgId&&a.status!=='archived').map((a:any)=><option key={a.id} value={a.id}>{a.name}</option>)}</Select></Field>}
       {chosen && <p className="mt-2 text-[12.5px] text-muted-foreground">{chosen.hint}.</p>}
       <SaveBar {...fm} label="Create login" note="You will be given a one-time password to pass on."
         onSave={() => fm.save(async v => {
-          const r = await api('/invite', v);
+          if(v.role==='advertiser_viewer'&&!v.advertiser_id)throw new Error('Choose the advertiser this login can view.');
+          const {advertiser_id,...person}=v;
+          const r = await api('/invite', {...person,org_id:orgId,...(v.role==='advertiser_viewer'?{advertiser_id}:{})});
           onDone({ email: r.user.email, pw: r.temp_password });
         })} onDiscard={() => onDone()} />
     </Card>

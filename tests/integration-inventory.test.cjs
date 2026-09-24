@@ -122,6 +122,7 @@ test('asset metadata cannot be forged through creative body, unsigned proof, wro
  for(const proof of ['forged',f.media.sealMedia(asset,'read'),f.media.sealMedia({...asset,org_id:'org_tricity'},'upload')])expectStatus(await f.call('POST',`creative/${cr.id}/asset`,{proof},t),400);
  const proof=f.media.sealMedia(asset,'upload');expectStatus(await f.call('POST',`creative/${cr.id}/asset`,{proof},f.token('u_op2')),404);
  const saved=expectStatus(await f.call('POST',`creative/${cr.id}/asset`,{proof},t),201);assert.equal(saved.creative.approval_status,'pending');assert.equal(saved.creative.metadata_source,'server_ffprobe');assert.equal(saved.asset.duration_s,10);
+ const assetAudit=f.data().audit.find(a=>a.entity==='assets'&&a.entity_id==='asset_test');assert.ok(assetAudit);assert.equal(assetAudit.actor_id,'u_op1');assert.ok(assetAudit.diff.storage_path.changed);assert.ok(!JSON.stringify(assetAudit).includes(asset.storage_path));
 });
 
 test('privacy removes every old frame route and never returns retained frame payloads',async()=>{
@@ -151,4 +152,33 @@ test('malformed dynamic rules cannot be saved and break future schedule reads',a
  for(const rule_json of [{venue_types:{}},{venue_types:[12]},{min_size:'not-a-number'},{tags:[]},{tags:{chain:{bad:true}}}]) {
   const before=f.data();const r=await f.call('POST','group',{org_id:'org_sec17',name:'Invalid rule',group_type:'dynamic',screen_ids:[],rule_json},t);assert.equal(r.status,400,JSON.stringify(rule_json));assert.deepEqual(f.data(),before);
  }
+});
+
+test('one real admin identity completes an empty-org commercial journey through API boundaries',async()=>{
+ const nativeProbe=[process.env.GC_FFPROBE_PATH,'/opt/homebrew/bin/ffprobe','/usr/bin/ffprobe'].filter(Boolean).find(fs.existsSync);
+ const f=fixture({env:nativeProbe?{GC_FFPROBE_PATH:nativeProbe}:{}}),admin=f.token('u_admin');
+ const org=expectStatus(await f.call('POST','org',{name:'Empty journey org',support_email:'journey@example.invalid'},admin),200);
+ const advertiser=expectStatus(await f.call('POST','advertiser',{org_id:org.id,name:'Journey advertiser',category:'general'},admin),200);
+ const creative=expectStatus(await f.call('POST','creative',{org_id:org.id,advertiser_id:advertiser.id,name:'Journey uploaded clip',category:'general'},admin),200);
+ const bytes=fs.readFileSync(path.join(root,'public/diagnostics/screen-test.mp4'));
+ const metadata=await f.media.inspectVideo(bytes,'mp4');
+ const asset={...metadata,id:'asset_journey',asset_id:'asset_journey',creative_id:creative.id,org_id:org.id,storage_path:`media/${org.id}/asset_journey.mp4`,mime:'video/mp4',bytes:bytes.length};
+ // Exercises the upload handler's signed, inspected metadata handoff; no cloud/file storage fixture is created.
+ expectStatus(await f.call('POST',`creative/${creative.id}/asset`,{proof:f.media.sealMedia(asset,'upload')},admin),201);
+ expectStatus(await f.call('POST',`creative/${creative.id}/approve`,{status:'approved'},admin),200);
+ const {screen,pairing}=expectStatus(await f.call('POST','screens',screenInput({org_id:org.id,has_camera:true}),admin),201);
+ const empty=expectStatus(await f.call('GET',`screen/${screen.id}`,{},admin),200);assert.equal(empty.readiness.code,'no_campaign');
+ const campaign=expectStatus(await f.call('POST','campaign',campaignInput(screen.id,{org_id:org.id,advertiser_id:advertiser.id,creative_ids:[creative.id],bookings:[{screen_id:screen.id,slots_per_loop:1}]}),admin),200);
+ const paired=expectStatus(await f.call('POST','pair',{code:pairing.code}),200);
+ const playlist=expectStatus(await f.call('GET',`playlist/${screen.id}`,{},paired.token),200);
+ assert.equal(playlist.readiness.code,'eligible');const item=playlist.items[0];assert.equal(item.campaign_id,campaign.id);assert.equal(item.creative_id,creative.id);assert.ok(item.asset_url.startsWith('/api/media?grant='));
+ const ended=Date.now(),duration=item.duration_s*1000;
+ const report={assignment_id:item.assignment_id,play_uid:'journey_play_0001',seq_no:1,campaign_id:campaign.id,creative_id:creative.id,config_version:playlist.config_version,started_at_device:new Date(ended-duration).toISOString(),ended_at_device:new Date(ended).toISOString(),playing_duration_ms:duration,media_started_s:0,media_ended_s:item.duration_s,ended_reason:'ended',server_clock_offset_ms:0,measured:true,avg_persons:2,sample_count:5,model_ver:'coco-ssd@2.2.3/lite_mobilenet_v2'};
+ expectStatus(await f.call('POST','play',report,paired.token),200);
+ const detail=expectStatus(await f.call('GET',`screen/${screen.id}`,{},admin),200);
+ assert.equal(detail.recent.length,1);assert.equal(detail.recent[0].presence.avg_persons,2);assert.equal(detail.recent[0].presence.model_ver,report.model_ver);
+ assert.equal(detail.campaigns[0].accrued_spend,2);
+ const boot=expectStatus(await f.call('GET',`bootstrap?org=${org.id}`,{},admin),200);assert.equal(boot.user.role,'platform_admin');assert.equal(boot.user.id,'u_admin');assert.equal(boot.advertisers[0].org_id,org.id);
+ assert.ok(f.data().audit.filter(x=>x.org_id===org.id&&x.actor_kind==='human').every(x=>x.actor_id==='u_admin'));
+ assert.ok(f.data().audit.some(x=>x.action==='pair'&&x.actor_kind==='device'&&x.actor_id===paired.device.id));
 });

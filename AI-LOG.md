@@ -601,3 +601,249 @@ against this revision. Production build still needs running here — it does not
 **Preparation failure resolved:** Initial selective staging failed on a pre-existing empty `.git/index.lock`. Host process inspection found no Git writer; only the macOS virtualization file reader held it. The old unchanged lock was preserved in `/tmp` before retrying. Initial sandboxed process inspection was denied, then the scoped host inspection succeeded. No staged changes or source content were discarded.
 
 **Push completed — 2026-09-24 19:42 IST:** Application commit `aa6b04f` was pushed successfully to `origin/codex/gridcast-trust-layer-wp5`; an independent remote-ref read matched the full commit SHA. The branch contains the selected 62 files. Main remains at base `13083f5`. This completion note is committed as a follow-up log-only change on the same review branch. No merge or explicit application deployment was performed; provider-triggered preview behavior was not inspected. Local-only untracked files remain outside the commit.
+
+
+### 2026-09-24 19:50 IST · GPT-6 (Codex desktop) · Inspection of actual deployed sites after the push
+
+**Asked:** “no go check it, whatever is deployed.”
+**Did:** Read Vercel deployment metadata and runtime logs, GitHub deployment status, Firebase active traffic/rollout/build metadata, public health responses, and opened the production and preview websites in the browser. Tested sign-in using the previously supplied demo operator account. Did not change hosting settings, provision data, pair devices, or submit business mutations.
+**Findings:**
+- Vercel automatically built BOTH review-branch commits as previews. Latest deployment `dpl_BRc2sYC9hsSUxmG5sqv2k5YPqFGq` is READY, commit `aeb61ca`, URL `https://gridcast-o2tnxdyxs-sananxroms-projects.vercel.app`, region `iad1`. This corrects any implication that nothing at all was deployed: no explicit deployment was initiated, but the Git integration did deploy a preview.
+- The preview's sign-in page renders, but actual sign-in displays “Authentication is not configured.” Vercel runtime logs confirm POST `/api/login` 503 and GET `/api/_health` 503 on this deployment. Source `lib/auth.ts:15-16` and `lib/api.ts:109-110` map that message to a missing/too-short production `GC_AUTH_SECRET`. This is runtime configuration failure, not invalid demo credentials. No secret values were read. Firestore connectivity could not be established behind this failed auth-configuration gate; do not claim the preview backend is ready based on READY/build status.
+- Public Vercel production `https://gridcast-silk.vercel.app` remains on main commit `13083f5`. Its health endpoint returns HTTP 200, `store: memory`, 372 plays. Supplied demo operator sign-in succeeds and the operator dashboard renders. These existing demo counts are not evidence of physical deployments or verified real audience.
+- Firebase `https://gridcast-backend--gridcast-508011.asia-southeast1.hosted.app` also remains on `13083f5`, build `build-2026-09-23-001`, with 100% traffic. Its health endpoint returns HTTP 200, `store: file`, 372 plays. Hosting remains Singapore and rollout policy references main. The prepared Mumbai Firestore/storage setup is not in use by this old deployed build.
+**Verification limitations/failures:** Direct unauthenticated requests to preview routes redirect to Vercel SSO and finally return HTML HTTP 200; that is NOT healthy application JSON. The connector's authenticated fetch attempt also returned an SSO redirect. Browser health navigation was blocked, but deployment runtime logs verified the corresponding 503 and browser sign-in provided the exact application error. Initial Vercel project lookup hit a connector argument mismatch, and a deployment lookup without the `dpl_` prefix returned 404; listing deployments and using the actual deployment ID resolved identification. Temporary authentication/share tokens are not recorded. No dashboard/playing/upload journey on the new preview could be validated because sign-in is blocked.
+**Outcome:** Actual production demo still accessible, new review preview builds but is NOT operational. Next deployment work must configure the intended runtime and then verify live authentication, durable storage and media operations; a successful Git push/build is insufficient. No production rollout or main merge performed.
+**Files:** `AI-LOG.md` appended locally; temporary read-only Firebase inspector `/tmp/gridcast-read-live-firebase.cjs`. Application source unchanged.
+**Commit:** inspected preview `aeb61ca`; production `13083f5`. This inspection note is not committed or pushed, avoiding another preview build for a read-only check.
+
+
+### 2026-09-24 23:52 IST · GPT-6 (Codex desktop) · Firebase rollout of the reviewed build
+
+**Asked:** User redirected work to Firebase, then said “go.” Proceeding with the intended Firebase release and live verification, using existing prepared resources.
+**Did:** Applied the Firebase App Hosting skill; verified active old build `13083f5`, exact reviewed source commit `aeb61ca`, current runtime secret access, enabled secret version metadata, Mumbai Enterprise/native Firestore and private bucket. All 24 indexes READY; actual current-source SDK bootstrap confirms one admin/org, zero screens/plays. No secrets printed. Started `apphosting:rollouts:create` for exact commit `aeb61cabe54b5735f806eecf33703ffb8c1b721a` on existing backend `gridcast-backend`, project `gridcast-508011`, with the user's existing Firebase account. The scoped rollout action was approved and accepted by the CLI. No main merge or Vercel change.
+**Outcome:** Rollout in progress; build/traffic/runtime verification pending. Existing Firebase URL is retained. Hosting remains Singapore, database and media Mumbai. Prior runtime build `build-2026-09-23-001` remains available as rollback reference.
+**Files:** `AI-LOG.md` appended locally. Read-only release helpers `/tmp/gridcast-release-config-check.cjs`, `/tmp/gridcast-release-db-check.cjs`.
+**Commit:** deploying `aeb61ca`; no new source commit.
+**Open:** Verify completed rollout, Firestore health, protected-route denials, administrator login and first-password-change gate. Do not claim live media upload/physical player validation without performing it. Initial private credential must not appear in tool output or this log.
+
+**Rollout failure and fix — 2026-09-24 23:54 IST:** Build `build-2026-09-24-001` failed before traffic switched with `fah/misconfigured-secret`: build could not resolve `gcAuthSecret/versions/latest`. Runtime `secretAccessor` alone was insufficient for the App Hosting build workflow. Applied Firebase CLI `apphosting:secrets:grantaccess` scoped to that secret and existing backend. The installed CLI grants backend build/runtime secret access, backend build metadata viewer, and the project App Hosting service agent secret-version management on this secret; no project-wide secret grant or secret-value change. Command succeeded. Retrying the same exact reviewed commit; old production traffic remains on the previous build until successful rollout.
+
+
+**Rollout completed and live verification — 2026-09-25 00:00 IST:** Firebase build `build-2026-09-24-002` is READY, rollout SUCCEEDED, and traffic metadata confirms 100% to exact reviewed commit `aeb61cabe54b5735f806eecf33703ffb8c1b721a`. Cloud Build `f9818ed0-5b58-445b-ace7-d190cc9aaec0` succeeded. Live `/api/_health` returns HTTP 200 with `ok: true`, `store: firestore`, named database `gridcast`, schema version 1. Anonymous bootstrap/settings/team and play-report requests each return 401. Provisioned administrator login and session verification return 200 with platform_admin role; mandatory first-password-change is true and correctly blocks bootstrap with 403. Login verification updates the administrator last-login timestamp; no business fixtures, screens or plays were created. All six self-hosted model files fetched from Firebase match the repository SHA-256 manifest. Home, platform console and player pages return HTTP 200; browser reload visibly confirms the Firebase platform sign-in page.
+
+**Handoff and limits:** Firebase URL: https://gridcast-backend--gridcast-508011.asia-southeast1.hosted.app . Administrator must use the existing private first-login handoff and choose their own new password. No credentials or session tokens recorded. Live upload, authenticated dashboard after password change, physical playback and camera accuracy remain unverified; successful deployment is not evidence of these journeys. Hosting remains Singapore, Firestore and media Mumbai. No main merge or Vercel changes. This local append records completion; application source unchanged. Sanitized check report: `/tmp/gridcast-firebase-live-check-result.json`; verifier: `/tmp/gridcast-firebase-live-check.py`.
+
+
+### 2026-09-25 00:15 IST · GPT-6 (Codex desktop) · Web camera/detector diagnosis and local fixes
+
+**Asked:** Diagnose and fix/optimize web CV. User clarified desktop Chrome/Safari, paired player, camera preview works but counting does not. Exact affected player URL and whether the count is zero or a dash remain requested.
+**Diagnosis:** Reviewed `app/player/page.tsx`, `lib/config.ts`, installed COCO-SSD implementation, historical player at `13083f5` and TensorFlow primary documentation. COCO-SSD is a browser detector, not Android-only. Current source initialized camera only after the initial playlist fetch, ignored camera selection/resolution, swallowed failures with no retry, ran inference while idle/paused/hidden, and could accept delayed samples from another playback segment. Older `13083f5` calls `window.cocoSsd.load` without waiting for asynchronous scripts; visible camera with no detector is consistent with that race, but it is NOT confirmed as this user's runtime failure. Read-only Firebase check found zero screens/devices; in-app Firebase player shows pairing. The user's paired desktop observation therefore needs its exact origin identified.
+**Changed locally:** `app/player/page.tsx` reconciles camera settings at applied loop boundaries, retries camera/model failures with explicit messages, awaits TensorFlow readiness, honors selected camera and bounded aspect-preserving resolution, and requests a preferred 15 fps preview without imposing a hard frame-rate requirement. Single in-flight inference skips hidden/paused/idle playback; snapshot dimensions and playback segment are captured before inference and stale results rejected. Source-pixel minimum-size semantics survive downscaling. Count/boxes clear on interruption; raw snapshot pixels clear after inference. Streams and late models clean up safely, with async callbacks tied to original elements. Recovery updates its message without relabeling an interrupted play. App version `gridcast-web/0.3.1`; pinned model/version, confidence and measurement interval unchanged. Unmeasured remains null. UI explains counting during ad playback. New helpers: `lib/player-vision.ts`.
+**Verification:** Independent agent review found raw snapshot retention, stale-ref cleanup and a weak pause/resume test; addressed all three. Standard suite: 83 tests, 82 pass, one emulator test skipped. Browser suite: all 13 pass, including real self-hosted TensorFlow/COCO-SSD inference on Chromium WebGL with a synthetic camera. This proves model loading/execution, NOT accuracy on a person. Two recovery tests pass after the final idle-status correction. Three helper tests and final production build/typecheck pass after making frame rate a soft preference. No production fixtures created or camera images uploaded.
+**Failures:** Initial permission/model tests caught queued video events overwriting useful errors; ignore loss events after stream teardown. Recovered-playlist test initially failed because its local HTML lacked UTF-8 encoding; inspected the page and fixed fixture charset. An attempted in-place correction of stale Standing Context plus this entry was rejected by automatic review under the append-only rule. No file change occurred from that rejected command; used this append-only entry instead.
+**Historical context correction (append only):** Standing Context's NOT-deployed statement is stale: Firebase serves `aeb61ca` following the 24 September rollout already logged above; Vercel remains separate. Assignment lifetime is one hour, as recorded in the reviewed assignment fixes, not ten minutes.
+**Files:** `app/player/page.tsx`, `lib/player-vision.ts`, `tests/player.browser.cjs`, `tests/player-vision.test.cjs`, `AI-LOG.md`. Read-only cloud inspector: `/tmp/gridcast-camera-config-check.cjs`.
+**Commit:** not committed; based on `aeb61ca`. No push or deployment this turn.
+**Open:** Exact failing player URL and visible count/status needed to reproduce this user's specific issue. Real-person recognition quality, Safari runtime and physical-device behavior remain unverified. Reduced idle work and bounded pixel transfer are code-level optimizations; no measured speedup/accuracy claim.
+**Sources:** https://github.com/tensorflow/tfjs-models/blob/master/coco-ssd/README.md ; https://www.tensorflow.org/js/guide/platform_environment .
+
+
+### 2026-09-25 00:18 IST · GPT-6 (Codex desktop) · Actual Brave player diagnosis
+
+**Asked:** Inspect and diagnose the player open in Brave.
+**Did:** Read the latest log, inspected the active Brave window through native browser UI, and refreshed read-only Firebase screen/config/device metadata. No reload, permission change, pairing change, camera activation or business-data mutation.
+**Confirmed:** Brave is on the Firebase `/player`, paired to screen `Test` (`scr_pusarjc`). Visible state: Waiting for an eligible campaign; People now is a dash; last-play average is a dash; zero recorded/pending deliveries; camera preview rectangle is blank. Current Firestore screen has `has_camera: false`; paired device is online, app `gridcast-web/0.3.0`, agent `camera-unavailable`. `app/player/page.tsx` at deployed `aeb61ca` only initializes camera when the screen's has_camera flag is true. `components/views/screen-onboarding.tsx` defaults it to false and labels the checkbox Camera available for presence measurement. This is an established configuration gate, not demonstrated poor model accuracy. No eligible ad is currently playing either.
+**Correction to previous uncertainty:** The user IS now paired on Firebase; the earlier zero-screen/device snapshot is stale. The older-deployment script race remains a historical source finding, but is not the cause established for this observed Brave screen.
+**Next:** Enable camera availability for Test, then reload the currently deployed player (its one-time initialization does not recover on a later camera flag change). Ensure an eligible ad plays to validate measured presence. Browser permission or model execution problems can only be assessed after that gate is opened. Existing local CV fixes remain tested but undeployed.
+**Files:** `AI-LOG.md` appended only; source and cloud resources unchanged. Inspector `/tmp/gridcast-camera-config-check.cjs`; observed deployed source `aeb61ca`.
+
+
+### 2026-09-25 00:24 IST · GPT-6 (Codex desktop) · Master-admin workflow analysis and proposal
+
+**Asked:** Analyse missing admin advertiser management and the resulting campaign/screen-testing blockage; propose master-admin access at all levels.
+**Did:** Reviewed roles, navigation, admin/operator pages, campaign creation, screen editing, team invitation, authorization/API and Firestore scoping. Independent agent reviewed backend and tenant boundaries. Wrote `gridcast-research/14-platform-admin-workflow-proposal.md`; proposal only.
+**Findings:** Platform admin already has every capability and supported cross-org API access. Admin UI lacks Advertisers/complete Creatives management; `/operator` rejects this role. Advertiser API is create-only. CampaignBuilder does have inline advertiser creation, so absolute inability to create is not established; discoverability and full management are missing. Its new advertisers use signed-in user.org_id rather than admin orgFilter. Screen editing also omits the has_camera control and save field, correcting earlier advice to enable the existing screen through that UI. Team context and advertiser invitations are incomplete in the interface.
+**Proposal:** One real master-admin identity with consistent explicit organisation context; shared advertiser/creative/campaign/team screens, scoped lifecycle endpoints, audited mutations, preserved tenant/relationship/inventory rules. First remove commercial workflow blockers and add camera editing/readiness reasons. Then add a separate authenticated nonbillable diagnostic playback flow that requires no advertiser and cannot contaminate commercial delivery or money; measurement/privacy policy must be explicitly preserved. No fake customer or impersonation workaround.
+**Scope:** No application or cloud mutations, no deployment, no tests needed for this analysis/documentation. Prior local CV fixes remain untouched and undeployed. Two initial search commands failed due to unmatched zsh wildcards; reran against explicit files/directories.
+**Files/commit:** New proposal and append to `AI-LOG.md`; uncommitted, based on `aeb61ca`. No plan-of-record or locked policy change.
+
+### 2026-09-25 00:28 IST · claude-opus-5 (Cowork) · Master-admin change list
+
+**Asked:** Check the log; the master admin has gaps and Codex proposed changes — analyse and produce the full
+list of changes required.
+**Did:** Read `14-platform-admin-workflow-proposal.md` and verified every claim in it against the working tree
+rather than restating it. All confirmed. Wrote `gridcast-research/15-master-admin-change-list.md`: the
+implementable list, grouped A–E, each item with the file it lands in and its acceptance test.
+**What the verification added on top of the proposal:**
+- `GET /screen/:id` already returns per-campaign eligibility `decisions` with `reason` and
+`rejected_at_step` (`lib/api.ts:36-53,321`) and nothing renders them. The answer to "why is nothing playing"
+is already on the wire — the cheapest item on the list, and it is first in the order.
+- The cross-org attachment bug is real and specific: `campaign-builder.tsx:41,69` post `user.org_id` while
+`:33,48,74` use `selectedOrg`, so an admin working inside operator B files new advertisers under Gridcast.
+It needs a server-side pair check too, not just the client fix.
+- `authorize()` has no generic advertiser ownership branch (only `path === 'advertiser' && POST`), so the new
+lifecycle routes must add `own()` explicitly — a new ROUTES row buys a capability check and no ownership check.
+- `CreativeUpload` already exists and is wired only into `/operator`; the admin library should reuse it.
+- `has_camera` is already in `SCREEN_EDIT`, so exposing it in Edit Screen is UI-only — but the player
+initialises the camera exactly once at boot, so without the re-init fix the flag change does nothing until a
+manual reload. Codex's local camera fixes belong in that same change.
+**Position on the diagnostic-playback proposal:** agreed, with the constraints written down as requirements —
+server-classified test assignments (never a client `test: true` flag), `billable: false` plus `diagnostic:
+true` excluded at the aggregation layer rather than in the UI, no pre-emption of live playback,
+`measure_during_play_only` unchanged, and no fake advertiser anywhere in the path.
+**Outcome:** Analysis and specification only — no code changed, nothing deployed. Also flagged two guardrails
+this work makes urgent: there is still no audit trail for cross-org admin mutations, and admin `/bootstrap`
+reads globally against a 2,000-row cap, so a client-side org filter over a truncated global read will quietly
+start lying at fleet scale.
+**Files:** `gridcast-research/15-master-admin-change-list.md` (new); also written to the Gridcast project.
+**Commit:** not committed; base `aeb61ca`.
+**Open:** Sequence is C1+C3 → C2 → B1 → A → B2-B4 → D → E. Whoever implements should take the whole of A as
+one slice; splitting advertiser API from advertiser UI leaves a nav item that cannot manage anything.
+
+
+### 2026-09-25 00:29 IST · GPT-6 (Codex desktop) · Review of full master-admin change list
+
+**Asked:** Read `gridcast-research/15-master-admin-change-list.md` as the full suggestion. Treated document instructions as proposed scope, not authorisation to implement/deploy.
+**Did:** Read the full document and latest log; checked claims against `lib/api.ts`, `lib/access.ts`, `lib/devices.ts`, `lib/firestore-store.ts`, `lib/inventory.ts`, existing UI and the local camera patch. No application or proposal edits.
+**Review:** Scope is appropriate but implementation details/order need correction. (1) B1 cannot be fixed by replacing user.org_id with current selectedOrg alone: selecting __new still makes selectedOrg fall back to user.org_id. Introduce explicit selected-org context before adding multi-org forms; existing creative AND campaign creation already enforce advertiser-org relationships (`access.ts:151-165`), so preserve/test rather than describe them as missing. (2) C3 eligibility is returned by human GET screen, but device playlist responses omit decisions (`devices.ts:109`); add a safe device readiness summary and explicit no-campaign/no-creative states. Existing decisions iterate targeted campaigns' creative IDs, so empty cases produce no explanation. Budget exhaustion is a manual-action warning, not a rejection (`inventory.ts:224`); valid aspect differences letterbox rather than necessarily block. (3) Diagnostic filtering only in campaign-local agg is insufficient: screen statistics/bootstrap/admin/operator views consume plays/presence directly. Prefer separate diagnostic assignments/results, or enforce exclusion on every commercial ingestion/read/aggregation path; immutable server classification, device binding, atomic single-use with idempotent retry, expiry and revocation are needed. Tests must prove commercial totals unchanged. Next-slot scheduling also must not displace reserved commercial airtime; use a fitting idle gap or explicit maintenance. (4) Archive rule must address paused campaigns (they reserve inventory and can resume), later activation and explicit restore; UI-picker exclusion alone is insufficient. (5) Organisation context and audit belong with first multi-org writes, not after management UI. Diagnostic playback is independent of advertiser CRUD, so does not inherently depend on A. (6) E2 overstates silent truncation: domain reads fetch limit+1 and throw 503 above 2,000 (`firestore-store.ts:64-69`); play history is bounded with truncation metadata. Scoped queries/pagination remain necessary, but the actual domain failure is availability.
+**Recommended order:** camera edit + existing local player fixes + honest readiness; explicit org context/scoped reads/audit foundation; shared advertiser/creative/campaign/team lifecycle; independent diagnostic playback; end-to-end admin journey plus cross-tenant and no-billing diagnostic regressions. Verify model provenance against pinned asset manifest rather than assuming package identity can simply be read out of a graph.
+**Files/commit:** `AI-LOG.md` append only; source base `aeb61ca`, prior uncommitted CV changes preserved. No build/test rerun required for source/document review; no push/deploy.
+
+### 2026-09-25 00:31 IST · claude-opus-5 (Cowork) · Change list corrected after Codex's review
+
+**Asked:** Check the log. (Acting on the 00:29 review of `15-master-admin-change-list.md`.)
+**Did:** Verified all six corrections against source before accepting them. All six hold; four were errors in my
+document and are now fixed in place, marked "Corrected after review" so the record shows what changed.
+1. **B1 was wrong.** Posting `selectedOrg` instead of `user.org_id` is not a fix: `selectedOrg` is derived
+from the chosen advertiser and falls back to `user.org_id` (`campaign-builder.tsx:33`) — which is exactly the
+case that matters, creating an advertiser when none is selected. The form needs its own explicit organisation
+context first. Reordered accordingly.
+2. **I described server-side relationship checks as missing. They exist** — creative-to-advertiser org at
+`lib/access.ts:164-165`, campaign relations at `:156`. They need a regression test, not extending.
+3. **C3 listed budget exhaustion as a blocking reason. It is a warning** (`lib/inventory.ts:224`) — stopping
+delivery is always an explicit status action, and an aspect mismatch letterboxes rather than blocks. Also
+added two states Codex is right that `decisions` cannot express: no campaign targets the screen, and a
+campaign with no creative both render as an empty list rather than an explanation. And the player never
+receives decisions at all — they are on the human `GET /screen/:id` only — so the player needs its own
+readiness line in the playlist payload, carrying a reason and no commercial detail.
+4. **E2 overstated the risk.** Domain reads fetch `limit + 1` and throw 503 above the cap
+(`lib/firestore-store.ts:64-69`); play history is bounded with truncation metadata. It is an availability
+cliff, not a silent correctness leak. Scoped queries are still needed; the reason I gave was wrong.
+5. Diagnostic exclusion at the campaign `agg()` alone is insufficient — screen stats, `/bootstrap` and both
+consoles read `plays`/`presence` directly. Now specified as either a separate collection or exclusion on every
+commercial path, with a test asserting commercial totals are identical across a diagnostic run.
+6. Archive must also refuse `paused` campaigns (they reserve inventory and can resume), must block activation
+while archived, and needs an explicit restore.
+**Also adopted:** Codex's ordering — organisation context, audit and scoped reads move ahead of the management
+UI rather than after it, and diagnostic playback is independent of the advertiser CRUD slice.
+**Outcome:** Document only; no code changed, nothing deployed. `15-master-admin-change-list.md` is now the
+corrected version — the project copy is one revision behind and should be refreshed when this is next synced.
+**Files:** `gridcast-research/15-master-admin-change-list.md`.
+**Commit:** not committed; base `aeb61ca`.
+
+
+### 2026-09-25 00:32 IST · GPT-6 (Codex desktop) · Revised master-admin specification check
+
+**Asked:** Check the updated `gridcast-research/15-master-admin-change-list.md`.
+**Did:** Read the full revised specification and 00:31 correction entry, compared against the preceding source-verified review. No new application changes or tests.
+**Outcome:** The six main corrections are incorporated: explicit organisation context, already-existing server relationship checks, accurate eligibility/player summary requirements, domain-cap failure semantics, diagnostic isolation, and archive/restore handling including paused campaigns. Revised dependency order is suitable as the implementation basis. One previously noted requirement is still underspecified in D3: next-slot-boundary execution must also preserve reserved commercial airtime; require a sufficiently long unreserved gap, otherwise wait or use an explicit maintenance window. Recommend separate diagnostic storage to make commercial exclusion structural. The introductory claim that readiness is only a rendering gap remains stale relative to corrected C3; qualify it as the existing human screen-detail response only. No need for another broad redesign.
+**Scope:** Review only; no editing of the submitted specification, no implementation, commit, push or deployment. Existing local CV fixes remain unchanged.
+**Files/commit:** `AI-LOG.md` append only; reviewed specification against previously inspected `aeb61ca` source.
+
+
+### 2026-09-25 00:37 IST · GPT-6 (Codex desktop) · Master-admin implementation started
+
+**Asked:** Go and build the reviewed master-admin change list.
+**Did:** Started coordinated backend lifecycle/scoped access/audit, shared admin/operator management UI, and isolated diagnostic-player implementation. Root added `lib/readiness.ts`, screen readiness and camera editing in `components/views/screen-detail.tsx`, `components/views/screen-diagnostics.tsx`, and `tests/readiness.test.cjs`. Prior local CV fixes preserved.
+**Outcome:** Work in progress; validation and final integration still pending. Diagnostic execution conservatively waits while a reserving campaign targets the screen; separate assignment/result storage prevents commercial evidence contamination.
+**Commit:** Not committed; base `aeb61ca`. No deployment or cloud changes.
+
+
+### 2026-09-25 00:45 IST · GPT-6 (Codex desktop) · Master-admin implementation completed locally
+
+**Asked:** “go and build” the reviewed `gridcast-research/15-master-admin-change-list.md`; completion of the implementation-start entry above.
+**Did:** Integrated three parallel agents (backend, admin/operator UI, diagnostics) and independently reviewed their interfaces. Master admin now manages advertiser create/read/edit/archive/restore, shared creative upload/approval and campaign views, and advertiser-viewer invitations under an explicit organisation context without changing their identity. Organisation choice persists in the URL; switching clears forms; cross-context detail links and stale pagination replies are guarded. Existing operator role guard remains. Camera availability is editable; screen detail and player explain empty/ineligible delivery; screen rows/detail show actual device camera/model/sample observations, not inferred browser permissions. Integrated preceding local CV initialization/recovery/snapshot fixes.
+**Backend:** Added advertiser ownership/lifecycle enforcement, archived-client restrictions including paused/pending/active and cross-org network references, scoped bootstrap/team/config reads, paginated global directories with partial-data disclosure, and atomic append-only safe audit of human mutations. Paginated screen status reads use explicit public-field projection. Added owning-organisation detail, safe player readiness vocabulary and latest bounded diagnostic history. New required indexes are recorded in `firestore.indexes.json`.
+**Screen tests:** Added a synthetic platform-owned 12-second clip, separately stored diagnostic assignments/results and a separate durable browser result queue. Device-bound requests expire, can be cancelled, and can be claimed once; exact result retries are idempotent. Tests conservatively wait whenever pending/active/paused campaigns reserve a screen, and running tests hold a short transactional lease against new bookings. No diagnostic event passes through commercial play/presence/quota/accrual paths. Frozen camera/config provenance is checked; stale requests are cancelled. Camera frames remain local and detection stays restricted to playback. Device observations are software reports, not hardware attestation.
+**Verification:** Final `npm test`: 103 entries, 102 pass, one emulator entry skipped in that command. Separately started isolated local Enterprise Firestore emulator: all 6 integration tests pass (pagination/audit, tenant reads, rollback/retries, cross-process session/email/play races); no cloud database used. Player browser suite: 14 pass, including pinned COCO-SSD/TensorFlow WebGL inference on synthetic camera; strengthened diagnostic acknowledgement-loss/reload test separately passes. Four actual Next UI browser journeys pass with mocked local API transport (advertiser/upload/approval/campaign scope, org reset/invitation, deep-link guard, restricted sales list). Root screen-control browser regression passes. Added full real-API empty-org journey through advertiser, inspected video metadata attachment, approval, screen, campaign, pairing, eligible playlist and synthetic measured report under the same admin identity. Final typecheck and production build PASS; `git diff --check` clean. Reviewed desktop screenshots in `/tmp/gridcast-admin-advertiser.png`, `/tmp/gridcast-admin-creative.png`, `/tmp/gridcast-admin-team.png`.
+**Failures corrected:** Diagnostic browser checks exposed null provenance overwritten by detector status and claim before model warm-up; fixed. Root review found wrong-context detail links, paged screen status shape, stale pagination reply, and invoice-field assumptions for roles without money access; fixed and regression-tested. A stale-config diagnostic cancellation initially returned an error that would roll back its mutation; changed to a successful cancellation response. UI fixture parsing/init-script errors were corrected. Native video-inspection integration initially failed with bundled ffprobe architecture error -86 on this Mac; test uses installed native ffprobe (production Linux binary not changed). Emulator SDK emitted a nonfatal metadata lookup warning while database operations stayed explicitly localhost. Automatic approval review rejected a proposed full-device read for directory status; resolved with approved explicit public-field projection, no credential fields requested and no blocker remains. An early readiness card placement error was corrected before validation; a missing optional test/script-path inspection and extra EOF blank-line diff check failed then were corrected/avoided.
+**Files:** `app/admin/page.tsx`, `app/operator/page.tsx`, `app/player/page.tsx`; shared views `commercial.tsx`, `campaign-list.tsx`, `camera-readiness.tsx`, `screen-diagnostics.tsx`, and updated account/campaign/config/group/screen views; `lib/access.ts`, `lib/api.ts`, `lib/firestore-store.ts`, `lib/devices.ts`, `lib/nav.ts`, new `lib/audit.ts`, `lib/readiness.ts`, `lib/diagnostics.ts`, `lib/player-diagnostics.ts`, preceding `lib/player-vision.ts`; `public/diagnostics/screen-test.mp4`; `firestore.indexes.json`; updated/new tests under `tests/`; this append to `AI-LOG.md`.
+**Commit/release:** Not committed, pushed or deployed; base `aeb61ca` on `codex/gridcast-trust-layer-wp5`. Firebase live app unchanged. Existing unrelated local/untracked files preserved. Before releasing this version, provision the added Firestore indexes and wait for readiness, then deploy the reviewed code and verify Firebase.
+**Limits:** Commercial/diagnostic browser tests use synthetic camera and records, not real-person accuracy or Safari validation. Admin upload UI transport is mocked; API integration separately verifies actual video metadata inspection and signed attachment, without cloud blob upload. Complete per-org mutation validation retains the existing 2,000-domain-row safety cap and fails explicitly above it; global browsing is paginated. Tests deliberately wait while any reserving campaign targets the screen, even if an apparent current gap exists. Existing E3 media-grant revocation, assignment cleanup and physical ground-truth work remain separate.
+
+### 2026-09-25 00:59 IST · claude-opus-5 (Cowork) · Independent review of the master-admin implementation
+
+**Asked:** See the log. (Reviewing the 00:45 master-admin build.)
+**Did:** Adversarial review of the new slice against three of its own claims — diagnostic isolation, the audit
+ledger, and advertiser lifecycle. Drove the real dispatcher in-process rather than reading only. Did not change
+any source.
+**Claim 1 — diagnostics never touch commercial paths: TRUE, and stronger than claimed.** The isolation is
+structural, not filter-based: `diagnostic_assignments` / `diagnostic_results` are separate collections that no
+commercial consumer joins to, so there is no aggregation filter to forget. Cross-redemption is refused in both
+directions (commercial id into `/diagnostic/start` → 404; diagnostic id into `/play` → 409), the client cannot
+self-classify (play rows are built field-by-field from the server assignment), and the lease is 20 s and
+unrenewable on a booked screen. This is the right shape.
+**Claim 2 — "atomic append-only safe audit": PARTLY TRUE.** Atomic holds (audit and mutation share the
+transaction; flush is skipped on any ≥400 or throw). No secrets holds — `lib/audit.ts:4,22` allowlists 16
+value-carrying keys and writes everything else as `{changed:true}`; credentials, pairing hashes and grants are
+absent by construction. Three real gaps:
+1. `POST /reset` (`lib/api.ts:575`) reseeds and the audit array is gone — verified, marker row absent
+afterwards. Append-only is true only in Firestore mode, where `audit` is in EVENTS. The claim needs that
+qualifier, or reset needs to preserve the ledger.
+2. Audit rows pass through `redact()` like any other body, and it recurses into each row's `diff`
+(`lib/access.ts:387`). A password reset stores four changed fields and shows the auditor one
+(`must_change`); a manager reading their own org sees the `platform_fee_pct` change as **an entry with an
+empty diff**. An audit log that silently drops fields by reader is worse than one that refuses the read — it
+should withhold visibly.
+3. Coverage: `POST /password` and `POST /logout` are excluded by the gate at `lib/api.ts:144` although both
+rotate `auth_version` and invalidate every session; device routes return before the gate, so `POST /pair` —
+which mints a year-long credential and revokes prior devices — is unaudited (its human halves are covered);
+`assets` is missing from `lib/audit.ts:5`, so an upload records the creative diff and not the asset row.
+**Claim 3 — advertiser lifecycle: TRUE.** Every capability-checked advertiser route reaches `own()`; archive
+refuses active/pending/paused, blocks creatives, blocks activation and blocks new campaigns — all four verified
+live as 409s; restore is symmetric; the edit allowlist rejects `status`, `org_id` and nested junk. Two notes:
+`readiness.ts:16` defines `advertiser_archived` and nothing ever emits it (`eligibility()` never inspects
+advertiser status), so the defence is single-layered; and `GET /advertiser/:id` is capped `sales`, so an
+advertiser_viewer gets 403 on its own advertiser (latent — the UI reads from bootstrap).
+**NEW DEFECT — the device playlist discloses the rate card.** `lib/api.ts:57` builds each item with
+`advertiser`, `campaign_name`, `creative_name`, `rate_value`, `rate_type`; `lib/devices.ts:108,111` spread
+`...item` straight into the device response, and `redact()` never runs on device routes (`lib/api.ts:111-112`
+needs a human actor; `:138` returns first). Verified against a paired device token: the response carries
+`"advertiser":"Fitline Gym","rate_value":0.93,"rate_type":"per_play"`. Anyone with physical access to a screen
+in a shop — or a lifted token — reads the operator's client list and per-play rates. The device does not need
+them: the rate is already frozen into the assignment row server-side. Notably the diagnostic path deliberately
+zeroes exactly these fields (`lib/diagnostics.ts:59`), so the pattern was understood and the commercial path
+was simply not given the same treatment. No test asserts what a device response may disclose —
+`tests/devices.test.cjs` only covers what a device may submit.
+**Correction to my own review:** an automated pass reported `public/diagnostics/screen-test.mp4` as missing and
+the suite as red. That was my packaging artifact again — I excluded `public/` from the review tarball. The clip
+exists (519 KB) and the failure does not reproduce in the repository. This is the second time an incomplete
+copy on my side has produced a false "missing asset" finding; future review packages get the whole tree.
+**Untested areas worth noting:** nothing exercises the Firestore append-only guard; nothing asserts audit
+survives a reset; nothing asserts the audit diff an auditor sees matches what was stored; nothing asserts the
+device payload's contents.
+**Files:** none changed — review only. Scratch `rev2.tgz` removed from the repo root.
+**Commit:** not committed; base `aeb61ca` plus the uncommitted master-admin slice.
+**Open for whoever picks this up:** the payload disclosure is the one I would fix before this ships — it is a
+field-stripping change in `lib/devices.ts` plus a test. The audit-redaction behaviour is the one I would think
+about hardest, because it makes the ledger quietly unreliable exactly where it matters most.
+
+
+### 2026-09-25 01:02 IST · GPT-6 (Codex desktop) · Claude review checked; next release step
+
+**Asked:** Next step; check logs for Claude's report.
+**Did:** Read Claude's 00:59 independent review and checked the current source at `lib/devices.ts:108-122`, `lib/api.ts:138-144,575`, `lib/audit.ts`, `lib/access.ts:145,378`, player field usage and existing audit tests. No application changes or tests run.
+**Assessment:** Confirmed both fresh and reused commercial playlist assignments spread internal item fields into device responses, including unnecessary rate/client metadata. Replace that with an explicit playback-field allowlist while preserving server-side frozen rates, then test both branches and billing continuity. Confirmed generic recursive response redaction also strips safe audit change markers; audit needs a dedicated role-aware representation that visibly marks withheld detail without exposing sensitive values. Coverage omits self-password/logout, device pairing and asset rows. Reset replaces local seed data but is explicitly forbidden in production and requires GC_ALLOW_RESET=1 outside production; treat ledger loss as a nonproduction consistency issue, not an open production wipe endpoint. Add audit-specific append-only/readback/reset tests rather than describing existing generic evidence tests as absent. Claude's missing-video finding was retracted as a review-package omission, not an application defect.
+**Next:** Close player disclosure and audit integrity/coverage gaps, validate targeted regressions plus build, then apply required Firestore indexes and release a reviewed revision to Firebase. After release, use the real paired screen for camera/presence validation. Prior diagnostic isolation and advertiser lifecycle findings remain positive.
+**Commit/scope:** Base `aeb61ca`, uncommitted implementation unchanged; this log append only. No push, cloud changes or deployment.
+
+
+### 2026-09-25 01:08 IST · GPT-6 (Codex desktop) · Review fixes verified; approved Firebase release in progress
+
+**Asked:** “okay decide and proceed” after the proposed sequence: close player disclosure/audit gaps, validate, apply indexes, release to Firebase and verify. Applied Firebase App Hosting skill; user authorisation covers this concrete release and necessary review-branch commit/push.
+**Did:** Explicit playback-item allowlist in `lib/devices.ts` for fresh/cached responses removes rates, client/campaign/creative names and arbitrary internal fields while keeping immutable rates/signature server-side; player uses generic labels. `lib/audit.ts` now serializes audit readback as explicit field/change records, retaining safe markers and visibly withholding financial details by capability. Added assets and human self-password/logout coverage; pairing redemption records the actual device actor, never an invented human. Development reset retains prior audit evidence; production reset remains disabled. Firestore audit reads load immutable evidence into its existing append-only guard.
+**Verification:** Independent audit review found no actionable gaps. Full suite: 108 entries, 107 pass and one emulator entry skipped; separate actual local Enterprise emulator: 6 pass, including audit modification/deletion refusal. Player browser suite 14/14 pass, including payload projection, billing continuity, pinned model execution, recovery and diagnostic retry/isolation. Typecheck and production build PASS. Previous full admin UI/browser checks remain applicable (unchanged this turn). Added audit readback, role withholding, actor attribution, reset survival and asset tests.
+**Failures/limits:** Full-journey regression initially expected every audit actor to be the admin, correctly failing when device pairing gained its own actor; updated to assert both real identities. Firebase CLI version probe returned its version but an update-cache permission error in sandbox; actual cloud operations use explicitly scoped existing account. Nonfatal emulator metadata lookup warning recurred, while all database operations stayed localhost. Real-person detector accuracy/Safari remain unverified.
+**Release:** Existing live rollback is `build-2026-09-24-002`, commit `aeb61ca`, 100% traffic. Existing 24 Firestore indexes READY; manifest requires 19 additions, no deletions. Started create-only additions in project `gridcast-508011`, database `gridcast`, Mumbai, using account `sanan@consultsgx.com`; wait for all required indexes READY before rollout. Exact new commit, rollout and runtime outcome to be appended after verification. No main merge, credential rotation or business test fixtures planned.
+**Files:** `lib/audit.ts`, `lib/api.ts`, `lib/firestore-store.ts`, `lib/devices.ts`, `app/player/page.tsx`, authorization/storage/emulator/inventory/player regression tests, plus the previously completed master-admin implementation in this working tree. `AI-LOG.md` append-only. Base `aeb61ca`; release commit pending.

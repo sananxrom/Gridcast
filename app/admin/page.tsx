@@ -1,6 +1,6 @@
 'use client';
 import { HistoryNotice } from '@/components/views/history-notice';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { tabFor } from '@/lib/roles';
 import { api, session, type SessionUser } from '@/lib/client';
 import { inr, isLive, fmtDate, daySeries } from '@/lib/utils';
@@ -19,11 +19,14 @@ import { ScreenDetail } from '@/components/views/screen-detail';
 import { ScreenOnboarding } from '@/components/views/screen-onboarding';
 import { GroupManager } from '@/components/views/groups';
 import { CampaignDetail } from '@/components/views/campaign-detail';
+import { CameraReadiness } from '@/components/views/camera-readiness';
+import { CampaignList } from '@/components/views/campaign-list';
 import { CampaignBuilder } from '@/components/views/campaign-builder';
 import type { CmdItem } from '@/components/ui/command-palette';
 import { BootLoader } from '@/components/ui/loader';
 import { ConfigList, ConfigEditor } from '@/components/views/config-views';
-import { ProfilePage, TeamPage } from '@/components/views/account';
+import { Advertisers, AdvertiserDetail, Creatives } from '@/components/views/commercial';
+import { ProfilePage, OrgPage, PayoutPage, TeamPage } from '@/components/views/account';
 import { useDirtyForm, SaveBar } from '@/components/ui/form';
 
 export default function Admin() {
@@ -32,39 +35,70 @@ export default function Admin() {
   const [view, setView] = useState('overview');
   const [editOrg, setEditOrg] = useState('');
   const [orgFilter, setOrgFilter] = useState('all');
+  const [orgDirectory,setOrgDirectory]=useState<any[]>([]);
+  const [loadError,setLoadError]=useState('');
+  const request = useRef(0);
+  const scopeRef = useRef('all');
+  const load = useCallback(async (scope:string) => {
+    const n=++request.current; setLoadError('');
+    try { const data=await api('/bootstrap'+(scope==='all'?'':`?org=${encodeURIComponent(scope)}`));
+      if(n===request.current)setD(data);
+    } catch(e) { if(n===request.current)setLoadError((e as Error).message); }
+  },[]);
+  const loadOrgs = useCallback(async()=>{
+    const items:any[]=[]; let after='';
+    do { const page=await api('/directory?entity=orgs&limit=100'+(after?'&after='+encodeURIComponent(after):'')); items.push(...page.items); after=page.has_more?page.next_cursor:''; } while(after);
+    setOrgDirectory(items);
+  },[]);
 
-  const reload = useCallback(async () => { if (user) setD(await api(`/bootstrap?user=${user.id}`)); }, [user]);
+  const reload = useCallback(async () => { if (user) await Promise.all([load(scopeRef.current),loadOrgs()]); }, [user,load,loadOrgs]);
   useEffect(() => {
     const u = session.get();
     if (!u || tabFor(u.role) !== 'platform') { location.href = '/'; return; }
-    setUser(u); api(`/bootstrap?user=${u.id}`).then(setD);
-    const sync = () => setView(location.hash.slice(1) || 'overview');
-    sync(); window.addEventListener('hashchange', sync);
-    return () => window.removeEventListener('hashchange', sync);
+    setUser(u); loadOrgs().catch(e=>setLoadError(e.message));
+    const sync = () => {
+      const next=new URLSearchParams(location.search).get('org')||'all';
+      if(scopeRef.current!==next) {scopeRef.current=next;setOrgFilter(next);setD(null);load(next);}
+      setView(location.hash.slice(1) || 'overview');
+    };
+    const initial=new URLSearchParams(location.search).get('org')||'all';scopeRef.current=initial;setOrgFilter(initial);load(initial);
+    sync(); window.addEventListener('hashchange', sync); window.addEventListener('popstate',sync);
+    return () => {window.removeEventListener('hashchange', sync);window.removeEventListener('popstate',sync);};
   }, []);
-  const go = (g: string) => { location.hash = g; setView(g); };
+  const go = (g: string, ownerOverride?:string) => {
+    const rows=g.startsWith('s/')?d?.screens:g.startsWith('c/')?d?.campaigns:g.startsWith('a/')?d?.advertisers:g.startsWith('cfg/')?d?.configs:null;
+    const owner=ownerOverride??rows?.find((r:any)=>r.id===g.slice(g.startsWith('cfg/')?4:2))?.org_id;
+    if(owner&&owner!==scopeRef.current){const url=new URL(location.href);url.searchParams.set('org',owner);url.hash=g;history.pushState(null,'',url);scopeRef.current=owner;setOrgFilter(owner);setView(g);setD(null);load(owner);return;}
+    location.hash = g; setView(g);
+  };
+  const selectOrg=(id:string)=>{
+    const url=new URL(location.href); if(id==='all')url.searchParams.delete('org');else url.searchParams.set('org',id);
+    const current=location.hash.slice(1)||'overview';
+    const next=current.startsWith('s/')?'screens':current.startsWith('c/')||current==='new'?'campaigns':current.startsWith('a/')?'advertisers':current.startsWith('cfg/')?'configs':current==='new-screen'?'screens':current;
+    url.hash=next;history.pushState(null,'',url);scopeRef.current=id;setOrgFilter(id);setView(next);setEditOrg('');setD(null);load(id);
+  };
 
   const cmdItems: CmdItem[] = useMemo(() => !d ? [] : [
     ...d.screens.map((s: any) => ({ id: s.id, label: s.name, sub: s.address, kind: 'screen', go: 's/' + s.id })),
     ...d.campaigns.map((c: any) => ({ id: c.id, label: c.name, sub: d.orgs.find((o: any) => o.id === c.org_id)?.name, kind: 'campaign', go: 'c/' + c.id })),
-    ...d.advertisers.map((a: any) => ({ id: a.id, label: a.name, sub: a.category, kind: 'advertiser', go: 'campaigns' })),
+    ...d.advertisers.map((a: any) => ({ id: a.id, label: a.name, sub: a.category, kind: 'advertiser', go: 'a/' + a.id })),
   ], [d]);
 
-  if (!user || !d) return <BootLoader />;
+  if (!user || !d) return loadError ? <Card className="m-6 p-5"><p role="alert">{loadError}</p><Button onClick={()=>load(scopeRef.current)}>Retry</Button><Button variant="outline" onClick={()=>selectOrg('all')}>All organisations</Button></Card> : <BootLoader />;
 
-  const orgName = (id: string) => d.orgs.find((o: any) => o.id === id)?.name ?? '—';
+  const orgName = (id: string) => orgDirectory.find((o: any) => o.id === id)?.name ?? '—';
   const advName = (id: string) => d.advertisers.find((a: any) => a.id === id)?.name ?? '—';
   const byOrg = <T extends { org_id: string }>(rows: T[]) => orgFilter === 'all' ? rows : rows.filter(r => r.org_id === orgFilter);
   const pending = d.creatives.filter((c: any) => c.approval_status === 'pending');
-  const offline = d.screens.filter((s: any) => s._status.state === 'offline' || s._status.state === 'stalled');
+  const offline = d.screens.filter((s: any) => s._status?.state === 'offline' || s._status?.state === 'stalled');
   const alerts = [
-    ...offline.map((s: any) => ({ kind: 'Screen', tone: 'destructive', text: `${s.name} (${orgName(s.org_id)}) is ${s._status.label}`, go: 's/' + s.id })),
+    ...offline.map((s: any) => ({ kind: 'Screen', tone: 'destructive', text: `${s.name} (${orgName(s.org_id)}) is ${s._status?.label}`, go: 's/' + s.id })),
     ...pending.map((c: any) => ({ kind: 'Approval', tone: 'warn', text: `${c.name} awaiting platform approval`, go: 'approvals' })),
   ];
   const nav = adminNav({ inbox: alerts.length, approvals: pending.length });
-  const orgs = [{ id: 'all', name: 'All organisations', type: 'gridcast' }, ...d.orgs.map((o: any) => ({ id: o.id, name: o.name, type: o.type }))];
+  const orgs = [{ id: 'all', name: 'All organisations', type: 'gridcast' }, ...orgDirectory.map((o: any) => ({ id: o.id, name: o.name, type: o.type }))];
   const currentOrg = orgs.find(o => o.id === orgFilter) ?? orgs[0];
-  const titleOf: Record<string, string> = { overview: 'Overview', orgs: 'Organisations', screens: 'All screens', devices: 'Device health', campaigns: 'Campaigns', approvals: 'Approvals', inbox: 'Inbox', analytics: 'Analytics', profile: 'Profile', configs: 'Device configs', settings: 'Organisation', 'set-org': 'Organisation', 'set-api': 'API keys', 'set-hooks': 'Webhooks', 'set-billing': 'Billing & payouts', 'set-team': 'Team & users' };
+  const titleOf: Record<string, string> = { overview: 'Overview', advertisers:'Advertisers', creatives:'Creatives', groups:'Screen groups', orgs: 'Organisations', screens: 'All screens', devices: 'Device health', campaigns: 'Campaigns', approvals: 'Approvals', inbox: 'Inbox', analytics: 'Analytics', profile: 'Profile', configs: 'Device configs', settings: 'Organisation', 'set-org': 'Organisation', 'set-api': 'API keys', 'set-hooks': 'Webhooks', 'set-billing': 'Billing & payouts', 'set-team': 'Team & users' };
   const trendScreen = (sid: string) => daySeries(
     d.presence.filter((x: any) => x.screen_id === sid && x.measured).map((x: any) => ({ at: x.at, value: x.avg_persons })));
   const setCampaign = async (c: any, patch: any) => { await api(`/campaign/${c.id}`, patch); reload(); };
@@ -90,7 +124,7 @@ export default function Admin() {
     const root = { label: currentOrg.name, go: 'overview' };
     if (view.startsWith('s/')) return [root, { label: 'All screens', go: 'screens' }, nameOf(d.screens, view.slice(2), 'Screen')];
     if (view.startsWith('c/')) return [root, { label: 'Campaigns', go: 'campaigns' }, nameOf(d.campaigns, view.slice(2), 'Campaign')];
-    if (view.startsWith('a/')) return [root, { label: 'Organisations', go: 'orgs' }, nameOf(d.advertisers, view.slice(2), 'Advertiser')];
+    if (view.startsWith('a/')) return [root, { label: 'Advertisers', go: 'advertisers' }, nameOf(d.advertisers, view.slice(2), 'Advertiser')];
     if (view.startsWith('cfg/')) return [root, { label: 'Device configs', go: 'configs' }, 'Config'];
     if (view.startsWith('set-') || view === 'settings') return [root, 'Settings', titleOf[view] ?? 'Settings'];
     if (view === 'overview') return [root];
@@ -99,26 +133,38 @@ export default function Admin() {
 
   return (
     <AppShell groups={nav.groups} bottom={nav.bottom} activeId={view} onSelect={go}
-      orgs={orgs} currentOrg={currentOrg} onOrgSelect={setOrgFilter}
+      orgs={orgs} currentOrg={currentOrg} onOrgSelect={selectOrg}
       breadcrumb={trail} cmdItems={cmdItems} onGo={go}
       user={{ name: user.name, role: user.role }}>
 
+      <div key={orgFilter}>
+      {loadError&&<p role="alert" className="mb-4 text-sm text-destructive">{loadError}</p>}
+      <p className="mb-4 text-xs text-muted-foreground">Working in: <b>{currentOrg.name}</b> · Signed in as {user.name}, platform administrator</p>
+      {d.pagination?.partial&&<Card className="mb-4 p-4 text-sm">Showing a limited directory page. Counts and spend below cover loaded records only. Select an organisation for its operational view.</Card>}
       <HistoryNotice history={d.history} />
-      {view === 'configs' && <ConfigList user={user} onOpen={id => go('cfg/' + id)} onChanged={() => reload()} />}
-      {view.startsWith('cfg/') && <ConfigEditor id={view.slice(4)} user={user} onGo={go} onChanged={() => reload()} />}
+      {view==='advertisers'&&<Advertisers d={{...d,orgs:orgDirectory}} user={user} orgId={orgFilter==='all'?null:orgFilter} onGo={go} onChanged={reload}/>}
+      {view.startsWith('a/')&&<AdvertiserDetail key={view} id={view.slice(2)} d={{...d,orgs:orgDirectory}} user={user} orgId={orgFilter==='all'?null:orgFilter} onGo={go} onChanged={reload}/>}
+      {view==='creatives'&&<Creatives d={{...d,orgs:orgDirectory}} user={user} orgId={orgFilter==='all'?null:orgFilter} onChanged={reload}/>}
+      {view === 'configs' && <ConfigList user={user} orgId={orgFilter==='all'?null:orgFilter} onOpen={(id,owner) => go('cfg/' + id,owner)} onChanged={() => reload()} />}
+      {view.startsWith('cfg/') && orgFilter==='all' && <Empty>Select an organisation to open its configuration.</Empty>}
+      {view.startsWith('cfg/') && orgFilter!=='all' && <ConfigEditor id={view.slice(4)} user={user} orgId={orgFilter==='all'?null:orgFilter} onGo={go} onChanged={() => reload()} />}
 
-      {view === 'groups' && <GroupManager boot={d} user={user} onChanged={reload} />}
-      {view === 'new-screen' && <ScreenOnboarding boot={d} user={user} onGo={go} onDone={async(s:any)=>{await reload();go('s/'+s.id);}} />}
-      {view.startsWith('s/') && <ScreenDetail id={view.slice(2)} onGo={go} onChanged={reload} />}
-      {view.startsWith('c/') && <CampaignDetail id={view.slice(2)} boot={d} onGo={go} onChanged={reload} />}
-      {view === 'new' && <CampaignBuilder boot={d} user={user} onGo={go} onDone={async (c: any) => { await reload(); go('c/' + c.id); }} />}
+      {view === 'groups' && orgFilter==='all' && <Empty>Select an organisation above to manage its screen groups.</Empty>}
+      {view === 'groups' && orgFilter!=='all' && <GroupManager boot={{...d,orgs:orgDirectory}} user={user} orgId={orgFilter==='all'?null:orgFilter} onChanged={reload} />}
+      {view === 'new-screen' && orgFilter==='all' && <Empty>Select an organisation above to register a screen.</Empty>}
+      {view === 'new-screen' && orgFilter!=='all' && <ScreenOnboarding boot={{...d,orgs:orgDirectory}} user={user} orgId={orgFilter==='all'?null:orgFilter} onGo={go} onDone={async(s:any)=>{await reload();go('s/'+s.id);}} />}
+      {view.startsWith('s/') && orgFilter!=='all' && !d.screens.some((s:any)=>s.id===view.slice(2)&&s.org_id===orgFilter) && <Empty>This screen is outside the selected organisation. Select its organisation before opening it.</Empty>}
+      {view.startsWith('s/') && (orgFilter==='all'||d.screens.some((s:any)=>s.id===view.slice(2)&&s.org_id===orgFilter)) && <ScreenDetail id={view.slice(2)} onGo={go} onChanged={reload} />}
+      {view.startsWith('c/') && orgFilter!=='all' && !d.campaigns.some((c:any)=>c.id===view.slice(2)&&c.org_id===orgFilter) && <Empty>This campaign is outside the selected organisation. Select its organisation before opening it.</Empty>}
+      {view.startsWith('c/') && (orgFilter==='all'||d.campaigns.some((c:any)=>c.id===view.slice(2)&&c.org_id===orgFilter)) && <CampaignDetail id={view.slice(2)} boot={d} onGo={go} onChanged={reload} />}
+      {view === 'new' && <CampaignBuilder boot={d} user={user} orgId={orgFilter==='all'?null:orgFilter} onGo={go} onDone={async (c: any) => { await reload(); go('c/' + c.id); }} />}
 
       {view === 'overview' && (() => {
         const measured = d.presence.filter((p: any) => p.measured);
         return (<>
           <PageHead title="Platform overview" sub={`${d.screens.length} screens · ${d.orgs.length - 1} operators · ${d.campaigns.filter(isLive).length} live campaigns`} />
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Stat label="Screens" value={d.screens.length} hint={`${d.screens.filter((s: any) => s._status.state === 'live').length} on air`} />
+            <Stat label="Screens" value={d.screens.length} hint={`${d.screens.filter((s: any) => s._status?.state === 'live').length} on air`} />
             <Stat label="Play reports" value={d.plays.length.toLocaleString('en-IN')} hint="across network" />
             <Stat label="Avg people / play" value={measured.length ? (measured.reduce((a: number, b: any) => a + b.avg_persons, 0) / measured.length).toFixed(1) : '—'} hint={`${measured.length} measured`} />
             <Stat label="Spend accrued" value={inr(d.campaigns.reduce((s: number, c: any) => s + c.accrued_spend, 0))} hint={`of ${inr(d.campaigns.reduce((s: number, c: any) => s + c.committed_budget, 0))} committed`} />
@@ -158,39 +204,19 @@ export default function Admin() {
           { className: 'min-w-[168px]', label: 'Screen', sort: (s: any) => s.name, render: (s: any) => <><button onClick={() => go('s/' + s.id)} className="text-left font-medium text-primary hover:underline">{s.name}</button><div className="text-[12px] text-muted-foreground">{s.address}</div></> },
           { label: 'Org', render: (s: any) => <span className="text-muted-foreground">{orgName(s.org_id)}</span> },
           { label: 'Type', render: (s: any) => <><Badge variant="muted">{s.venue_type}</Badge> <span className="text-[12px] text-muted-foreground">{s.size_in}&quot;</span></> },
-          { label: 'State', sort: (s: any) => s._status.state, render: (s: any) => <StatusBadge st={s._status} /> },
-          { label: 'Camera', render: (s: any) => s.has_camera ? <Badge variant="ok">yes</Badge> : <Badge variant="warn">none</Badge> },
+          { label: 'State', sort: (s: any) => s._status?.state, render: (s: any) => <StatusBadge st={s._status??{state:'unknown',label:'Not loaded — open organisation'}} /> },
+          { label: 'Camera readiness', render: (s:any) => <CameraReadiness screen={s} devices={d.devices}/> },
           { label: 'Running', num: true, render: (s: any) => { const n = d.campaigns.filter((c: any) => c.screen_ids.includes(s.id) && isLive(c)).length;
             return n ? <><b>{n}</b> <span className="text-muted-foreground">campaigns</span></> : <span className="text-muted-foreground">idle</span>; } },
           { label: 'People / play', render: (s: any) => <Spark data={trendScreen(s.id)} /> },
           { label: 'Monthly', num: true, sort: (s: any) => s.monthly_value, render: (s: any) => inr(s.monthly_value) },
         ]} rows={byOrg(d.screens)} rowId={(s: any) => s.id} exportName="all-screens" onDone={reload} bulk={screenBulk}
           search={(s: any) => `${s.name} ${s.venue_name} ${s.address}`}
-          facets={[{ label: 'State', get: (s: any) => s._status.state }, { label: 'Venue', get: (s: any) => s.venue_type },
+          facets={[{ label: 'State', get: (s: any) => s._status?.state }, { label: 'Venue', get: (s: any) => s.venue_type },
                    { label: 'Org', get: (s: any) => orgName(s.org_id) }]} />
       </>)}
 
-      {view === 'campaigns' && (<>
-        <PageHead title="Campaigns" sub={orgFilter === 'all' ? 'All organisations' : currentOrg.name}
-          actions={<Button onClick={() => go('new')}>+ New campaign</Button>} />
-        <DataTable cols={[
-          { className: 'min-w-[168px]', label: 'Campaign', render: (c: any) => <><button onClick={() => go('c/' + c.id)} className="text-left font-medium text-primary hover:underline">{c.name}</button><div className="text-[12px] text-muted-foreground">{advName(c.advertiser_id)}</div></> },
-          { label: 'Org', render: (c: any) => <span className="text-muted-foreground">{orgName(c.org_id)}</span> },
-          { label: 'Type', render: (c: any) => <Badge variant={c.campaign_type === 'network' ? 'default' : 'muted'}>{c.campaign_type}</Badge> },
-          { label: 'Dates', render: (c: any) => <span className="block whitespace-nowrap font-mono text-[12px] leading-snug text-muted-foreground">{c.starts_at}<br />→ {c.ends_at}</span> },
-          { label: 'Screens', num: true, render: (c: any) => c.screen_ids.length },
-          { label: 'Budget', num: true, render: (c: any) => { const p = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
-            return <div className="flex flex-col items-end gap-1 whitespace-nowrap"><span>{inr(c.accrued_spend)}</span><span className="text-[11.5px] text-muted-foreground">of {inr(c.committed_budget)}</span><Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
-          { label: 'Fee', num: true, render: (c: any) => c.platform_fee_pct ? `${c.platform_fee_pct}%` : <span className="text-muted-foreground">0%</span> },
-          { label: 'Status', sort: (c: any) => c.status, render: (c: any) => (
-            <InlineSelect value={c.status} choices={STATUS_CHOICES} onChange={v => setCampaign(c, { status: v })}>
-              {isLive(c) ? <Badge variant="onair" blip>live</Badge> : <Badge variant="muted">{c.status}</Badge>}
-            </InlineSelect>) },
-        ]} rows={byOrg(d.campaigns)} rowId={(c: any) => c.id} exportName="campaigns" onDone={reload} bulk={campaignBulk}
-          search={(c: any) => c.name}
-          facets={[{ label: 'Status', get: (c: any) => c.status }, { label: 'Type', get: (c: any) => c.campaign_type },
-                   { label: 'Org', get: (c: any) => orgName(c.org_id) }]} />
-      </>)}
+      {view==='campaigns'&&<CampaignList d={{...d,orgs:orgDirectory}} orgId={orgFilter==='all'?null:orgFilter} onGo={go} onChanged={reload}/>}
 
       {view === 'approvals' && (<>
         <PageHead title="Creative approvals" sub={`${pending.length} awaiting review · platform policy gate`} />
@@ -219,7 +245,7 @@ export default function Admin() {
           { label: 'Screen', render: (v: any) => { const s = d.screens.find((x: any) => x.id === v.screen_id);
             return <><button onClick={() => go('s/' + v.screen_id)} className="text-left font-medium text-primary hover:underline">{s?.name ?? '—'}</button><div className="font-mono text-[11.5px] text-muted-foreground">{v.id}</div></>; } },
           { label: 'Org', render: (v: any) => <span className="text-muted-foreground">{orgName(v.org_id)}</span> },
-          { label: 'Status', render: (v: any) => { const s = d.screens.find((x: any) => x.id === v.screen_id); return <StatusBadge st={s?._status} />; } },
+          { label: 'Status', render: (v: any) => { const s = d.screens.find((x: any) => x.id === v.screen_id); return <StatusBadge st={s?._status??{state:'unknown',label:'Not loaded'}} />; } },
           { label: 'Last heartbeat', render: (v: any) => <span className="font-mono text-[12px] text-muted-foreground">{fmtDate(v.last_heartbeat_at)}</span> },
           { label: 'Play reports', num: true, render: (v: any) => d.plays.filter((p: any) => p.screen_id === v.screen_id).length },
           { label: 'App', render: (v: any) => <span className="font-mono text-[12px] text-muted-foreground">v{v.app_ver}</span> },
@@ -256,9 +282,13 @@ export default function Admin() {
       </>)}
 
       {view === 'profile' && <ProfilePage user={user} onSaved={() => { const u = session.get(); if (u) setUser(u); reload(); }} />}
-      {view === 'set-team' && <TeamPage user={user} onChanged={reload} />}
-      {(view === 'settings' || view === 'set-org') && <PlatformSettings d={d} onSaved={() => { const u = session.get(); if (u) setUser(u); reload(); }} />}
-      {['set-billing','set-team','set-api','set-hooks'].includes(view) && <><PageHead title="Settings" /><SoonPage title="Not built yet" note="Billing, team management, API keys and webhooks are planned but not implemented." /></>}
+      {view === 'set-team' && <TeamPage user={user} boot={{...d,orgs:orgDirectory}} orgId={orgFilter==='all'?null:orgFilter} onChanged={reload} />}
+      {(view === 'settings' || view === 'set-org') && orgFilter!=='all' && <OrgPage d={{...d,org:orgDirectory.find(o=>o.id===orgFilter)}} user={user} orgId={orgFilter} onSaved={reload}/> }
+      {view==='set-billing' && (orgFilter==='all'?<Empty>Select an organisation to manage its payouts.</Empty>:<PayoutPage d={{...d,org:orgDirectory.find(o=>o.id===orgFilter)}} user={user} orgId={orgFilter} onSaved={reload}/>)}
+      {(view === 'settings' || view === 'set-org') && orgFilter==='all' && <PlatformSettings d={d} onSaved={() => { const u = session.get(); if (u) setUser(u); reload(); }} />}
+      {['set-api','set-hooks'].includes(view) && <><PageHead title="Settings" /><SoonPage title="Not built yet" note="API keys and webhooks are planned but not implemented." /></>}
+      {['screens','advertisers','creatives','campaigns','orgs','devices'].includes(view)&&d.pagination?.[view]?.has_more&&<Button className="mt-4" variant="outline" onClick={async()=>{const generation=request.current,scope=scopeRef.current,entity=view;try{const page=await api(`/directory?entity=${view}&limit=100&after=${encodeURIComponent(d.pagination[view].next_cursor)}`+(orgFilter==='all'?'':`&org=${encodeURIComponent(orgFilter)}`));if(generation!==request.current||scope!==scopeRef.current)return;setD((old:any)=>({...old,[entity]:[...old[entity],...page.items.filter((x:any)=>!old[entity].some((r:any)=>r.id===x.id))],pagination:{...old.pagination,[entity]:page}}));}catch(e){setLoadError((e as Error).message);}}}>Load more {view}</Button>}
+      </div>
     </AppShell>
   );
 }
@@ -348,7 +378,7 @@ function EditOrg({ org, onDone }: { org: any; onDone: () => void }) {
         </Select></Field>
       </div>
       <SaveBar {...fm} note="The operator sees this fee on their own settings page." onSave={() => fm.save(async v => {
-        await api(`/org/${org.id}`, { name: v.name, status: v.status, platform_fee_pct: Number(v.platform_fee_pct) || 0, _as: 'platform_admin' });
+        await api(`/org/${org.id}`, { name: v.name, status: v.status, platform_fee_pct: Number(v.platform_fee_pct) || 0 });
         onDone();
       })} onDiscard={fm.discard} />
     </Card>

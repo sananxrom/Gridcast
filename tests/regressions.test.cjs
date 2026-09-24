@@ -97,7 +97,7 @@ const deviceModule = { exports: {} };
 new Function('require','module','exports', ts.transpileModule(
   fs.readFileSync(path.join(root, 'lib/devices.ts'), 'utf8'),
   { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }
-).outputText)(require, deviceModule, deviceModule.exports);
+).outputText)(name=>name.startsWith('.')?require('./load-lib.cjs')(name.slice(2)):require(name), deviceModule, deviceModule.exports);
 const { issuePairing, deviceRoute } = deviceModule.exports;
 const MODEL = 'coco-ssd@2.2.3/lite_mobilenet_v2';
 
@@ -286,7 +286,8 @@ test('an assignment is reused only while everything it freezes is unchanged', ()
     assert.notEqual(after.assignment_id, before.assignment_id, what + ' must issue a new assignment');
     const row = f.db.device_assignments.find(a => a.id === after.assignment_id);
     assert.equal(row.youtube_id, after.youtube_id ?? null, 'evidence must match what was served: ' + what);
-    assert.equal(row.rate_value, after.rate_value ?? 0);
+    assert.equal(after.rate_value, undefined, 'device responses never expose the frozen price');
+    assert.equal(row.rate_value, what === 'a different rate' ? 99 : 9);
     assert.equal(row.duration_s, after.duration_s);
     assert.equal(row.creative_id, after.creative_id);
   }

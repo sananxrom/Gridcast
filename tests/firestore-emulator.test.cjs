@@ -18,7 +18,7 @@ function load(name) {
   const code = ts.transpileModule(fs.readFileSync(path.join(__dirname, '../lib', `${name}.ts`), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
   }).outputText;
-  const mod = { exports: {} }; new Function('require', 'module', 'exports', code)(require, mod, mod.exports);
+  const mod = { exports: {} }; new Function('require', 'module', 'exports', code)(name=>name.startsWith('.')?load(name.slice(2)):require(name), mod, mod.exports);
   return cache[name] = mod.exports;
 }
 function database(id) {
@@ -83,6 +83,29 @@ if (process.argv[2] === 'worker') {
   test('Firestore emulator integration (requires explicitly started local emulator)', { skip: `Set FIRESTORE_EMULATOR_HOST=${EXPECTED_HOST}` }, () => {});
 } else {
   guard();
+  test('real emulator supports paginated admin scope and atomic audit writes', async()=>{
+    const f=await fixture();
+    try {
+      await f.db.doc('advertisers/ad2').create({id:'ad2',org_id:'a'});
+      const context={...f.context,uid:'admin',path:['directory'],entity:'advertisers',orgId:'a',limit:1};
+      const first=await f.store.transact(context,()=>f.store.read());
+      assert.equal(first.directory.items[0].id,'ad1'); assert.equal(first.directory.has_more,true);
+      const next=await f.store.transact({...context,after:first.directory.next_cursor},()=>f.store.read());
+      assert.equal(next.directory.items[0].id,'ad2');assert.equal(next.directory.has_more,false);
+      await f.store.transact({...f.context,uid:'admin',method:'POST',path:['screen','sb']},async()=>{
+        const d=await f.store.read(); assert.ok(d.users.some(u=>u.id==='admin'));d.screens[0].name='Updated B';
+        d.audit.push({id:'audit1',org_id:'b',actor_id:'admin',entity:'screens',entity_id:'sb'});await f.store.write(d);
+      });
+      assert.equal((await f.db.doc('audit/audit1').get()).data().actor_id,'admin');
+      assert.equal((await f.db.doc('screens/sb').get()).data().name,'Updated B');
+      for (const remove of [false,true]) await assert.rejects(()=>f.store.transact({...f.context,uid:'admin',path:['audit'],orgId:'b'},async()=>{
+        const d=await f.store.read(); assert.equal(d.audit[0].id,'audit1');
+        if(remove)d.audit=[];else d.audit[0].actor_id='forged';
+        await f.store.write(d);
+      }),{status:409});
+      assert.equal((await f.db.doc('audit/audit1').get()).data().actor_id,'admin');
+    } finally { await f.db.terminate(); }
+  });
   test('real emulator provisions once and scopes queries to the caller tenant', async () => {
     const f = await fixture();
     try {

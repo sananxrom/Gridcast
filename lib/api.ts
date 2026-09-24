@@ -1,3 +1,6 @@
+import { DiagnosticError, requestDiagnostic, revokeDiagnostic, assertNoDiagnosticLease } from './diagnostics';
+import { auditSnapshot, appendAudit, auditView } from './audit';
+import { summarizeReadiness } from './readiness';
 import { openMedia, mediaUrl } from './media';
 import * as store from './store';
 import { AccessError, authorize, bootstrap, publicUser, orgView, screenView, advertiserView, capabilities, redact } from './access';
@@ -18,9 +21,14 @@ async function load() {
   }
   return db;
 }
-const save = () => store.write(db);
+let auditContext: { before:any; actor:any; action:string } | null = null;
+const save = async () => {
+  if (auditContext) { appendAudit(db,auditContext.before,auditContext.actor,auditContext.action); auditContext.before = auditSnapshot(db); }
+  await store.write(db);
+};
 const bumpConfig = () => { db.settings ||= {}; db.settings.config_revision = (db.settings.config_revision || 0) + 1; };
 function freezeBookings(c: any, old: any[] = []) {
+  assertNoDiagnosticLease(db, [...(c.screen_ids || []), ...old.map((b: any) => b.screen_id)]);
   if (typeof c.name !== 'string' || !c.name.trim()) throw new AccessError(400, 'Campaign name is required');
   if (!['per_play','flat'].includes(c.rate_type) || typeof c.rate_value !== 'number' || !Number.isFinite(c.rate_value) || c.rate_value < 0 || typeof c.committed_budget !== 'number' || !Number.isFinite(c.committed_budget) || c.committed_budget < 0) throw new AccessError(400, 'Enter a valid campaign price and budget');
   c.bookings = validateBooking(c, db.campaigns, inventoryScreens(), db.creatives).map((b: any) => {
@@ -50,7 +58,7 @@ function playlistFor(screen: any, _device?: any) {
     }
     if (eligible.length && advertiser) loopAdvertisers.push(advertiser);
   }
-  return { items, config, config_version: db.settings?.config_revision || 1, decisions };
+  return { items, config, config_version: db.settings?.config_revision || 1, decisions, readiness: summarizeReadiness(screen, db.campaigns.filter((c: any) => c.screen_ids?.includes(screen.id)), decisions, items.length) };
 }
 const scope = (rows: any[], orgId: string, isAdmin: boolean) => (isAdmin ? rows : rows.filter(r => r.org_id === orgId));
 
@@ -95,15 +103,17 @@ export function handle(method: string, seg: string[], q: URLSearchParams, body: 
         loginEmail: seg.join('/') === 'login' ? String(body.email || '').trim().toLowerCase() : undefined,
         pairingCodeHash: seg.join('/') === 'pair' ? pairingCodeHash(String(body.code || '')) : undefined,
         playUid: typeof body.play_uid === 'string' ? body.play_uid : undefined,
-        seqNo: body.seq_no, assignmentId: body.assignment_id }, async () => {
-        db = null;
+        seqNo: body.seq_no, assignmentId: body.assignment_id, orgId: q.get('org') || q.get('org_id') || undefined,
+        targetOrg: typeof body.org_id === 'string' ? body.org_id : undefined, entity:q.get('entity') || undefined,
+        after:q.get('after') || undefined,limit:Number(q.get('limit')) || 100 }, async () => {
+        db = null; auditContext = null;
         const result = await dispatch(method, seg, q, body, token, clientKey);
         const actor = claims ? db?.users.find((u: any) => u.id === claims.uid) : null;
         if (actor) result.body = redact(result.body, actor);
         return result;
       });
     } catch (e) {
-      if (e instanceof AccessError || e instanceof InventoryError || e instanceof store.StoreError) return { status: e.status, body: { error: e.message } };
+      if (e instanceof DiagnosticError || e instanceof AccessError || e instanceof InventoryError || e instanceof store.StoreError) return { status: e.status, body: { error: e.message } };
       if (e instanceof Error && e.message.startsWith('Set GC_DEMO_PASSWORD'))
         return { status: 503, body: { error: e.message } };
       if (e instanceof Error && e.message.startsWith('GC_AUTH_SECRET'))
@@ -124,13 +134,25 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
   const me = candidate && candidate.status !== 'disabled' &&
     claims!.ver === (candidate.auth_version || 0) &&
     db.orgs.some((o: any) => o.id === candidate.org_id && o.status !== 'disabled') ? candidate : null;
+  const pairingAudit = method === 'POST' && p === 'pair' ? auditSnapshot(db) : null;
   const transport = deviceRoute(db, method, seg, body, token, { playlist: playlistFor, clientKey: clientKey || undefined });
-  if (transport) { if (transport.changed) await save(); return { status: transport.status, body: transport.body }; }
+  if (transport) {
+    if (transport.changed) {
+      if (pairingAudit && transport.body.device?.id) {
+        const paired = db.devices.find((d: any) => d.id === transport.body.device.id);
+        // The pairing-code holder is a device actor; never attribute redemption to an invented human.
+        appendAudit(db,pairingAudit,{id:paired.id,role:'device',org_id:paired.org_id},'pair');
+      }
+      await save();
+    }
+    return { status: transport.status, body: transport.body };
+  }
   if (!OPEN.has(`${method} ${p}`) && !me)
     return { status: 401, body: { error: 'Sign in to continue' } };
   const actor = me;
   const isAdmin = actor?.role === 'platform_admin';
   if (!OPEN.has(`${method} ${p}`)) body = authorize(db, actor, method, seg, body, q);
+  if (actor && method === 'POST' && p !== 'login') auditContext = {before:auditSnapshot(db),actor:{...actor},action:p};
 
   if (method === 'GET' && p === '_health') return { body: { ok: true, store: store.mode, database: process.env.GC_FIRESTORE_DATABASE || null, schema_version: 1 } };
   if (method === 'POST' && p === 'login') {
@@ -159,9 +181,20 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     } } };
   }
 
+  if (method === 'GET' && ['directory','audit'].includes(p)) {
+    const entity = p === 'audit' ? 'audit' : q.get('entity') || '';
+    if (!['orgs','advertisers','creatives','campaigns','screens','users','configs','groups','devices','assets','audit'].includes(entity)) throw new AccessError(400,'Unknown directory');
+    const selected = q.get('org') || q.get('org_id') || (isAdmin ? null : actor.org_id);
+    const limit = Math.min(100,Math.max(1,Number(q.get('limit')) || 100));
+    const rows = (db[entity] || []).filter((r: any) => !selected || (entity === 'orgs' ? r.id : r.org_id) === selected)
+      .filter((r: any) => !q.get('after') || r.id > q.get('after')!).sort((a: any,b: any) => a.id.localeCompare(b.id));
+    const page = db.directory || {items:rows.slice(0,limit),has_more:rows.length > limit,next_cursor:rows.length > limit ? rows[limit-1].id : null};
+    return {body:{...page,items:page.items.map((r: any) => entity === 'audit' ? auditView(r,actor) : entity === 'users' ? publicUser(r) : entity === 'orgs' ? orgView(r,actor) : entity === 'advertisers' ? advertiserView(r,actor) : entity === 'screens' ? screenView({...r,_status:screenStatus(r)},actor) : r)}};
+  }
+
   if (method === 'GET' && p === 'team') {
     if (!actor) return { status: 401, body: { error: 'Not signed in' } };
-    const rows = db.users.filter((u: any) => isAdmin ? u.org_id === (q.get('org') || actor.org_id) : u.org_id === actor.org_id);
+    const rows = db.users.filter((u: any) => isAdmin ? u.org_id === (q.get('org') || q.get('org_id') || actor.org_id) : u.org_id === actor.org_id);
     return { body: rows.map((u: any) => ({ id: u.id, name: u.name, email: u.email, phone: u.phone,
       role: u.role, status: u.status ?? 'active', must_change: !!u.must_change,
       last_login_at: u.last_login_at, created_at: u.created_at, advertiser_id: u.advertiser_id })) };
@@ -260,7 +293,7 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
       org_id: u.org_id, org: db.orgs.find((o: any) => o.id === u.org_id)?.name, last_login_at: u.last_login_at })) };
   }
 
-  if (method === 'GET' && p === 'bootstrap') return { body: redact(bootstrap(db, actor, screenStatus), actor) };
+  if (method === 'GET' && p === 'bootstrap') return { body: redact(bootstrap(db, actor, screenStatus, q.get('org') || q.get('org_id')), actor) };
   if (method === 'POST' && p === 'logout') {
     actor.auth_version = (actor.auth_version || 0) + 1;
     await save(); return { body: { ok: true } };
@@ -317,8 +350,10 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
       np = { creative: cr, campaign: c ? { id: c.id, name: c.name } : null, advertiser: c ? advOf(c.advertiser_id)?.name || '—' : '—',
         started_at: n.started_at, duration_s: n.duration_s, elapsed_s: (Date.now() - new Date(n.started_at).getTime()) / 1000 };
     }
-    const resolved = resolveFor(screen);
-    return { body: { history: db.history || { complete: true, scope: 'local_demo' }, config_version: db.settings?.config_revision || 1, device: can(actor.role, 'screens') ? st.device : null, eligibility: playlistFor(screen).decisions, screen: screenView(screen, actor), caps: capabilities(actor),
+    const resolved = resolveFor(screen), playlist = playlistFor(screen);
+    const diagnosticAssignments = can(actor.role,'screens') ? (db.diagnostic_assignments || []).filter((a: any) => a.screen_id === screen.id).sort((a: any,b: any) => String(b.requested_at).localeCompare(String(a.requested_at))) : [];
+    const diagnosticResults = can(actor.role,'screens') ? (db.diagnostic_results || []).filter((r: any) => r.screen_id === screen.id).sort((a: any,b: any) => String(b.received_at).localeCompare(String(a.received_at))) : [];
+    return { body: { organisation:{id:screen.org_id,name:db.orgs.find((o: any) => o.id === screen.org_id)?.name || screen.org_id}, diagnostic_assignments:diagnosticAssignments, diagnostic_results:diagnosticResults, diagnostic_history:can(actor.role,'screens') ? db.diagnostic_history || {complete:true} : null, history: db.history || { complete: true, scope: 'local_demo' }, config_version: db.settings?.config_revision || 1, device: can(actor.role, 'screens') ? st.device : null, eligibility: playlist.decisions, readiness: playlist.readiness, screen: screenView(screen, actor), caps: capabilities(actor),
       status: can(actor.role, 'screens') ? st : { state: st.state, label: st.label, age_s: st.age_s },
       nowPlaying: np, campaigns: camps, advertisers: db.advertisers.filter((a: any) => a.org_id === screen.org_id || db.campaigns.some((c: any) => c.org_id === screen.org_id && c.advertiser_id === a.id)).map((a: any) => ({ id: a.id, name: a.name })),
       config: resolved,
@@ -366,8 +401,21 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     db.creatives.push(c); await save(); return { body: c };
   }
   if (method === 'POST' && p === 'advertiser') {
-    const a = { id: uid('adv'), created_at: nowISO(), ...body };
+    if (typeof body.name !== 'string' || !body.name.trim()) throw new AccessError(400,'Advertiser name is required');
+    const a = { id: uid('adv'), created_at: nowISO(), status:'active', ...body };
     db.advertisers.push(a); await save(); return { body: a };
+  }
+  if (seg[0] === 'advertiser' && seg[1]) {
+    const a = db.advertisers.find((x: any) => x.id === seg[1]);
+    if (method === 'GET') return {body:advertiserView(a,actor)};
+    if (seg[2] === 'archive' || seg[2] === 'restore') { a.status = seg[2] === 'archive' ? 'archived' : 'active'; a.updated_at=nowISO(); }
+    else { if ('name' in body && (typeof body.name !== 'string' || !body.name.trim())) throw new AccessError(400,'Advertiser name is required'); Object.assign(a,body,{updated_at:nowISO()}); }
+    await save(); return {body:advertiserView(a,actor)};
+  }
+  if (method === 'POST' && seg[0] === 'screen' && seg[1] && seg[2] === 'test') {
+    const screen = db.screens.find((s: any) => s.id === seg[1]);
+    const assignment = seg[4] === 'revoke' ? revokeDiagnostic(db,screen,seg[3],actor) : requestDiagnostic(db,screen,actor,{config:cfg.flatten(resolveFor(screen)),config_version:db.settings?.config_revision || 1});
+    await save(); return {body:assignment};
   }
   if (method === 'POST' && seg[0] === 'screen' && seg[1] && seg[2] === 'exclusions') {
     const s = db.screens.find((x: any) => x.id === seg[1]);
@@ -379,6 +427,7 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     const s = db.screens.find((x: any) => x.id === seg[1]);
     if (!s) return { status: 404, body: { error: 'not found' } };
     if ('exposure_source' in body && body.exposure_source !== 'estimated') throw new AccessError(400, 'Exposure estimates cannot be marked measured by a manual edit');
+    assertNoDiagnosticLease(db,[s.id]);
     const merged = { ...s, ...body };
     const legacyHours = typeof merged.operating_hours === 'number' && !('operating_hours' in body);
     validateScreenInput({ ...merged, status: merged.status === 'paused' ? 'inactive' : merged.status, operating_hours: legacyHours ? { from: '00:00', to: '00:00' } : merged.operating_hours });
@@ -458,7 +507,7 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     await save(); return { body: db.settings };
   }
   if (method === 'GET' && p === 'config')
-    return { body: scopeConfigs(actor!.org_id, isAdmin) };
+    return { body: scopeConfigs(q.get('org') || q.get('org_id') || actor!.org_id, isAdmin && !q.get('org') && !q.get('org_id')) };
   if (method === 'GET' && p === 'config/schema')
     return { body: { groups: cfg.GROUPS, settings: cfg.SETTINGS, locked: cfg.LOCKED_KEYS, priced: cfg.PRICED_KEYS } };
 
@@ -534,7 +583,7 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     await save(); return { body: screen };
   }
 
-  if (method === 'POST' && p === 'reset') { db = seed(); await save(); return { body: { ok: true } }; }
+  if (method === 'POST' && p === 'reset') { const ledger = db.audit || []; db = seed(); db.audit = ledger; await save(); return { body: { ok: true } }; }
 
   return { status: 404, body: { error: 'no route: ' + method + ' /' + p } };
 }

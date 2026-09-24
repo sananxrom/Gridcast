@@ -65,6 +65,8 @@ export function adminNav(badges: { inbox: number; approvals: number }): { groups
         { id: 'configs', title: 'Device configs', icon: SlidersHorizontal },
       ] },
       { heading: 'Demand', items: [
+        { id: 'advertisers', title: 'Advertisers', icon: Users },
+        { id: 'creatives', title: 'Creatives', icon: Film },
         { id: 'campaigns', title: 'Campaigns', icon: Megaphone },
         { id: 'approvals', title: 'Approvals', icon: ShieldCheck, badge: badges.approvals },
       ] },

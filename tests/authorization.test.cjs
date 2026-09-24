@@ -226,3 +226,98 @@ test('unknown and prototype configuration keys cannot poison screen resolution',
  expectStatus(await f.call('GET',`screen/${sid}`,{},t),200);
  assert.equal(f.writes(),0);
 });
+
+
+test('advertiser lifecycle preserves tenant boundaries and blocks archived new relationships', async () => {
+ const f=fixture(),admin=f.token('u_admin'),operator=f.token('u_op2');
+ const a=expectStatus(await f.call('POST','advertiser',{org_id:'org_sec17',name:'Lifecycle'},admin),200);
+ for(const [m,p,b] of [['GET',`advertiser/${a.id}`,{}],['POST',`advertiser/${a.id}`,{name:'no'}],['POST',`advertiser/${a.id}/archive`,{}]]) expectStatus(await f.call(m,p,b,operator),404);
+ expectStatus(await f.call('POST',`advertiser/${a.id}`,{org_id:'org_tri'},admin),400);
+ expectStatus(await f.call('POST',`advertiser/${a.id}/archive`,{},admin),200);
+ expectStatus(await f.call('POST','creative',{org_id:a.org_id,advertiser_id:a.id,name:'No'},admin),409);
+ expectStatus(await f.call('POST','invite',{org_id:a.org_id,advertiser_id:a.id,role:'advertiser_viewer',name:'No',email:'archived@example.invalid'},admin),409);
+ expectStatus(await f.call('POST','campaign',{org_id:a.org_id,advertiser_id:a.id,name:'No',screen_ids:[],creative_ids:[]},admin),409);
+ expectStatus(await f.call('POST',`advertiser/${a.id}/restore`,{},admin),200);
+ assert.equal(expectStatus(await f.call('GET',`advertiser/${a.id}`,{},admin),200).status,'active');
+});
+test('archive refuses paused and cross-organisation network references, audit is safe and scoped', async () => {
+ const f=fixture(),admin=f.token('u_admin');
+ const a=expectStatus(await f.call('POST','advertiser',{org_id:'org_sec17',name:'Network owner'},admin),200);
+ f.change(d=>d.campaigns.push({id:'cross',org_id:'org_other',advertiser_id:a.id,status:'paused'}));
+ expectStatus(await f.call('POST',`advertiser/${a.id}/archive`,{},admin),409);
+ expectStatus(await f.call('POST',`advertiser/${a.id}`,{notes:'DO_NOT_LOG_SECRET',email:'private@example.invalid'},admin),200);
+ const audit=expectStatus(await f.call('GET','audit?org=org_sec17',{},admin),200);
+ assert.ok(audit.items.some(x=>x.entity_id===a.id && x.actor_id==='u_admin'));
+ assert.ok(!JSON.stringify(audit).includes('DO_NOT_LOG_SECRET'));
+ assert.ok(!JSON.stringify(audit).includes('private@example.invalid'));
+ const own=expectStatus(await f.call('GET','bootstrap?org=org_sec17',{},admin),200);
+ assert.ok(own.screens.every(s=>s.org_id==='org_sec17'));
+ assert.ok(own.campaigns.every(c=>c.org_id==='org_sec17'));
+ expectStatus(await f.call('GET','bootstrap?org=org_sec17',{},f.token('u_op2')),404);
+});
+
+
+test('screen diagnostic human request, ownership, readback and revoke follow real API routing',async()=>{
+ const f=fixture(),admin=f.token('u_admin'),sid=f.data().screens[0].id;
+ const pairing=expectStatus(await f.call('POST',`screens/${sid}/pairing`,{},admin),200);
+ const paired=expectStatus(await f.call('POST','pair',{code:pairing.code}),200);
+ expectStatus(await f.call('POST',`screen/${sid}/test`,{},f.token('u_op2')),404);
+ expectStatus(await f.call('POST',`screen/${sid}/test`,{test:true},admin),400);
+ const commercial=JSON.stringify([f.data().plays,f.data().presence,f.data().campaigns]);
+ const a=expectStatus(await f.call('POST',`screen/${sid}/test`,{},admin),200);
+ assert.equal(a.kind,'diagnostic');assert.equal(a.requested_by,'u_admin');
+ const detail=expectStatus(await f.call('GET',`screen/${sid}`,{},admin),200);
+ assert.ok(detail.diagnostic_assignments.some(x=>x.id===a.id));
+ // Seed campaigns reserve this screen: diagnostic waits instead of stealing a slot.
+ const start=expectStatus(await f.call('POST','diagnostic/start',{assignment_id:a.id,run_uid:'integration_run'},paired.token),200);
+ assert.equal(start.waiting,true);
+ expectStatus(await f.call('POST',`screen/${sid}/test/${a.id}/revoke`,{},admin),200);
+ expectStatus(await f.call('POST','diagnostic/start',{assignment_id:a.id,run_uid:'integration_run'},paired.token),409);
+ assert.equal(JSON.stringify([f.data().plays,f.data().presence,f.data().campaigns]),commercial);
+ assert.ok(f.data().audit.some(x=>x.entity==='diagnostic_assignments' && x.actor_id==='u_admin'));
+});
+
+test('audit readback preserves change markers and visibly restricts financial values',async()=>{
+ const f=fixture(),admin=f.token('u_admin');
+ expectStatus(await f.call('POST','user/u_op4/newpassword',{},admin),200);
+ expectStatus(await f.call('POST','org/org_sec17',{platform_fee_pct:17},admin),200);
+ const stored=f.data().audit.find(x=>x.entity_id==='u_op4'&&x.action==='user/u_op4/newpassword');
+ const adminRows=expectStatus(await f.call('GET','audit?org=org_sec17',{},admin),200).items;
+ const output=adminRows.find(x=>x.id===stored.id);
+ assert.deepEqual(output.changes.map(c=>c.field).sort(),Object.keys(stored.diff).sort());
+ assert.ok(output.changes.some(c=>c.field==='password_hash'&&c.detail==='values_not_recorded'));
+ const rows=expectStatus(await f.call('GET','directory?entity=audit&org=org_sec17',{},f.token('u_op3')),200).items;
+ const fee=rows.find(x=>x.entity_id==='org_sec17').changes.find(c=>c.field==='platform_fee_pct');
+ assert.deepEqual(fee,{field:'platform_fee_pct',changed:true,detail:'restricted'});
+ assert.equal(adminRows.find(x=>x.entity_id==='org_sec17').changes.find(c=>c.field==='platform_fee_pct').after,17);
+ const secrets=f.data().users.flatMap(u=>[u.password_hash,u.password_salt]).filter(Boolean);
+ for(const secret of secrets)assert.ok(!JSON.stringify({adminRows,rows}).includes(secret));
+});
+
+test('password, logout and pairing redemption audit the actual actor without credentials',async()=>{
+ const f=fixture(),admin=f.token('u_admin');
+ const pw=expectStatus(await f.call('POST','password',{current:f.env.GC_DEMO_PASSWORD,next:crypto.randomBytes(20).toString('hex')},f.token('u_op4')),200);
+ expectStatus(await f.call('POST','logout',{},pw.token),200);
+ const sid=f.data().screens[0].id;
+ const code=expectStatus(await f.call('POST',`screens/${sid}/pairing`,{},admin),200);
+ const paired=expectStatus(await f.call('POST','pair',{code:code.code},null),200);
+ const rows=f.data().audit;
+ assert.ok(rows.some(x=>x.action==='password'&&x.actor_id==='u_op4'&&x.actor_kind==='human'));
+ assert.ok(rows.some(x=>x.action==='logout'&&x.actor_id==='u_op4'&&x.diff.auth_version.changed));
+ const event=rows.find(x=>x.action==='pair'&&x.entity_id===paired.device.id);
+ assert.equal(event.actor_kind,'device');assert.equal(event.actor_id,paired.device.id);assert.equal(event.actor_role,'device');
+ assert.ok(!JSON.stringify(rows).includes(paired.token));assert.ok(!JSON.stringify(rows).includes(code.code));
+ assert.ok(event.diff.token_hash.changed);
+});
+
+test('explicit nonproduction reset preserves earlier audit evidence; production remains blocked',async()=>{
+ const f=fixture({env:{GC_ALLOW_RESET:'1'}}),admin=f.token('u_admin');
+ expectStatus(await f.call('POST','org/org_sec17',{name:'Before reset'},admin),200);
+ const previous=f.data().audit;
+ expectStatus(await f.call('POST','reset',{},admin),200);
+ for(const row of previous)assert.deepEqual(f.data().audit.find(x=>x.id===row.id),row);
+ assert.ok(f.data().audit.some(x=>x.action==='reset'));
+ f.env.NODE_ENV='production';f.env.GC_AUTH_SECRET=crypto.randomBytes(32).toString('hex');
+ // Production storage guard blocks this memory fixture before reset; direct authorization has a separate existing test.
+ assert.notEqual((await f.call('POST','reset',{},f.token('u_admin'))).status,200);
+});

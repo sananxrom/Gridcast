@@ -33,6 +33,9 @@ export const ROUTES: { method: string; path: RegExp; caps: Cap[] }[] = [
   { method: 'GET', path: /^(me|bootstrap)$/, caps: [] },
   { method: 'POST', path: /^(password|logout)$/, caps: [] },
   { method: 'GET', path: /^team$/, caps: ['team'] },
+  { method: 'GET', path: /^(directory|audit)$/, caps: ['platform', 'org'] },
+  { method: 'GET', path: /^advertiser\/[^/]+$/, caps: ['sales'] },
+  { method: 'POST', path: /^advertiser\/[^/]+(?:\/(archive|restore))?$/, caps: ['sales'] },
   { method: 'GET', path: /^(users|settings)$/, caps: ['platform'] },
   { method: 'POST', path: /^(invite)$/, caps: ['team'] },
   { method: 'POST', path: /^user\/[^/]+$/, caps: [] },
@@ -43,6 +46,7 @@ export const ROUTES: { method: string; path: RegExp; caps: Cap[] }[] = [
   { method: 'POST', path: /^creative\/[^/]+\/approve$/, caps: ['platform'] },
   { method: 'GET', path: /^creative\/[^/]+\/asset$/, caps: ['sales'] },
   { method: 'POST', path: /^creative\/[^/]+\/asset$/, caps: ['sales'] },
+  { method: 'POST', path: /^screen\/[^/]+\/test(?:\/[^/]+\/revoke)?$/, caps: ['screens'] },
   { method: 'GET', path: /^screen\/[^/]+$/, caps: ['screens', 'sales'] },
   { method: 'POST', path: /^screens(?:\/[^/]+\/(pairing|revoke-device))?$/, caps: ['screens'] },
   { method: 'POST', path: /^group(?:\/(?!resolve$)[^/]+)?$/, caps: ['screens'] },
@@ -53,6 +57,7 @@ export const ROUTES: { method: string; path: RegExp; caps: Cap[] }[] = [
   { method: 'GET', path: /^config(?:\/schema)?$/, caps: ['screens'] },
   { method: 'POST', path: /^config(?:\/[^/]+(?:\/delete)?)?$/, caps: ['screens'] },
 ];
+const ADVERTISER_EDIT = ['name','contact','email','phone','category','notes'];
 const SCREEN_EDIT = ['name','venue_name','venue_type','address','photo_url','size_in','orientation','aspect',
   'venue_base','size_factor','location_factor','location_tier','exposure_factor','exposure_source','advertiser_slots',
   'loop_length_s','slot_duration_s','operating_hours','owner_share_pct','network_slots','network_available',
@@ -117,6 +122,7 @@ function campaignRelations(db: any, c: any, actor: any) {
   // Network campaigns deliberately reference the originating organisation's advertiser/creative.
   const sourceOrg = c.campaign_type === 'network' ? c.origin_org_id : c.org_id;
   if (!adv || adv.org_id !== sourceOrg) fail(400, 'Advertiser does not belong to this campaign');
+  if (adv.status === 'archived') fail(409, 'Restore this advertiser before creating or changing campaigns');
   for (const id of ids(c.screen_ids)) {
     const s = own(db.screens, id, actor);
     if (s.org_id !== c.org_id) fail(400, 'Campaign screens must belong to the receiving organisation');
@@ -137,7 +143,16 @@ export function authorize(db: any, actor: any, method: string, seg: string[], in
   let body = { ...input };
   const [entity, id, action] = seg;
   if (path === 'reset' && (process.env.NODE_ENV === 'production' || process.env.GC_ALLOW_RESET !== '1')) fail(403, 'Reset is disabled');
-  if (path === 'team' && q.has('org')) org(db, q.get('org'), actor);
+  const requestedOrg = q.get('org') || q.get('org_id');
+  if (['team','bootstrap','directory','audit','config'].includes(path) && requestedOrg) org(db, requestedOrg, actor);
+  if (entity === 'advertiser' && id) {
+    const a = own(db.advertisers, id, actor);
+    if (method === 'POST') {
+      rejectUnknown(body, action ? [] : ADVERTISER_EDIT);
+      if (action === 'archive' && db.campaigns.some((c: any) => c.advertiser_id === a.id && ['active','pending','paused'].includes(c.status)))
+        fail(409, 'Pause is not archive: finish or cancel all active, pending and paused campaigns before archiving');
+    }
+  }
   if (entity === 'campaign' && id) {
     const c = db.campaigns.find((x: any) => x.id === id);
     if (!c || !campaignVisible(c, actor)) fail(404, 'Not found');
@@ -158,21 +173,24 @@ export function authorize(db: any, actor: any, method: string, seg: string[], in
   if ((path === 'creative' || path === 'advertiser') && method === 'POST') {
     const orgId = body.org_id || actor.org_id; org(db, orgId, actor);
     const allowed = path === 'creative' ? ['org_id','advertiser_id','name','category','youtube_id','duration_s','aspect']
-      : ['org_id','name','contact','email','phone','category'];
+      : ['org_id', ...ADVERTISER_EDIT];
     rejectUnknown(body, allowed);
     if (path === 'creative') {
       const a = own(db.advertisers, body.advertiser_id, actor);
       if (a.org_id !== orgId) fail(400, 'Advertiser must belong to the creative organisation');
+      if (a.status === 'archived') fail(409, 'Restore this advertiser before adding creatives');
     }
     body.org_id = orgId;
   }
   if (entity === 'creative' && id) {
-    own(db.creatives, id, actor);
+    const creative = own(db.creatives, id, actor);
+    if (method === 'POST' && db.advertisers.some((a: any) => a.id === creative.advertiser_id && a.status === 'archived')) fail(409, 'Restore this advertiser before changing creatives');
     if (action === 'asset' && method === 'POST') rejectUnknown(body,['proof']);
     if (action === 'approve' && !['approved','rejected','pending'].includes(body.status || 'approved')) fail(400, 'Unknown approval state');
   }
   if (entity === 'screen' && id) {
     own(db.screens, id, actor);
+    if (action === 'test') rejectUnknown(body, []);
     if (method === 'POST' && !action) {
       rejectUnknown(body, SCREEN_EDIT);
       if (!can(actor.role, 'money') && 'owner_share_pct' in body) fail(403, 'Owner shares require money access');
@@ -272,6 +290,7 @@ export function authorize(db: any, actor: any, method: string, seg: string[], in
     if (body.role === ADVERTISER) {
       const a = own(db.advertisers, body.advertiser_id, actor);
       if (a.org_id !== orgId) fail(400, 'Advertiser must belong to the invited organisation');
+      if (a.status === 'archived') fail(409, 'Restore this advertiser before inviting users');
     } else if (body.advertiser_id) fail(400, 'Only advertiser accounts may have an advertiser ID');
   }
   if (entity === 'config' && method === 'POST') {
@@ -317,7 +336,17 @@ export function screenView(s: any, actor: any) {
   if (!can(actor.role, 'sales') && !can(actor.role, 'money')) for (const k of SCREEN_MONEY) delete out[k];
   return out;
 }
-export function bootstrap(db: any, actor: any, screenStatus: (s: any) => any) {
+export function bootstrap(db: any, actor: any, screenStatus: (s: any) => any, orgId?: string | null) {
+  if (orgId && admin(actor)) {
+    const campaignRows = db.campaigns.filter((c: any) => c.org_id === orgId);
+    const advIds = new Set(campaignRows.map((c: any) => c.advertiser_id));
+    const crIds = new Set(campaignRows.flatMap((c: any) => c.creative_ids || []));
+    db = { ...db, campaigns: campaignRows, orgs: db.orgs.filter((o: any) => o.id === orgId || o.id === actor.org_id),
+      advertisers: db.advertisers.filter((a: any) => a.org_id === orgId || advIds.has(a.id)),
+      creatives: db.creatives.filter((c: any) => c.org_id === orgId || crIds.has(c.id)),
+      ...Object.fromEntries(['screens','groups','devices','plays','presence'].map(k => [k, (db[k] || []).filter((r: any) => r.org_id === orgId)])),
+      configs: (db.configs || []).filter((c: any) => c.org_id === orgId || c.layer === 'platform') };
+  }
   const campaigns = db.campaigns.filter((c: any) => campaignVisible(c, actor));
   const campaignIds = new Set(campaigns.map((c: any) => c.id));
   const plays = db.plays.filter((p: any) => admin(actor) || (p.org_id === actor.org_id &&
@@ -330,7 +359,7 @@ export function bootstrap(db: any, actor: any, screenStatus: (s: any) => any) {
   const sales = can(actor.role, 'sales');
   const screens = db.screens.filter((s: any) => admin(actor) || (s.org_id === actor.org_id && (!advertiser || screenIds.has(s.id))));
   return {
-    history: db.history || { complete: true, scope: 'local_demo' }, config_version: db.settings?.config_revision || 1, user: publicUser(actor), org: orgView(db.orgs.find((o: any) => o.id === actor.org_id), actor), isAdmin: admin(actor),
+    pagination: db.pagination || {}, scope_org: orgId || null, history: db.history || { complete: true, scope: 'local_demo' }, config_version: db.settings?.config_revision || 1, user: publicUser(actor), org: orgView(db.orgs.find((o: any) => o.id === actor.org_id), actor), isAdmin: admin(actor),
     orgs: db.orgs.filter((o: any) => admin(actor) || o.id === actor.org_id).map((o: any) => orgView(o, actor)),
     screens: screens.map((s: any) => screenView({ ...s, _status: screenStatus(s) }, actor)),
     campaigns, advertisers: db.advertisers.filter((a: any) => admin(actor) || (sales && a.org_id === actor.org_id) || advIds.has(a.id))

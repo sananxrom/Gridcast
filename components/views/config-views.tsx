@@ -263,17 +263,18 @@ const jump = (id: string) => document.getElementById(`grp-${id}`)?.scrollIntoVie
 
 /* ------------------------------------------------------------------ list -- */
 
-export function ConfigList({ user, onOpen, onChanged }: {
-  user: SessionUser; onOpen: (id: string) => void; onChanged: () => void;
+export function ConfigList({ user, orgId, onOpen, onChanged }: {
+  user: SessionUser; orgId?:string|null; onOpen: (id: string,orgId?:string) => void; onChanged: () => void;
 }) {
   const [rows, setRows] = useState<any[] | null>(null);
   const [adding, setAdding] = useState(false);
   const [assign, setAssign] = useState<any>(null);
-  const load = () => api(`/config?user=${user.id}`).then(setRows);
+  const [page,setPage]=useState<any>(null),[error,setError]=useState('');
+  const load = async () => {try{if(user.role==='platform_admin'&&!orgId){const p=await api('/directory?entity=configs&limit=100');setRows(p.items);setPage(p);}else{setRows(await api(`/config?user=${user.id}${orgId?'&org='+encodeURIComponent(orgId):''}`));setPage(null);}}catch(e){setError((e as Error).message);}};
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [user.id]);
 
-  if (!rows) return <Empty>Loading…</Empty>;
-  const mine = rows.filter(c => c.layer !== 'screen');
+  if (!rows) return <Empty>{error||'Loading…'}</Empty>;
+  const mine = rows.filter(c => c.layer !== 'screen' && (!orgId || c.org_id===orgId || c.layer==='platform'));
 
   return (<>
     <PageHead title="Device configs"
@@ -285,13 +286,13 @@ export function ConfigList({ user, onOpen, onChanged }: {
       group → screen. Every value shows which config it came from.
     </Card>
 
-    {adding && <NewConfig user={user} onDone={() => { setAdding(false); load(); onChanged(); }} />}
+    {adding && <NewConfig user={user} orgId={orgId} onDone={() => { setAdding(false); load(); onChanged(); }} />}
     {assign && <AssignConfig config={assign} user={user} onDone={() => { setAssign(null); load(); onChanged(); }} />}
 
     <DataTable
       cols={[
         { label: 'Config', sort: (c: any) => c.name, className: 'min-w-[190px]', render: (c: any) => (
-          <><button onClick={() => onOpen(c.id)} className="text-left font-medium text-primary hover:underline">{c.name}</button>
+          <><button onClick={() => onOpen(c.id,c.org_id)} className="text-left font-medium text-primary hover:underline">{c.name}</button>
             {c.description && <div className="text-[12px] text-muted-foreground">{c.description}</div>}</> ) },
         { label: 'Layer', sort: (c: any) => c.layer, render: (c: any) => (
           <><Badge variant={c.layer === 'platform' ? 'default' : 'muted'}>{LAYERS[c.layer]?.label ?? c.layer}</Badge>
@@ -313,16 +314,18 @@ export function ConfigList({ user, onOpen, onChanged }: {
       facets={[{ label: 'Layer', get: (c: any) => LAYERS[c.layer]?.label ?? c.layer }]}
       empty="No configs yet — every screen is running on defaults." />
 
+    {error&&<p role="alert">{error}</p>}
+    {page?.has_more&&<Button variant="outline" onClick={async()=>{try{const next=await api('/directory?entity=configs&limit=100&after='+encodeURIComponent(page.next_cursor));setRows(old=>[...(old??[]),...next.items]);setPage(next);}catch(e){setError((e as Error).message);}}}>Load more configs</Button>}
     <p className="mt-3 text-[12px] text-muted-foreground">
       Per-screen overrides are not listed here. They live on the screen itself, under its Config tab.
     </p>
   </>);
 }
 
-function NewConfig({ user, onDone }: { user: SessionUser; onDone: () => void }) {
+function NewConfig({ user, orgId, onDone }: { user: SessionUser; orgId?:string|null; onDone: () => void }) {
   const [groups, setGroups] = useState<any[]>([]);
   const fm = useDirtyForm({ name: '', description: '', layer: 'org', target_id: '', priority: '0' });
-  useEffect(() => { api(`/bootstrap?user=${user.id}`).then(d => setGroups(d.groups || [])); }, [user.id]);
+  useEffect(() => { api(`/bootstrap${orgId?'?org='+encodeURIComponent(orgId):''}`).then(d => setGroups(d.groups || [])); }, [user.id]);
   const isAdmin = user.role === 'platform_admin';
 
   return (
@@ -333,7 +336,7 @@ function NewConfig({ user, onDone }: { user: SessionUser; onDone: () => void }) 
         <Field label="Layer">
           <Select value={fm.f.layer} onChange={e => fm.set({ layer: e.target.value, target_id: '' })}>
             {isAdmin && <option value="platform">Platform — every screen on the network</option>}
-            <option value="org">Organisation — every screen you own</option>
+            <option value="org">Organisation — every screen in the selected organisation</option>
             <option value="group">Screen group</option>
           </Select>
         </Field>
@@ -354,7 +357,9 @@ function NewConfig({ user, onDone }: { user: SessionUser; onDone: () => void }) 
       </div>
       <SaveBar {...fm} label="Create config" note="A new config starts empty and changes nothing until you set a value."
         onSave={() => fm.save(async v => {
-          await api('/config', { org_id: user.org_id, name: v.name || 'Untitled config', description: v.description,
+          if(user.role==='platform_admin'&&!orgId&&v.layer!=='platform')throw new Error('Select an organisation from the main selector first.');
+          if(v.layer==='group'&&!v.target_id)throw new Error('Choose a screen group.');
+          await api('/config', { org_id: v.layer==='platform'?user.org_id:(orgId??user.org_id), name: v.name || 'Untitled config', description: v.description,
             layer: v.layer, target_id: v.target_id || null, priority: Number(v.priority) || 0, values: {} });
           onDone();
         })} onDiscard={onDone} />
@@ -364,8 +369,8 @@ function NewConfig({ user, onDone }: { user: SessionUser; onDone: () => void }) 
 
 /* ---------------------------------------------------------------- editor -- */
 
-export function ConfigEditor({ id, user, onGo, onChanged }: {
-  id: string; user: SessionUser; onGo: (g: string) => void; onChanged: () => void;
+export function ConfigEditor({ id, user, orgId, onGo, onChanged }: {
+  id: string; user: SessionUser; orgId?:string|null; onGo: (g: string) => void; onChanged: () => void;
 }) {
   const [schema, setSchema] = useState<Schema | null>(null);
   const [conf, setConf] = useState<any>(null);
@@ -377,8 +382,8 @@ export function ConfigEditor({ id, user, onGo, onChanged }: {
 
   useEffect(() => {
     api('/config/schema').then(setSchema);
-    api(`/config?user=${user.id}`).then((all: any[]) => {
-      const c = all.find(x => x.id === id);
+    api(`/config?user=${user.id}${orgId?'&org='+encodeURIComponent(orgId):''}`).then((all: any[]) => {
+      const c = all.find(x => x.id === id && (!orgId || x.org_id===orgId || x.layer==='platform'));
       setConf(c); setValues({ ...(c?.values || {}) });
     });
   }, [id, user.id]);
@@ -387,7 +392,8 @@ export function ConfigEditor({ id, user, onGo, onChanged }: {
   const groupIds = useMemo(() => (schema?.groups ?? []).map(g => g.id), [schema]);
   const active = useScrollSpy(groupIds, schema ? 1 : 0);
 
-  if (!schema || !conf) return <Empty>Loading…</Empty>;
+  if (!schema) return <Empty>Loading…</Empty>;
+  if (!conf) return <Empty>Config not found in this organisation.</Empty>;
 
   const dirty = JSON.stringify(values) !== JSON.stringify(conf.values || {});
   const isPlatform = conf.layer === 'platform';
@@ -482,7 +488,7 @@ export function AssignConfig({ config, user, onDone }: {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(0);
 
-  useEffect(() => { api(`/bootstrap?user=${user.id}`).then(d => setScreens(d.screens || [])); }, [user.id]);
+  useEffect(() => { api(`/bootstrap?org=${encodeURIComponent(config.org_id)}`).then(d => setScreens(d.screens || [])); }, [user.id]);
 
   const toggle = (id: string) => setPick(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const keys = Object.keys(config.values || {});

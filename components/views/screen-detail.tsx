@@ -14,6 +14,8 @@ import { StatusBadge, Thumb, Empty, ScreenPhoto } from './bits';
 import { ScreenConfig } from './config-views';
 import { Skeleton } from '@/components/ui/loader';
 import { PairingCode } from './screen-onboarding';
+import { reasonLabel } from '@/lib/readiness';
+import { ScreenDiagnostics } from './screen-diagnostics';
 
 export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: string) => void; onChanged: () => void }) {
   const [d, setD] = useState<any>(null);
@@ -31,7 +33,7 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
 
   // live ticker
   useEffect(() => {
-    const t = setInterval(() => { api(`/screen/${id}`, undefined, { quiet: true }).then(x => setD((prev: any) => prev ? { ...prev, nowPlaying: x.nowPlaying, status: x.status, stats: x.stats, device:x.device, config_version:x.config_version } : x)).catch(() => {}); }, 3000);
+    const t = setInterval(() => { api(`/screen/${id}`, undefined, { quiet: true }).then(x => setD((prev: any) => prev ? { ...prev, nowPlaying: x.nowPlaying, status: x.status, stats: x.stats, device:x.device, config_version:x.config_version, readiness:x.readiness, eligibility:x.eligibility, campaigns:x.campaigns, diagnostic_assignments:x.diagnostic_assignments, diagnostic_results:x.diagnostic_results, diagnostic_history:x.diagnostic_history } : x)).catch(() => {}); }, 3000);
     return () => clearInterval(t);
   }, [id]);
 
@@ -58,7 +60,7 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
     });
     const net = Number(f.network_slots) || 0;
     await api(`/screen/${id}`, {
-      name: f.name, venue_name: f.venue_name, address: f.address, photo_url: f.photo_url || '',
+      name: f.name, venue_name: f.venue_name, address: f.address, photo_url: f.photo_url || '', has_camera: !!f.has_camera,
       ...(mayPrice ? { venue_base: Number(f.venue_base), size_factor: Number(f.size_factor),
         location_factor: Number(f.location_factor), exposure_factor: Number(f.exposure_factor) } : {}),
       advertiser_slots: Number(f.advertiser_slots) || 10, loop_length_s: Number(f.loop_length_s),
@@ -72,7 +74,7 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
   return (
     <>
       <PageHead title={s.name}
-        sub={<>{s.venue_name} · {s.address}</>}
+        sub={<>{d.organisation?.name || s.org_id} · {s.venue_name} · {s.address}</>}
         back={{ label: 'My screens', go: 'screens', onGo }}
         actions={<><StatusBadge st={st} />{mayEdit && <Button variant="outline" size="sm" onClick={() => setEdit(!edit)}>Edit screen</Button>}</>} />
 
@@ -101,6 +103,8 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
             <Field label="Address"><Input value={f.address} onChange={e => setF({ ...f, address: e.target.value })} /></Field>
             <Field label="Photo URL (a picture of the screen in place)" className="w-full basis-full"><Input value={f.photo_url || ''} placeholder="https://…" onChange={e => setF({ ...f, photo_url: e.target.value })} /></Field>
           </div>
+          <label className="my-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={!!f.has_camera} onChange={e=>setF({...f,has_camera:e.target.checked})}/>Camera available for presence measurement</label>
+          <p className="mb-3 text-xs text-muted-foreground">The player will apply camera changes when it next refreshes its settings. Failed or missing measurements stay unmeasured.</p>
           {mayPrice && <><Label className="mt-4">Rate factors — value = base × size × location × exposure</Label>
           <div className="mb-2 flex flex-wrap gap-3">
             {[['venue_base','Venue base ₹','1'],['size_factor','Size','0.1'],['location_factor','Location','0.1'],['exposure_factor','Exposure','0.05'],['advertiser_slots','Advertiser limit','1']].map(([k, lbl, step]) => (
@@ -166,6 +170,22 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
         )}
       </Card>
       </div>
+
+      <Card className="mb-4 p-4" aria-label="Screen readiness">
+        <h3 className="font-semibold">Screen readiness</h3>
+        <p className="mt-2 text-sm">{d.readiness?.message || (d.campaigns?.length ? 'Checking delivery eligibility…' : 'No campaign is assigned to this screen.')}</p>
+        <p className="mt-2 text-sm">Camera: {s.has_camera ? 'enabled for this screen' : 'disabled in screen settings'}</p>
+        {mayEdit && <p className="mt-1 text-xs text-muted-foreground">{d.device && d.device.status !== 'revoked' ? 'Player paired' : 'No active paired player'} · Camera and detector observations below are reported by the device.</p>}
+        {(d.readiness?.warnings || []).map((code:string)=><p key={code} className="mt-2 text-xs text-amber-700">{reasonLabel(code)}</p>)}
+        {d.campaigns.filter((c:any)=>!c.creatives?.length).map((c:any)=><p className="mt-2 text-sm" key={c.id}>{c.name}: no creative attached.</p>)}
+        {(d.eligibility || []).length > 0 && <ul className="mt-3 space-y-2 text-sm">{d.eligibility.map((e:any,i:number)=><li key={`${e.campaign_id}-${e.creative_id}-${i}`}>
+          <b>{d.campaigns.find((c:any)=>c.id===e.campaign_id)?.name || 'Assigned campaign'}</b> · {d.campaigns.flatMap((c:any)=>c.creatives || []).find((c:any)=>c.id===e.creative_id)?.name || 'Creative'}: {reasonLabel(e.reason)}{e.rejected_at_step != null && <span className="text-muted-foreground"> · eligibility step {e.rejected_at_step}</span>}
+          {e.letterbox && <span className="text-muted-foreground"> · fits with borders</span>}
+          {(e.warnings || []).map((code:string)=><span key={code} className="block text-xs text-amber-700">{reasonLabel(code)}</span>)}
+        </li>)}</ul>}
+      </Card>
+
+      {mayEdit && <ScreenDiagnostics screenId={id} device={d.device} assignments={d.diagnostic_assignments || []} results={d.diagnostic_results || []} history={d.diagnostic_history} onChanged={load} />}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Live campaigns" value={d.stats.liveCampaigns} hint={`${s.advertiser_slots} distinct-advertiser limit`} />

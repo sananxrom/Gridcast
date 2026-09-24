@@ -23,8 +23,10 @@ import { useDirtyForm, SaveBar } from '@/components/ui/form';
 import { ScreenDetail } from '@/components/views/screen-detail';
 import { ScreenOnboarding } from '@/components/views/screen-onboarding';
 import { GroupManager } from '@/components/views/groups';
-import { CreativeUpload } from '@/components/views/creative-upload';
+import { Advertisers, AdvertiserDetail, Creatives } from '@/components/views/commercial';
 import { CampaignDetail } from '@/components/views/campaign-detail';
+import { CameraReadiness } from '@/components/views/camera-readiness';
+import { CampaignList } from '@/components/views/campaign-list';
 import { CampaignBuilder } from '@/components/views/campaign-builder';
 import type { CmdItem } from '@/components/ui/command-palette';
 
@@ -141,39 +143,9 @@ export default function Operator() {
       {view === 'new-screen' && caps.includes('screens') && caps.includes('sales') && <ScreenOnboarding boot={d} user={user} onGo={go} onDone={async(s:any)=>{await reload();go('s/'+s.id);}} />}
       {view.startsWith('s/') && <ScreenDetail id={view.slice(2)} onGo={go} onChanged={() => reload()} />}
       {view.startsWith('c/') && <CampaignDetail id={view.slice(2)} boot={d} onGo={go} onChanged={() => reload()} />}
-      {view === 'new' && caps.includes('sales') && <CampaignBuilder boot={d} user={user} onGo={go} onDone={async (c: any) => { await reload(); go('c/' + c.id); }} />}
+      {view === 'new' && caps.includes('sales') && <CampaignBuilder boot={d} user={user} orgId={user.org_id} onGo={go} onDone={async (c: any) => { await reload(); go('c/' + c.id); }} />}
 
-      {view.startsWith('a/') && (() => {
-        const a = d.advertisers.find((x: any) => x.id === view.slice(2));
-        if (!a) return <Empty>Advertiser not found</Empty>;
-        const cs = d.campaigns.filter((c: any) => c.advertiser_id === a.id);
-        const cur = cs.filter(isLive), past = cs.filter((c: any) => !isLive(c));
-        const tbl = (rows: any[], empty: string) => (
-          <DataTable cols={[
-            { label: 'Campaign', render: (c: any) => <button onClick={() => go('c/' + c.id)} className="text-left font-medium text-primary hover:underline">{c.name}</button> },
-            { label: 'Dates', render: (c: any) => <span className="block whitespace-nowrap font-mono text-[12px] leading-snug text-muted-foreground">{c.starts_at}<br />→ {c.ends_at}</span> },
-            { label: 'Type', render: (c: any) => <Badge variant={c.campaign_type === 'network' ? 'default' : 'muted'}>{c.campaign_type === 'network' ? 'network' : 'yours'}</Badge> },
-            { label: 'Screens', num: true, render: (c: any) => c.screen_ids.length },
-            { label: 'Play reports', num: true, render: (c: any) => d.plays.filter((p: any) => p.campaign_id === c.id).length },
-            { label: 'Budget', num: true, render: (c: any) => { const p = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
-              return <div className="flex flex-col items-end gap-1 whitespace-nowrap"><span>{inr(c.accrued_spend)}</span><span className="text-[11.5px] text-muted-foreground">of {inr(c.committed_budget)}</span><Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
-            { label: 'Status', render: (c: any) => isLive(c) ? <Badge variant="onair" blip>current</Badge> : <Badge variant="muted">{c.status}</Badge> },
-          ]} rows={rows} empty={empty} rowId={(c: any) => c.id} exportName="campaigns" />
-        );
-        return (<>
-          <PageHead title={a.name} back={{ label: 'Advertisers', go: 'advertisers', onGo: go }}
-            sub={<>{a.contact} · <span className="font-mono">{a.email}</span> · <span className="font-mono">{a.phone}</span></>}
-            actions={<Badge variant={a.org_id === user.org_id ? 'muted' : 'default'}>{a.org_id === user.org_id ? 'your client' : 'brought by Gridcast'}</Badge>} />
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Stat label="Live campaigns" value={cur.length} hint={`${cs.length} all time`} />
-            <Stat label="Play reports" value={cs.reduce((s: number, c: any) => s + d.plays.filter((p: any) => p.campaign_id === c.id).length, 0)} hint="across all campaigns" />
-            <Stat label="Committed" value={inr(cs.reduce((s: number, c: any) => s + c.committed_budget, 0))} hint="total booked" />
-            <Stat label="Accrued" value={inr(cs.reduce((s: number, c: any) => s + c.accrued_spend, 0))} hint={a.org_id === user.org_id ? 'you keep 100%' : 'less Gridcast fee'} />
-          </div>
-          <SectionHead>Current campaigns</SectionHead>{tbl(cur, 'Nothing running right now')}
-          <SectionHead>Past campaigns</SectionHead>{tbl(past, 'No past campaigns')}
-        </>);
-      })()}
+      {view.startsWith('a/') && caps.includes('sales') && <AdvertiserDetail id={view.slice(2)} d={d} user={user} orgId={user.org_id} onGo={go} onChanged={reload} />}
 
       {view === 'overview' && (<>
         <PageHead title={user.orgName} sub={`${d.screens.length} screens · ${d.advertisers.length} advertisers · ${d.campaigns.filter(isLive).length} live campaigns`} />
@@ -246,7 +218,7 @@ export default function Operator() {
                         <span key={t} className="rounded border border-border/70 bg-muted px-1.5 py-0.5 font-mono text-[10.5px] text-muted-foreground">{t}</span>
                       ))}
                       {tags.length > 2 && <span className="rounded border border-border/70 bg-muted px-1.5 py-0.5 font-mono text-[10.5px] text-muted-foreground">+{tags.length - 2}</span>}
-                      {!s.has_camera && <Badge variant="warn">no camera</Badge>}
+                      <CameraReadiness screen={s} devices={d.devices}/>
                     </div>
                     <button onClick={() => go('s/' + s.id)} className="shrink-0 text-[12px] font-medium text-primary opacity-0 transition-opacity group-hover:opacity-100">Manage →</button>
                   </div>
@@ -258,64 +230,11 @@ export default function Operator() {
         </>);
       })()}
 
-      {view === 'advertisers' && caps.includes('sales') && (() => {
-        const mine = d.advertisers.filter((a: any) => a.org_id === user.org_id);
-        const bygc = d.advertisers.filter((a: any) => a.org_id !== user.org_id);
-        const row = (a: any) => { const cs = d.campaigns.filter((c: any) => c.advertiser_id === a.id);
-          return { a, cs, live: cs.filter(isLive), spend: cs.reduce((s: number, c: any) => s + c.accrued_spend, 0),
-            fee: cs.reduce((s: number, c: any) => s + c.accrued_spend * (c.platform_fee_pct / 100), 0) }; };
-        const cols = (showFee: boolean) => [
-          { className: 'min-w-[168px]', label: 'Advertiser', render: (r: any) => <><button onClick={() => go('a/' + r.a.id)} className="text-left font-medium text-primary hover:underline">{r.a.name}</button><div className="text-[12px] text-muted-foreground">{r.a.contact}</div></> },
-          { label: 'Status', render: (r: any) => r.live.length ? <Badge variant="onair" blip>current</Badge> : <Badge variant="muted">{r.cs.length ? 'past' : 'no campaigns'}</Badge> },
-          { label: 'Category', render: (r: any) => <Badge variant="muted">{r.a.category}</Badge> },
-          { label: 'Campaigns', num: true, render: (r: any) => <>{r.live.length} <span className="text-muted-foreground">live / {r.cs.length} total</span></> },
-          { label: 'Spend', num: true, render: (r: any) => inr(r.spend) },
-          ...(showFee ? [{ label: 'Gridcast fee', num: true, render: (r: any) => <>−{inr(r.fee)}</> }] : []),
-          { label: 'Contact', render: (r: any) => <span className="font-mono text-[11.5px] text-muted-foreground">{r.a.email}<br />{r.a.phone}</span> },
-        ];
-        return (<>
-          <PageHead title="Advertisers" sub="Your clients, and any that Gridcast has brought to your screens"
-            actions={<AddAdvertiser user={user} onAdded={() => reload()} />} />
-          <SectionHead hint={`· ${mine.length}`}>Your advertisers</SectionHead>
-          <DataTable cols={cols(false)} rows={mine.map(row)} empty="No advertisers yet" rowId={(r: any) => r.a.id} exportName="advertisers"
-            search={(r: any) => `${r.a.name} ${r.a.category} ${r.a.contact}`} facets={[{ label: 'Category', get: (r: any) => r.a.category }]} />
-          <SectionHead hint="· network campaigns on your released slots">Brought by Gridcast</SectionHead>
-          {bygc.length ? (<>
-            <DataTable cols={cols(true)} rows={bygc.map(row)} rowId={(r: any) => r.a.id} exportName="advertisers-gridcast" />
-            <Card className="mt-3 border-primary/25 bg-primary/[0.04] p-3.5 text-[12.5px] text-primary">
-              Gridcast sold these. You keep everything except the platform fee shown. They only run on screens where you released slots to the network.
-            </Card>
-          </>) : <Empty>None yet. Release slots on a screen to let Gridcast sell into it.</Empty>}
-        </>);
-      })()}
+      {view === 'advertisers' && caps.includes('sales') && <Advertisers d={d} user={user} orgId={user.org_id} onGo={go} onChanged={reload} />}
 
-      {view === 'campaigns' && caps.includes('sales') && (<>
-        <PageHead title="Campaigns" sub="Budgets are entered manually — the platform is a ledger, not a processor"
-          actions={<Button onClick={() => go('new')}>+ New campaign</Button>} />
-        <DataTable cols={[
-          { className: 'min-w-[168px]', label: 'Campaign', sort: (c: any) => c.name, render: (c: any) => <><button onClick={() => go('c/' + c.id)} className="text-left font-medium text-primary hover:underline">{c.name}</button><div className="text-[12px] text-muted-foreground">{advName(c.advertiser_id)}</div></> },
-          { label: 'Dates', sort: (c: any) => c.ends_at, render: (c: any) => <span className="block whitespace-nowrap font-mono text-[12px] leading-snug text-muted-foreground">{c.starts_at}<br />→ {c.ends_at}</span> },
-          { label: 'Type', sort: (c: any) => c.campaign_type, render: (c: any) => <Badge variant={c.campaign_type === 'network' ? 'default' : 'muted'}>{c.campaign_type}</Badge> },
-          { label: 'Screens', num: true, sort: (c: any) => c.screen_ids.length, render: (c: any) => c.screen_ids.length },
-          { label: 'People / play', sort: (c: any) => trendCampaign(c.id).filter(Boolean).slice(-1)[0] ?? -1, render: (c: any) => <Spark data={trendCampaign(c.id)} /> },
-          { label: 'Rate', num: true, render: (c: any) => <span className="whitespace-nowrap">{c.rate_type === 'flat' ? <>{inr(c.committed_budget)} <span className="text-muted-foreground">flat</span></> : <>{inr(c.rate_value)} <span className="text-muted-foreground">/play</span></>}</span> },
-          { label: 'Budget', num: true, sort: (c: any) => (c.committed_budget ? c.accrued_spend / c.committed_budget : 0), render: (c: any) => { const p = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
-            return <div className="flex flex-col items-end gap-1 whitespace-nowrap"><span>{inr(c.accrued_spend)}</span><span className="text-[11.5px] text-muted-foreground">of {inr(c.committed_budget)}</span><Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
-          { label: 'Invoice', sort: (c: any) => c.invoice_status, render: (c: any) => (
-            <InlineSelect disabled={!caps.includes('money')} value={c.invoice_status} choices={INVOICE_CHOICES} onChange={v => setCampaign(c, { invoice_status: v })}>
-              <Badge variant={c.invoice_status === 'paid' ? 'ok' : c.invoice_status === 'invoiced' ? 'warn' : 'muted'}>{c.invoice_status.replace(/_/g, ' ')}</Badge>
-            </InlineSelect>) },
-          { label: 'Status', sort: (c: any) => c.status, render: (c: any) => (
-            <InlineSelect value={c.status} choices={STATUS_CHOICES} onChange={v => setCampaign(c, { status: v })}>
-              {isLive(c) ? <Badge variant="onair" blip>live</Badge> : <Badge variant="muted">{c.status}</Badge>}
-            </InlineSelect>) },
-        ]} rows={d.campaigns} rowId={(c: any) => c.id} exportName="campaigns" bulk={campaignBulk} onDone={() => reload()}
-          search={(c: any) => `${c.name} ${advName(c.advertiser_id)}`}
-          facets={[{ label: 'Status', get: (c: any) => c.status }, { label: 'Type', get: (c: any) => c.campaign_type },
-                   { label: 'Invoice', get: (c: any) => c.invoice_status.replace(/_/g, ' ') }]} />
-      </>)}
+      {view === 'campaigns' && caps.includes('sales') && <CampaignList d={d} orgId={user.org_id} onGo={go} onChanged={reload}/>}
 
-      {view === 'creatives' && caps.includes('sales') && <Creatives d={d} user={user} onChanged={() => reload()} advName={advName} />}
+      {view === 'creatives' && caps.includes('sales') && <Creatives d={d} user={user} orgId={user.org_id} onChanged={() => reload()} />}
 
       {view === 'groups' && <GroupManager boot={d} user={user} onChanged={()=>reload()} />}
 
@@ -381,7 +300,7 @@ export default function Operator() {
       {view === 'profile' && <ProfilePage user={user} onSaved={() => { const u = session.get(); if (u) setUser(u); reload(); }} />}
       {(view === 'settings' || view === 'set-org') && caps.includes('org') && <OrgPage d={d} user={user} onSaved={() => { const u = session.get(); if (u) setUser(u); reload(); }} />}
       {view === 'set-billing' && <PayoutPage d={d} user={user} onSaved={() => reload()} />}
-      {view === 'set-team' && caps.includes('team') && <TeamPage user={user} onChanged={() => reload()} />}
+      {view === 'set-team' && caps.includes('team') && <TeamPage user={user} orgId={user.org_id} boot={d} onChanged={() => reload()} />}
       {['set-api','set-hooks'].includes(view) && (<>
         <PageHead title={titleOf[view] ?? 'Settings'} />
         <SoonPage title="Not built yet"
@@ -392,70 +311,4 @@ export default function Operator() {
       </>)}
     </AppShell>
   );
-}
-
-function AddAdvertiser({ user, onAdded }: { user: SessionUser; onAdded: () => void }) {
-  const [open, setOpen] = useState(false);
-  const [f, setF] = useState({ name: '', contact: '', category: '', phone: '' });
-  if (!open) return <Button onClick={() => setOpen(true)}>+ Add advertiser</Button>;
-  return (
-    <Card className="absolute right-8 z-30 w-[min(560px,90vw)] p-5 shadow-xl">
-      <h3 className="mb-3 text-[14px] font-semibold">New advertiser</h3>
-      <div className="flex flex-wrap gap-3">
-        <Field label="Name"><Input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} placeholder="Acme Motors" /></Field>
-        <Field label="Contact"><Input value={f.contact} onChange={e => setF({ ...f, contact: e.target.value })} /></Field>
-        <Field label="Category"><Input value={f.category} onChange={e => setF({ ...f, category: e.target.value })} placeholder="automotive" /></Field>
-        <Field label="Phone"><Input value={f.phone} onChange={e => setF({ ...f, phone: e.target.value })} /></Field>
-      </div>
-      <div className="mt-3 flex gap-2">
-        <Button onClick={async () => { await api('/advertiser', { org_id: user.org_id, name: f.name || 'Untitled', contact: f.contact, category: f.category || 'general', phone: f.phone, email: '' }); setOpen(false); onAdded(); }}>Save</Button>
-        <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-      </div>
-    </Card>
-  );
-}
-
-function Creatives({ d, user, onChanged, advName }: { d: any; user: SessionUser; onChanged: () => void; advName: (id: string) => string }) {
-  const [f, setF] = useState({ adv: d.advertisers.filter((a: any) => a.org_id === user.org_id)[0]?.id ?? '', url: '', name: '', dur: '10', source: 'upload', category: 'general' });
-  const [err, setErr] = useState(''), [busy,setBusy] = useState(false);
-  const add = async () => {
-    setErr('');setBusy(true);
-    try {
-      if(!f.adv) throw new Error('Create or select an advertiser first.');
-      if(!f.name.trim()) throw new Error('Enter a creative name.');
-      let media:any={};
-      if(f.source==='youtube') {
-        const id=ytId(f.url); if(!id)throw new Error('Not a YouTube URL or video ID.');
-        const duration=Number(f.dur);if(!Number.isFinite(duration)||duration<=0)throw new Error('Enter a positive duration.');
-        media={youtube_id:id,duration_s:duration,aspect:'16:9'};
-      }
-      await api('/creative', { org_id: user.org_id, advertiser_id: f.adv, name: f.name.trim(), category: f.category.trim()||'general', ...media });
-      setF({ ...f, url: '', name: '' }); onChanged();
-    }catch(e){setErr((e as Error).message);}finally{setBusy(false);}
-  };
-  return (<>
-    <PageHead title="Creatives" sub="Upload video variations or add a YouTube source. Each creative requires platform approval." />
-    <Card className="mb-4 p-5">
-      <div className="flex flex-wrap gap-3">
-        <Field label="Advertiser"><Select value={f.adv} onChange={e => setF({ ...f, adv: e.target.value })}>
-          {d.advertisers.filter((a: any) => a.org_id === user.org_id).map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}
-        </Select></Field>
-        <Field label="Name"><Input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} /></Field>
-        <Field label="Category"><Input value={f.category} onChange={e=>setF({...f,category:e.target.value})}/></Field>
-        <Field label="Video source"><Select value={f.source} onChange={e=>setF({...f,source:e.target.value})}><option value="upload">Upload MP4 / WebM</option><option value="youtube">YouTube</option></Select></Field>
-        {f.source==='youtube'&&<><Field label="YouTube URL" className="flex-[2]"><Input value={f.url} onChange={e => setF({ ...f, url: e.target.value })} placeholder="https://youtube.com/watch?v=…" /></Field><Field label="Expected seconds" className="max-w-[140px]"><Input type="number" min="1" value={f.dur} onChange={e => setF({ ...f, dur: e.target.value })} /></Field></>}
-      </div>
-      {f.source==='upload'&&<p className="mt-3 text-sm text-muted-foreground">Create the creative, then choose “Upload video” on its row below. You can attach landscape and portrait variations to the same creative.</p>}
-      {f.source==='youtube'&&<p className="mt-3 text-xs text-muted-foreground">The entered duration is self-reported. Upload a file for server-verified dimensions and duration.</p>}
-      <div className="mt-3 flex items-center gap-3"><Button onClick={add} disabled={busy}>{busy?'Creating…':'Add creative'}</Button>{err && <span role="alert" className="text-[12.5px] text-destructive">{err}</span>}</div>
-    </Card>
-    <DataTable cols={[
-      { label: 'Creative', render: (c: any) => <div className="flex items-center gap-3"><Thumb id={c.youtube_id} w={76} /><div><div className="font-medium">{c.name}</div><div className="text-[12px] text-muted-foreground">{advName(c.advertiser_id)}</div></div></div> },
-      { label: 'Source', render: (c: any) => <span className="text-[12px] text-muted-foreground">{c.assets?.length?`${c.assets.length} uploaded variation${c.assets.length===1?'':'s'}`:c.youtube_id?'YouTube':'Awaiting upload'}</span> },
-      { label: 'Length', num: true, render: (c: any) => c.assets?.length?<span className="text-xs">{c.assets.map((a:any)=>`${a.duration_s ?? (a.duration_ms/1000)}s`).join(' / ')}</span>:c.duration_s?`${c.duration_s}s (reported)`:'—' },
-      { label: 'Approval', render: (c: any) => <Badge variant={c.approval_status === 'approved' ? 'ok' : c.approval_status === 'rejected' ? 'destructive' : 'warn'}>{c.approval_status}</Badge> },
-      { label: 'Video', render: (c:any) => c.org_id===user.org_id?<CreativeUpload creativeId={c.id} onUploaded={()=>onChanged()}/>:<span className="text-xs text-muted-foreground">Managed by originating organisation</span> },
-      { label: 'Review', render: () => <span className="text-[12px] text-muted-foreground">Reviewed by Gridcast</span> },
-    ]} rows={d.creatives} rowId={(c: any) => c.id} exportName="creatives" />
-  </>);
 }

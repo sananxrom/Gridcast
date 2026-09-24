@@ -1,8 +1,18 @@
 import crypto from 'crypto';
+import { playerReadiness } from './readiness';
+import { deviceDiagnosticRoute, diagnosticOffer, DiagnosticError } from './diagnostics';
 const PAIR_TTL = 10 * 60e3, BACKLOG_TTL = 72 * 3600e3, ASSIGNMENT_TTL = 3600e3;
 const hash = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 const iso = (n: number) => new Date(n).toISOString();
 const safeScreen = (s: any) => ({ id: s.id, name: s.name, has_camera: !!s.has_camera, loop_length_s: s.loop_length_s });
+// Only playback inputs cross the device boundary. Pricing, client labels and future internal
+// item fields stay server-side; assignment signatures and frozen billing rows use the original item.
+function playbackItem(item: any, assignmentId: string, validUntil: string) {
+  return { campaign_id: item.campaign_id, creative_id: item.creative_id, youtube_id: item.youtube_id,
+    duration_s: item.duration_s, asset_id: item.asset_id, asset_url: item.asset_url,
+    width: item.width, height: item.height, letterbox: item.letterbox,
+    assignment_id: assignmentId, valid_until: validUntil };
+}
 export const pairingCodeHash = (code: string) => hash(code.trim().toUpperCase());
 export const playRecordId = (deviceId: string, playUid: string) => 'play_' + hash(deviceId + '\0' + playUid);
 export function deviceIdFromToken(token?: string | null): string | null {
@@ -34,7 +44,7 @@ function canonical(v: any): string {
   if (v && typeof v === 'object') return '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + canonical(v[k])).join(',') + '}';
   return JSON.stringify(v);
 }
-type Playlist = { items: any[]; config: Record<string, any>; config_version: string | number };
+type Playlist = { items: any[]; config: Record<string, any>; config_version: string | number; readiness?: { ready: boolean; code: string; message: string; warnings: string[] } };
 type Options = { playlist: (screen: any, device: any) => Playlist; now?: number; clientKey?: string };
 type Result = { status?: number; body: any; changed: boolean };
 const fail = (status: number, error: string): Result => ({ status, body: { error }, changed: false });
@@ -42,7 +52,7 @@ const attempts = new Map<string, { at: number; count: number }>();
 /** All reads and changes run inside the caller's persistence transaction. */
 export function deviceRoute(db: any, method: string, seg: string[], body: any, token: string | null | undefined, options: Options): Result | null {
   const path = seg.join('/'), now = options.now ?? Date.now();
-  if (!((method === 'POST' && ['pair','heartbeat','play','nowplaying'].includes(path)) || (method === 'GET' && /^playlist\/[^/]+$/.test(path)))) return null;
+  if (!((method === 'POST' && ['pair','heartbeat','play','nowplaying','diagnostic/start','diagnostic/result'].includes(path)) || (method === 'GET' && /^playlist\/[^/]+$/.test(path)))) return null;
   if (path === 'pair') {
     const k = options.clientKey || 'pair', attempt = attempts.get(k);
     if (!attempt || now - attempt.at > 60e3) attempts.set(k, { at: now, count: 1 });
@@ -62,9 +72,18 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
   if (!auth) return fail(401, 'Device must be paired again');
   const { screen, device } = auth;
   if ((body.screen_id && body.screen_id !== screen.id) || (body.org_id && body.org_id !== screen.org_id) || (seg[0] === 'playlist' && seg[1] !== screen.id)) return fail(404, 'Not found');
+  if (path.startsWith('diagnostic/')) {
+    try { return deviceDiagnosticRoute(db, path, body, screen, device, now, path === 'diagnostic/start' ? options.playlist(screen, device).config_version : undefined); }
+    catch (e) { if (e instanceof DiagnosticError) return fail(e.status, e.message); throw e; }
+  }
   if (path === 'heartbeat') {
     if (!((typeof body.config_version === 'string' && body.config_version.length <= 128) || (Number.isSafeInteger(body.config_version) && body.config_version >= 0))) return fail(400, 'Invalid configuration version');
     const at = Date.parse(body.device_now); if (!Number.isFinite(at)) return fail(400, 'device_now is required');
+    if (body.vision !== undefined) {
+      const v = body.vision;
+      if (!v || !['disabled','starting','ready','unavailable'].includes(v.camera_state) || !['loading','ready','error','not_loaded'].includes(v.model_state) || (v.model_ver !== null && v.model_ver !== 'coco-ssd@2.2.3/lite_mobilenet_v2') || (v.last_sample_at !== null && (typeof v.last_sample_at !== 'string' || !Number.isFinite(Date.parse(v.last_sample_at))))) return fail(400, 'Invalid detector status');
+      device.vision = { camera_state: v.camera_state, model_state: v.model_state, model_ver: v.model_ver, last_sample_at: v.last_sample_at, reported_at: iso(now), source: 'device_report' };
+    }
     device.last_heartbeat_at = iso(now); device.status = 'online';
     device.app_ver = String(body.app_ver || '').slice(0, 80); device.agent_ver = String(body.agent_ver || '').slice(0, 100);
     device.applied_config_version = body.config_version ?? null;
@@ -94,8 +113,8 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
     const held = device.assignment_set;
     if (held && held.signature === signature && Date.parse(held.valid_until) > now + 60e3
       && Array.isArray(held.ids) && held.ids.length === p.items.length) {
-      const items = p.items.map((item: any, i: number) => ({ ...item, assignment_id: held.ids[i], valid_until: held.valid_until }));
-      return { changed: true, body: { screen: safeScreen(screen), items, config: p.config, config_version: p.config_version, server_time: iso(now), valid_until: held.valid_until } };
+      const items = p.items.map((item: any, i: number) => playbackItem(item, held.ids[i], held.valid_until));
+      return { changed: true, body: { screen: safeScreen(screen), items, config: p.config, config_version: p.config_version, server_time: iso(now), readiness: playerReadiness(p.readiness), diagnostic: diagnosticOffer(db, screen, device, now), valid_until: held.valid_until } };
     }
     const items = p.items.map((item: any) => {
       const c = db.campaigns.find((c: any) => c.id === item.campaign_id);
@@ -104,10 +123,10 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
         duration_s: item.duration_s, rate_type: item.rate_type ?? c?.rate_type ?? 'flat', rate_value: Number(item.rate_value ?? c?.rate_value) || 0,
         issued_at: iso(now), valid_until: iso(until), accept_until: iso(now + BACKLOG_TTL), config_version: p.config_version,
         camera_fail_mode: p.config.camera_fail_mode || 'continue', model_configured: p.config.model || null, sample_interval_s: Number(p.config.sample_interval_s) || 2, count_ceiling: Number(p.config.count_ceiling) || 50 };
-      db.device_assignments.push(a); return { ...item, assignment_id: a.id, valid_until: a.valid_until };
+      db.device_assignments.push(a); return playbackItem(item, a.id, a.valid_until);
     });
     device.assignment_set = { signature, valid_until: iso(until), ids: items.map((i: any) => i.assignment_id) };
-    return { changed: true, body: { screen: safeScreen(screen), items, config: p.config, config_version: p.config_version, server_time: iso(now), valid_until: iso(until) } };
+    return { changed: true, body: { screen: safeScreen(screen), items, config: p.config, config_version: p.config_version, server_time: iso(now), readiness: playerReadiness(p.readiness), diagnostic: diagnosticOffer(db, screen, device, now), valid_until: iso(until) } };
   }
   const assignment = (db.device_assignments || []).find((a: any) => a.id === body.assignment_id && a.device_id === device.id && a.screen_id === screen.id);
   if (path === 'nowplaying') {

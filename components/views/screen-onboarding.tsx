@@ -20,9 +20,9 @@ export function PairingCode({ pairing, onClose }: { pairing: {code:string;expire
   </div>;
 }
 
-export function ScreenOnboarding({ user, boot, onGo, onDone }: { user:any; boot:any; onGo:(g:string)=>void; onDone:(s:any)=>void }) {
+export function ScreenOnboarding({ user, boot, orgId, onGo, onDone }: { user:any; boot:any; orgId?:string|null; onGo:(g:string)=>void; onDone:(s:any)=>void }) {
   const mayPrice = boot.caps?.includes('sales'), mayMoney = boot.caps?.includes('money');
-  const [f,setF] = useState<any>({org_id:user.org_id,name:'',venue_name:'',address:'',venue_type:'cafe',size_in:'43',orientation:'landscape',location_tier:'standard',loop_length_s:'600',slot_duration_s:'10',advertiser_slots:'10',from:'09:00',to:'21:00',owner_share_pct:'0',has_camera:false,tags:'',city:'Chandigarh',area:''});
+  const [f,setF] = useState<any>({org_id:orgId??(user.role==='platform_admin'?'':user.org_id),name:'',venue_name:'',address:'',venue_type:'cafe',size_in:'43',orientation:'landscape',location_tier:'standard',loop_length_s:'600',slot_duration_s:'10',advertiser_slots:'10',from:'09:00',to:'21:00',owner_share_pct:'0',has_camera:false,tags:'',city:'Chandigarh',area:''});
   const [seed,setSeed] = useState(false), [r,setR] = useState({monthly_revenue:'12000',client_count:'6',fill_percent:'60'});
   const [error,setError] = useState(''), [busy,setBusy] = useState(false), [created,setCreated] = useState<any>(null), [pairing,setPairing] = useState<any>(null);
   const change = (k:string,v:any)=>setF({...f,[k]:v});
@@ -40,6 +40,7 @@ export function ScreenOnboarding({ user, boot, onGo, onDone }: { user:any; boot:
   const save=async()=>{
     setError(''); setBusy(true);
     try {
+      if(!f.org_id) throw new Error('Select an organisation first.');
       const s=validateScreenInput({...normalized,name:f.name,venue_name:f.venue_name,address:f.address});
       const body:any={org_id:f.org_id,name:s.name,venue_name:s.venue_name,address:s.address,venue_type:s.venue_type,size_in:s.size_in,orientation:s.orientation,aspect:s.aspect,location_tier:s.location_tier,city:f.city,area:f.area,tags:s.tags,loop_length_s:s.loop_length_s,slot_duration_s:s.slot_duration_s,advertiser_slots:quote?.advertiser_slots??s.advertiser_slots,operating_hours:s.operating_hours,has_camera:s.has_camera};
       if(mayMoney) body.owner_share_pct=s.owner_share_pct;
@@ -56,7 +57,7 @@ export function ScreenOnboarding({ user, boot, onGo, onDone }: { user:any; boot:
   return <>
     <PageHead title="Add screen" back={{label:'Screens',go:'screens',onGo}} sub="Register the location and its inventory, then pair a device." />
     <Card className="mb-4 p-5"><h3 className="mb-3 font-semibold">Screen and venue</h3><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-      {user.role==='platform_admin' && <Field label="Organisation"><Select value={f.org_id} onChange={e=>change('org_id',e.target.value)}>{boot.orgs.map((o:any)=><option key={o.id} value={o.id}>{o.name}</option>)}</Select></Field>}
+      {user.role==='platform_admin' && <Field label="Organisation"><Select disabled={!!orgId} value={f.org_id} onChange={e=>change('org_id',e.target.value)}><option value="">Choose organisation…</option>{boot.orgs.map((o:any)=><option key={o.id} value={o.id}>{o.name}</option>)}</Select></Field>}
       {[['name','Screen name'],['venue_name','Venue name'],['address','Address'],['city','City'],['area','Area / sector'],['size_in','Diagonal (inches)']].map(([k,label])=><Field key={k} label={label}><Input aria-label={label} value={f[k]} onChange={e=>change(k,e.target.value)} /></Field>)}
       <Field label="Venue type"><Select value={f.venue_type} onChange={e=>change('venue_type',e.target.value)}>{['cafe','gym','grocery','salon','mall','pharmacy'].map(v=><option key={v}>{v}</option>)}</Select></Field>
       <Field label="Orientation"><Select value={f.orientation} onChange={e=>change('orientation',e.target.value)}><option>landscape</option><option>portrait</option></Select></Field>
