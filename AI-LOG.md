@@ -899,3 +899,9 @@ about hardest, because it makes the ledger quietly unreliable exactly where it m
 **Verification:** Production build/typecheck and diff checks PASS. No gradient definitions or references remain in either SVG. Sign-in page screenshot checked locally; wordmark is visibly larger relative to mark. No new tests for visual-only styling. No failures.
 **Files:** `components/ui/brand-mark.tsx`, `components/ui/auth-page.tsx`, `components/ui/loader.tsx`, `components/ui/sidebar-nav.tsx`, `app/player/page.tsx`, `public/brand/gridcast-mark.svg`, `app/icon.svg`, `app/favicon.ico`, `app/apple-icon.png`, `AI-LOG.md`.
 **Commit/release:** Base `59f7c05`; scoped commit and existing Firebase deployment follow.
+
+
+### 2026-09-25 02:21 IST · GPT-6 (Codex desktop) · Solid logo correction live
+
+**Outcome:** Firebase `build-2026-09-24-006` READY, rollout SUCCEEDED, 100% traffic, source `d86d4d8e0149669223ecf7cab9ad1f752d437471`. Live brand SVG, SVG favicon, ICO and Apple icon all return 200 and match release bytes. Live sign-in HTML uses versioned solid asset and 24px wordmark. Local preview tab/server cleaned up. No deployment failures.
+**Files/commit:** Application `d86d4d8`; `AI-LOG.md` completion append in log-only follow-up commit.
