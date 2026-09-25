@@ -2,9 +2,9 @@
 
 **Updated:** 25 Sep 2026 · **Review base:** `80fef42`
 
-**Last verified deployment:** `34bf878` / `build-2026-09-25-005`; Firebase rollout succeeded, build READY, 100% traffic. Verified 2026-09-25 22:23 IST.
+**Last verified deployment:** `9380162` / `build-2026-09-25-006`; Firebase rollout succeeded, build READY, 100% traffic. Verified 2026-09-25 23:12 IST.
 
-**Status:** Release B (`0.6.0`) is deployed and smoke-tested on Firebase, including Release A. The required Mumbai Firestore index is READY. Audio release `0.7.0` is implemented and locally verified; its release rollout is pending. Caption/control work remains planned.
+**Status:** Release B (`0.6.0`) and audio release `0.7.0` are deployed and smoke-tested on Firebase; `9380162` serves 100% traffic. The required Mumbai Firestore index is READY. Caption/control work remains planned. Physical-speaker and Android/WebView output still need venue-device checks.
 
 **Decision record:** [AI-LOG.md](../AI-LOG.md), Codex/Claude reviews from 19:06 through 20:49 IST on 25 Sep.
 
@@ -319,8 +319,10 @@ an absolute guarantee, or block the only interaction that can recover playback.
    production build passed. The reviewed commit was released through the existing Firebase workflow.
    The temporary export limitation remains documented below.
 3. Release B scoped maintenance is deployed; see §8 for index readiness and verification boundaries.
-4. Review audio configuration/fallback and then caption/control changes as separate diffs after A. They need
-   not wait for B and must not expand A's acceptance scope. Heartbeat-driven refresh remains a follow-up.
+4. Audio configuration/fallback shipped in `9380162` / `build-2026-09-25-006`; source tests cover default-on,
+   inherited overrides, sound-off sync, native fallback and YouTube fallback. Physical speakers and
+   Android/WebView remain unverified. Caption/control work remains a separate follow-up. Heartbeat-driven
+   refresh is also still a follow-up.
 5. Record actual results and exact release SHAs in AI-LOG.md. Keep source review, automated tests, desktop
    browser tests and physical-device validation distinct. Do not mark an untested browser/device as passed.
 

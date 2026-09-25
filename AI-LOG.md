@@ -3472,3 +3472,13 @@ defect remains live in `build-2026-09-25-005`.
 **Files:** `app/player/page.tsx`, `lib/config.ts`, `tests/audio-config.test.cjs`, `tests/player.browser.cjs`, `gridcast-research/23-player-surface-cleanup.md`, `AI-LOG.md`.
 **Commit:** `9380162` (audio source, tests and doc). This log entry is the follow-up commit required by the repo convention.
 **Outcome/Open:** Audio fix is built, locally verified and committed, not yet pushed or deployed. Production remains on B `0.6.0`, so the live player still will not emit audio until the new rollout. Browser policy may require the on-screen tap; venue speakers/OS volume and physical Android/WebView output remain unverified.
+
+### 2026-09-25 23:12 IST · GPT-6 (Codex desktop) · Deploy default-on creative audio release
+
+**Asked:** The user reported that sound still was not audible after the handover and provided standing authorization for Gridcast tools, including Firebase CLI.
+**Did:** Pushed review branch `codex/gridcast-trust-layer-wp5` through `7ecb584`; app commit is `93801628fb2d4224e76768a61f56493306ed843c`. Released that exact tested app commit to Firebase App Hosting backend `gridcast-backend`. Rollout/build `build-2026-09-25-006` is SUCCEEDED / READY with 100% traffic. No index, database, tenant data or maintenance-grant changes were made. Updated document 23 with the deployed SHA and remaining device validation limits.
+**Live check:** `/api/_health` and `/player` returned HTTP 200. Eight player JS assets were checked; served bundle contains `gridcast-web/0.7.0`, the sound recovery control and `audio_enabled`. This confirms deployed player code, not audible venue speakers. No paired production device was changed or tested.
+**Failure corrected:** The first rollout command used an incorrect full SHA and Firebase rejected it before starting. `git rev-parse 9380162` returned the exact application SHA above; retry created and completed build `build-2026-09-25-006`. No unintended rollout occurred.
+**Files:** `gridcast-research/23-player-surface-cleanup.md`, `AI-LOG.md`.
+**Commit:** Application `9380162`; implementation log `7ecb584`; deployment log follows in a documentation-only commit.
+**Outcome/Open:** Sound is enabled in production by default. Browser autoplay may require the player’s **Enable sound** tap or a managed kiosk allowlist; actual speakers, OS volume and physical Android/WebView remain unverified. Captions/YouTube control cleanup remains separate work.
