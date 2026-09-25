@@ -1776,3 +1776,153 @@ policy objects → change-history surfaces → operator inventory defaults → A
 **Failure/limit:** Firebase CLI credentials expired during final rollout polling. A fresh status/error-log attempt also failed authentication; no post-rollout error count is claimed. Verified successful release through the already signed-in Firebase console instead, then stopped only the stale local polling process. CLI reauthentication is needed before the next authenticated CLI deployment or log check. The unrelated default gcloud account was not used.
 **Remaining product limits:** No new production test records or device re-pairing performed. Live paired-screen playback was not revalidated during this final follow-up. YouTube remains online-only and may show provider loading gaps. Offline continuity requires uploaded media and still-valid allowances; filler only exists where approved assets have been supplied. Accelerated endurance tests do not replace a physical burn-in.
 **Files/commits:** Runtime and regression changes are `725b90f`. This log and local-codebase-memory instructions are a documentation-only follow-up; no additional application rollout is required.
+
+### 2026-09-25 05:32 IST · claude-opus-5 (Cowork) · Pricing claim retracted; doc 19 collision resolved
+
+**Asked:** Sanan: "check log."
+**Did:** Read Codex's 04:59 → 05:26 entries. Checked its pricing clarification against `lib/inventory.ts`.
+Renamed my settings doc to resolve a number collision. No source changes.
+
+**My 04:58 pricing claim was wrong — retracted.** I wrote that `loop_length_s` and `slot_duration_s` feed
+the slot-price derivation, so continuous rotation would leave "the rate card without its basis." Checked:
+`lib/inventory.ts:122-123` is `monthly_value = venue_base × size_factor × location_factor ×
+exposure_factor`, and `slot_price_month = monthly_value / advertiser_slots`. **Neither loop field appears.**
+They sit in `SCREEN_PRICING_INPUTS`, which is the *disclosure* allowlist — what a pricing-capable actor is
+permitted to see — not the derivation. I read "pricing inputs" as "inputs to the price." Codex's
+clarification is correct: the legacy fields influence historical frequency-based quotations and drift only,
+and existing prices stay frozen.
+
+**Doc number collision, now fixed.** Codex created `gridcast-research/19-continuous-playback-and-offline-media.md`
+at 23:32; I created `19-settings-architecture.md` at 23:44 without checking. Two docs numbered 19. Mine was
+later, so it is renamed **`20-settings-architecture.md`**. The three references to it in the 05:14 entry
+above are stale by one number; this entry is the correction. Going forward I will `ls gridcast-research/`
+before numbering, since we now write to the same folder concurrently.
+
+**What shipped while I was on settings research — noting it so the record is explicit.** Continuous
+playback went out as `a974675` / `build-2026-09-24-011`, then recovery fixes as `725b90f` /
+`build-2026-09-24-012`, both verified live by Codex. Four things from the 04:44–04:58 exchange landed:
+- **`lib/budgets.ts`** — atomic reservation and reconciliation, protocol-2 grants and **persistent client
+  allowances**. This is the three-part mechanism from Codex's correction (3), not my receipt-side counter.
+- **Image creatives carry decode/visible evidence**, so an image receipt is not a synthetic media timeline —
+  the 04:44 §image finding, implemented rather than deferred.
+- **Filler reports against a null campaign, separately from paid delivery** — the 04:52 §5 point.
+- **The throughput margin was tested at the new operating point**: a 3-hour full-utilisation run, 1,080
+  consecutive plays (360 paid + 720 filler), exactly 360 paise spent, null unmeasured presence, and **no
+  false hourly throughput failures**. That was the 04:52 correction-to-self about `HOUR * 1.1` going from
+  abuse ceiling to operating constraint. It is now measured rather than assumed. Still not a physical
+  burn-in, as Codex states.
+
+**Two open items I would not lose track of**, both Codex's own flags rather than new findings: the live
+paired-player check could not be completed (the temporary tab was rejected with "Device must be paired
+again", and Codex correctly declined to re-pair or revoke another device), so **authenticated live playback
+of the continuous model is still unverified on a real screen**; and **filler must be uploaded and approved
+per operator organisation** before an exhausted screen has anything to show — until then an empty eligible
+pool renders an honest waiting state.
+
+**Doc 20's status is unchanged by any of this.** It is a proposal, not an instruction for the release Codex
+just shipped, and Codex noted that correctly. Its blocking item still stands: which organisation a network
+advertiser's user belongs to.
+**Outcome:** Read-only apart from the file rename. No source changes, tests, seed, deployment or push.
+**Files:** `gridcast-research/19-settings-architecture.md` → `20-settings-architecture.md`, `AI-LOG.md`.
+Application `725b90f`; log base `def4198`.
+
+### 2026-09-25 05:47 IST · claude-opus-5 (Cowork) · codebase-memory installed on the Cowork side
+
+**Asked:** Sanan: "you install codebase-memory-mcp too, so you can access the same codebase-memory and use
+it shared."
+**Did:** Installed and indexed on the Cowork side. Documented the procedure in `CLAUDE.md`. No source
+changes.
+
+**Correcting the premise, because it matters for how this is used.** There is no shared index to attach to,
+for two independent reasons:
+1. A Cowork session's shell runs in a Linux VM that mounts **only** the connected folder. `/Users/sanan/.local/bin/`
+   is not reachable from it — verified, `ls` returns no such file — so Codex's binary and its Codex MCP
+   registration are both out of reach.
+2. Codex indexes with `--persistence false`, so the graph is **not written to a shared file** in the first
+   place. `.codebase-memory/` does not exist in the repo.
+
+So "shared" here means *the same graph derived from the same source*, not one store two agents write to.
+That is fine for this tool — the index is derived data, regenerable, and `.gitignore` already treats it that
+way. It does mean neither of us can leave notes in it for the other; `AI-LOG.md` remains the shared memory.
+
+**Installed:** same version, `codebase-memory-mcp 0.11.0`, linux-arm64-portable, downloaded from the v0.11.0
+release and verified against the published `checksums.txt`
+(`d62eeb224d5ee3eba3070938ec62cf1033f10b041ec1c4b2fb67f7aef390cc7b`) before extracting. Installed to the VM's
+own home, **not** inside `mnt/gc` — a 300 MB binary does not belong in Sanan's project folder.
+
+**Indexed and verified:** project `gridcast` from `mnt/gc`, branch `codex/gridcast-trust-layer-wp5`,
+**2,981 nodes / 6,586 edges**. Codex recorded 2,976 / 6,581 at 05:25; the difference is the doc rename and
+log appends since. Same single partial parse at `components/ui/app-shell.tsx:99`, which independently
+confirms both sides are reading the same tree. Excludes `node_modules`, `.next`, `.git`, `.claude`,
+`_scratch` by default. Queries confirmed working: `search_graph` found
+`gridcast.lib.settlement.accrueSettlement` at `lib/settlement.ts:55-71`; `get_file_outline` on the new
+`lib/budgets.ts` returned all 11 functions including `ensureBudget`, `reserveBudget` and `budgetReceipt`.
+The index survives across `cli` invocations within a session.
+
+**Two usage notes worth having in writing:** tool arguments are JSON, not flags — `{"project":"gridcast",
+"file_path":"lib/budgets.ts"}`, and the key is `file_path`, not `path`. And `query_graph` takes a **formal
+query**, not a natural-language question; `search_graph` (BM25 over symbols) is the normal entry point.
+
+**Limitation to state plainly:** the VM's home does not survive between Cowork sessions, so this is a
+per-session install — about 40 seconds, checksum included. `CLAUDE.md` now carries the exact procedure under
+"From Cowork (cloud sessions)" so a future session does not have to work it out again. If Sanan would rather
+I used his existing install, connecting `/Users/sanan/.local` as a second folder would let me run that exact
+binary instead; his call, and not necessary for the tool to be useful.
+
+**Also added to `CLAUDE.md`:** `ls gridcast-research/` before numbering a new document. Doc 19 was allocated
+twice on 25 Sep because I did not.
+**Outcome:** Installed, indexed, verified. No source changes, tests, seed, deployment or push.
+**Files:** `CLAUDE.md`, `AI-LOG.md`. Application `725b90f`; log base `def4198`.
+
+
+### 2026-09-25 10:10 IST · GPT-6 (Codex desktop) · Requested SymDex setup started
+
+**Asked:** Install SymDex core, install the `symdex-code-search` skill globally, index Gridcast and register `symdex serve` as an MCP server.
+**Did:** Read the official package requirements and skill. Installing core with pip in `/Users/sanan/.local/share/symdex/venv`, keeping system Python unchanged. Started the exact requested global skills installation. Plan to index `/Users/sanan/Downloads/gc` under id `gridcast` with embeddings disabled; no remote embedding backend is configured. Added project guidance in `AGENTS.md` and ignored generated `.symdex/` artifacts.
+**Scope:** Preserve existing Claude additions to `CLAUDE.md` and the shared log. No application source or deployment changes. Verification and final installed versions follow. Base application `725b90f`, repository HEAD `def4198`.
+
+### 2026-09-25 06:04 IST · claude-opus-5 (Cowork) · SymDex install attempted, indexing blocked
+
+**Asked:** Sanan: install SymDex (`pip install symdex`; `npx skills add husnainpk/SymDex`; `symdex index`;
+`symdex serve`).
+**Verified identity first:** PyPI `symdex` 0.1.26 resolves to `github.com/husnainpk/symdex`, MIT, 27
+releases — matches the repo Sanan linked. Not a name-squat.
+
+**Done:** installed in the Cowork cloud container; CLI responds (`index`, `search`, `find`, `outline`,
+`text`, `semantic`, `pack`, `callers`, `callees`). Staged a 546 KB / 139-file source tarball of `gc`
+(excluding `node_modules`, `.next`, `.git`) into the container.
+
+**Blocked — needs Sanan's decision.** `symdex index` over the Gridcast source was denied by this session's
+auto-mode classifier as untrusted code integration: a third-party v0.1.26 package processing the whole
+codebase. Not worked around. It is his call whether to allow it.
+
+**Could not do at all, for structural reasons:**
+- `pip install symdex` in the device VM — PyPI is not on that VM's egress allowlist. The
+  `git+https://github.com/...` fallback reaches GitHub but times out resolving dependencies, which still
+  need PyPI.
+- `npx skills add --global` — Cowork skills come from the account; skill files on disk are a read-only
+  cache. Would need a proposal card, and the skill only says "prefer SymDex over broad file reads", which
+  is useless without a working SymDex.
+- `symdex serve` — MCP servers cannot be added to a running Cowork session.
+
+**Recommendation.** Even unblocked, SymDex here would index a *staged snapshot* in the cloud container,
+going stale the moment Codex pushes. `codebase-memory-mcp` already runs in the device VM against the live
+tree. SymDex belongs on Sanan's Mac, registered with Codex via `symdex serve` — where pip works and the
+index sees real files. Its distinctive features over codebase-memory are `semantic` search and `pack`
+(token-budgeted context packs), which are worth having; they are just worth having on the machine with the
+source.
+
+**Left behind:** `_scratch/gc-src.tgz` (546 KB) in the connected folder. Deletion is disabled for this
+session, so it needs removing by hand or on the next cleanup.
+**Outcome:** Partial. No source changes, tests, seed, deployment or push.
+**Files:** `AI-LOG.md`, plus `_scratch/gc-src.tgz`.
+
+
+### 2026-09-25 10:15 IST · GPT-6 (Codex desktop) · SymDex installed and verified
+
+**Delivered:** SymDex core 0.1.26 installed with pip in an isolated Python environment at `/Users/sanan/.local/share/symdex/venv`; `/Users/sanan/.local/bin/symdex` exposes its CLI. Dependency health check passed. Registered Codex MCP server `symdex` with the command `/Users/sanan/.local/bin/symdex serve`.
+**Skill:** Installed the requested `symdex-code-search` skill globally at `/Users/sanan/.agents/skills/symdex-code-search/SKILL.md`. Its contents exactly match the reviewed official skill (SHA-256 `caa998587fa56e35c86343daabbc6bbb172c7945d4025d433a543fdd3f4127e8`). The skill installer configured supported agents including Codex; its warning that PromptScript does not support global installation is unrelated to Codex and was not bypassed.
+**Index:** `/Users/sanan/Downloads/gc` registered as `gridcast`, with local state at `/Users/sanan/.symdex`. Initial structural index: 240 files, 2,146 symbols, zero reported indexing errors. Embeddings are deliberately disabled for this requested core installation. CLI search retrieved `deviceRoute` from `lib/devices.ts`, marked fresh and tree-sitter parsed; tool-estimated savings on that example were 1,180 tokens, not a measured model-billing reduction. MCP initialization and discovery exposed 21 tools, and real MCP status/search requests worked.
+**Recovery and limits:** The first skills clone failed with an HTTP/2 disconnect; retrying the same command with command-local HTTP/1.1 succeeded. Initial search was slow while its public tokenizer data downloaded, then succeeded. An attempted `symdex status --help` showed there is no such CLI subcommand; freshness is checked through MCP `get_index_status`. A direct SQLite inspection initially failed under the filesystem sandbox; authorized read-only inspection succeeded. A temporary stale-index warning correctly identified a concurrent `AI-LOG.md` append, rather than stale application source. Refresh the index after final log/commit changes and before future work. No watcher or hosted embedding service was enabled.
+**Files:** `AGENTS.md` records SymDex-first retrieval alongside codebase-memory; `.gitignore` excludes generated `.symdex/` directories; `AI-LOG.md` records setup and failures. Preserve Claude's existing unstaged `CLAUDE.md` edits and shared-log entries. No application code or deployment changed.
+**Outcome:** Installed, indexed and tested. Restart Codex to load the new MCP server and skill into a fresh session; the CLI works now. Base HEAD `def4198`; deployed application remains `725b90f`.

@@ -24,3 +24,18 @@ Use `--project gridcast` for queries. Keep the graph local; do not commit genera
 The graph supplements source inspection and `AI-LOG.md`; it does not replace either. Check source and
 tests before edits. Partial parser coverage was reported for JSX in `components/ui/app-shell.tsx`, so
 a missing graph result is not proof that a symbol or relationship is absent.
+
+
+## SymDex code search
+
+Sanan also requested SymDex and its global `symdex-code-search` skill. For Gridcast, use repository id
+`gridcast`, rooted at `/Users/sanan/Downloads/gc`. Prefer SymDex symbol/text searches, outlines and
+context packs before broad file reads; codebase-memory remains available for graph exploration.
+Check index freshness, and verify relevant source and tests before changing code. Neither index replaces
+`AI-LOG.md` or proves that a missing symbol is absent.
+
+Local CLI: `/Users/sanan/.local/bin/symdex`. Refresh structural data with
+`symdex index /Users/sanan/Downloads/gc --repo gridcast --no-embed`. Use `--repo gridcast` for scoped
+queries. The Codex MCP entry is `symdex` and runs `symdex serve`. Keep generated indexes out of Git.
+The requested core installation does not include semantic embeddings; use symbol/text search unless
+a separate embedding setup is explicitly chosen.
