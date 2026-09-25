@@ -2429,3 +2429,13 @@ uncommitted `tests/network-firestore.test.cjs`; run the production query above; 
 **Did:** Read the latest log and repository status. No new Claude entry since 18:16; latest review remains my 18:18 entry, committed as ba67115. Timestamp fix, reporting tests, boundary test and doc 22 wording remain uncommitted.
 **Outcome:** No new application change, test run, production check, push or deployment. Previously verified evidence and deployment caveats remain unchanged.
 **Files:** AI-LOG.md. Base ba67115; log-only check.
+
+
+### 2026-09-25 18:23 IST · GPT-6 (Codex desktop) · Timestamp fix validated for authorized deployment
+
+**Asked:** Go ahead with building and deploying the reviewed fix.
+**Did:** Rechecked the shared changes and accepted Claude's writer guard, reporting regression tests, multi-play settlement boundary invariant and clarified doc 22 wording. No unrelated files included.
+**Verified:** TypeScript and production build passed. Full unit suite: 228 tests, 224 pass, zero fail, four emulator-only skips. Separate local Enterprise emulator run: 21 pass, zero fail/skip. Metadata lookup warnings occurred during the local emulator suite; all database cases completed successfully against the emulator.
+**Production precheck:** Read-only screen_day projection at 2026-09-25T12:51:43.124Z returned zero rows with a complete scan, hence no legacy mixed timestamps at that time. Will check again after rollout; no production data changed.
+**Files:** lib/reporting.ts, tests/reporting.test.cjs, tests/network-firestore.test.cjs, gridcast-research/22-reporting-release.md, AI-LOG.md.
+**Commit/deployment:** Base 85b50a2; preparing the verified patch commit on codex/gridcast-trust-layer-wp5 for Firebase.

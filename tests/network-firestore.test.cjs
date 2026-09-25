@@ -281,3 +281,20 @@ test('Enterprise SDK serializes two screens reserving the final campaign rupee',
   const after=(await database.doc('campaign_budgets/budget_cn').get()).data();assert.equal(after.spent_paise,0);assert.equal(after.reservations.reduce((n,r)=>n+r.remaining_plays*r.rate_paise,0),100);
  }finally{await database.terminate();}
 });
+
+test('daily report billable plays equal settlement billable plays across the IST day and month boundary',async()=>{
+ // Doc 21 invariant: the read model must not drift from settlement. Starts 23:59:55 IST on 30 Sept,
+ // so one play lands on 30 Sept / 2026-09 and the rest on 1 Oct / 2026-10. One short play is not billable.
+ const f=deviceFixture();
+ const at=ms=>new Date(f.start+ms).toISOString();
+ const events=[f.body,...[20000,40000,60000].map((ms,i)=>({...f.body,play_uid:'invariant-'+i,seq_no:i+2,started_at_device:at(ms),ended_at_device:at(ms+10000)})),
+  {...f.body,play_uid:'invariant-short',seq_no:5,started_at_device:at(80000),ended_at_device:at(83000),playing_duration_ms:3000,media_ended_s:3}];
+ for(const e of events){const r=await f.send(e);assert.equal(r.body.ok,true,JSON.stringify(r));}
+ const sept=f.database.rows['screen_day/'+reportingKey('sa','cn','cr',f.start)],oct=f.database.rows['screen_day/'+reportingKey('sa','cn','cr',f.start+20000)];
+ assert.equal(sept.date,'2026-09-30');assert.equal(oct.date,'2026-10-01');
+ const bucket=p=>f.database.rows[`settlement_buckets/${settlementKey('cn','sa',p,'e1')}`];
+ assert.equal(sept.plays_billable,bucket('2026-09').billable_plays);
+ assert.equal(oct.plays_billable,bucket('2026-10').billable_plays);
+ assert.equal(sept.plays_billable+oct.plays_billable,4);
+ assert.equal(oct.plays_not_rendered,1,'the short play is delivery evidence, not billable');
+});

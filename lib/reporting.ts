@@ -52,12 +52,15 @@ export function accrueScreenDay(db: any, play: any, assignment: any, playedAt: n
     if (presence.measured) { delta.presence_n = 1; delta.presence_sum = presence.avg_persons; }
   } else delta.plays_not_rendered = 1;
   addCounters(row,delta);
-  const hour = String(new Date(at + 330 * 60000).getUTCHours());
-  row.hours[hour] ||= emptyCounters(); addCounters(row.hours[hour],delta);
   for (const reason of play.nonbillable_reasons || []) row.nonbillable[reason] = (row.nonbillable[reason] || 0) + 1;
-  const time = new Date(at).toISOString();
-  row.first_at = !row.first_at || time < row.first_at ? time : row.first_at;
-  row.last_at = !row.last_at || time > row.last_at ? time : row.last_at;
+  // Hour buckets and first/last are play times. A receive time must not stand in for one.
+  if (validTime) {
+    const hour = String(new Date(at + 330 * 60000).getUTCHours());
+    row.hours[hour] ||= emptyCounters(); addCounters(row.hours[hour],delta);
+    const time = new Date(at).toISOString();
+    row.first_at = !row.first_at || time < row.first_at ? time : row.first_at;
+    row.last_at = !row.last_at || time > row.last_at ? time : row.last_at;
+  }
   row.updated_at = play.server_received_at;
   db.reporting_coverage ||= {version:REPORT_VERSION,started_at:play.server_received_at};
 }

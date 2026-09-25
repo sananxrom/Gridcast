@@ -33,8 +33,23 @@ test('rendered nonbillable plays count as delivered without changing billing and
 test('late receipt uses delivery day while invalid time is receive-day evidence only',()=>{
  const f=fixture();const row=accrue(f);assert.equal(row.date,'2026-09-23');assert.equal(row.updated_at,'2026-09-25T06:00:00.000Z');
  const bad=accrue(f,{timestamp_valid:false,nonbillable_reasons:['clock_or_assignment_window']},Date.parse('2000-01-01T00:00:00Z'));
- assert.equal(bad.date,'2026-09-25');assert.equal(bad.plays_time_invalid,1);assert.equal(bad.plays_rendered,0);assert.equal(bad.plays_billable,0);assert.equal(bad.presence_n,0);assert.equal(bad.hours['11'].plays_time_invalid,1);
+ assert.equal(bad.date,'2026-09-25');assert.equal(bad.plays_time_invalid,1);assert.equal(bad.plays_rendered,0);assert.equal(bad.plays_billable,0);assert.equal(bad.presence_n,0);assert.deepEqual(bad.hours,{});
  assert.equal(f.db.reporting_coverage.started_at,f.play.server_received_at);
+});
+
+test('invalid-clock receipts never set play-time bounds or hour buckets',()=>{
+ const invalid={timestamp_valid:false,nonbillable_reasons:['clock_or_assignment_window']};
+ // Invalid only: the row exists for its counter, with no play time at all.
+ const a=fixture(),only=accrue(a,invalid,Date.parse('2000-01-01T00:00:00Z'));
+ assert.equal(only.plays_time_invalid,1);assert.equal(only.first_at,null);assert.equal(only.last_at,null);assert.deepEqual(only.hours,{});
+ assert.equal(summarizeReport([only],{from:only.date,to:only.date},null).last_at,null);
+ // Valid then invalid on the same receive-day row: the invalid receipt moves neither bound nor any hour.
+ const b=fixture(),when=Date.parse('2026-09-25T05:00:00Z'),valid=accrue(b,{},when);
+ const before={first_at:valid.first_at,last_at:valid.last_at,hours:JSON.parse(JSON.stringify(valid.hours))};
+ const row=accrue(b,invalid,Date.parse('2000-01-01T00:00:00Z'));
+ assert.equal(row,valid,'receive day and play day share one row');
+ assert.equal(row.plays_time_invalid,1);assert.equal(row.plays_rendered,1);
+ assert.equal(row.first_at,before.first_at);assert.equal(row.last_at,before.last_at);assert.deepEqual(row.hours,before.hours);
 });
 
 test('IST midnight, creative, campaign and screen form independent keys and dimensions',()=>{
