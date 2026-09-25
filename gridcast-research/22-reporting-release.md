@@ -4,7 +4,7 @@
 
 Daily reporting is a separate read model, written atomically with accepted device receipts. Keys include screen, campaign, creative and IST delivery-start day. This extra attribution is necessary to isolate advertisers and provide campaign/creative comparisons. Device retry identity protects reporting and settlement together. Billing decisions remain unchanged.
 
-Paid rendered, paid billable, paid failed and filler reports remain separate. Presence sums and measured-play counts include only rendered paid plays with valid clocks. The figure is a play-weighted mean of measured per-play averages; never an unweighted average of daily or screen averages, and never zero substituted for missing measurement. Invalid-clock receipts are counted separately on receive day, excluded from dated delivery, presence, hour buckets and the first/last play times. Receipts reported before this change may have set a row's first/last time or hour bucket from receive time (see AI-LOG 2026-09-25). Filler measurement and airtime remain separate.
+Paid rendered, paid billable, paid failed and filler reports remain separate. Presence sums and measured-play counts include only rendered paid plays with valid clocks. The figure is a play-weighted mean of measured per-play averages; never an unweighted average of daily or screen averages, and never zero substituted for missing measurement. Invalid-clock receipts are counted separately on receive day, excluded from dated delivery, presence, hour buckets and the first/last play times. Filler measurement and airtime remain separate.
 
 The authenticated metrics endpoint pages through all summaries in an explicit 1–93-day range. Operators see their receiving organisation; advertisers see only their advertiser ID across receiving organisations; administrators may select an organisation or the platform. Bootstrap no longer returns event history. Limited detail receipts remain under Diagnostics, labelled with their actual loaded time window.
 
@@ -27,3 +27,7 @@ Continuous playback has no fixed expected-play contract, so no loop-derived deli
 ## Deployment
 
 Firebase App Hosting, existing Singapore backend; Firestore remains Mumbai. Deployment SHA and live verification belong in AI-LOG.md. No Vercel deployment is requested for this release.
+
+## Timestamp correction — 25 September 2026
+
+Release `13ee21c` excludes invalid-clock receipts from play-hour buckets and first/last play times while retaining receive-day invalid-clock evidence. The full unit suite passed 224 tests with four emulator-only skips; the separate Enterprise emulator suite passed 21 tests. TypeScript and production build passed. After Firebase rollout `build-2026-09-25-003` succeeded with 100% traffic, the production summary scan at 12:59:04 UTC returned zero rows. No legacy timing correction was needed at verification. Full deployment evidence is in `AI-LOG.md`.

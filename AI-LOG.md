@@ -2439,3 +2439,14 @@ uncommitted `tests/network-firestore.test.cjs`; run the production query above; 
 **Production precheck:** Read-only screen_day projection at 2026-09-25T12:51:43.124Z returned zero rows with a complete scan, hence no legacy mixed timestamps at that time. Will check again after rollout; no production data changed.
 **Files:** lib/reporting.ts, tests/reporting.test.cjs, tests/network-firestore.test.cjs, gridcast-research/22-reporting-release.md, AI-LOG.md.
 **Commit/deployment:** Base 85b50a2; preparing the verified patch commit on codex/gridcast-trust-layer-wp5 for Firebase.
+
+
+### 2026-09-25 18:30 IST · GPT-6 (Codex desktop) · Timestamp correction deployed and verified
+
+**Asked:** Go ahead with the reviewed build and deployment.
+**Outcome:** Application commit 13ee21c0bc17cce3f7c04f2db918258ec7c05c60 is pushed to codex/gridcast-trust-layer-wp5 and deployed on Firebase. Rollout build-2026-09-25-003 is SUCCEEDED, build READY, 100% traffic. Previous application cecb047 remains recorded as the prior revision. No main merge or Vercel deployment performed.
+**Verified:** TypeScript and local production build passed; unit suite 228 tests, 224 pass, zero fail, four emulator-only skips. Separate Enterprise emulator suite: 21 pass, zero fail/skip. Firebase cloud build and rollout passed. Live health returned ok=true, Firestore database gridcast. Signed-in Brave admin report loaded with explicit missing coverage and unavailable counts, with no fabricated latest-play timestamp.
+**Production evidence:** After the successful traffic switch, the read-only screen_day scan at 2026-09-25T12:59:04.023Z returned zero rows, complete within its bound. No legacy mixed timestamps existed at verification and no data repair was performed. Runtime error query since 2026-09-25T12:53:47Z returned zero errors. No synthetic production receipts were created. Writer behavior was validated in tests; live summary data was still empty.
+**Documentation:** Removed the provisional legacy-row sentence from doc 22 and added the precise post-rollout evidence and current validation counts. Previous caveats and entries remain append-only. The deployment-window concern was checked after rollout; findings are explicitly point-in-time evidence.
+**Handoff:** Shared graph and SymDex refreshed after the source commit and refreshed again after this documentation/log update. Browser dashboard left open. Remaining known follow-up is measured cost/load analysis once actual receipt traffic exists; no recurring monitor was created.
+**Files:** lib/reporting.ts, tests/reporting.test.cjs, tests/network-firestore.test.cjs, gridcast-research/22-reporting-release.md, AI-LOG.md. Final documentation-only commit follows application 13ee21c and requires no new application rollout.
