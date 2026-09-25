@@ -2260,3 +2260,63 @@ is the design of record.
 **Limits:** Production daily collection has not received its first new receipt yet. Historical periods show unavailable/incomplete; no historical backfill, fabricated zeros, assumed delivery target or invented uptime. See gridcast-research/22-reporting-release.md for scoped follow-ups. Hosting stays Singapore; data stays Mumbai.
 **Handoff:** AI-LOG.md is append-only and updated. Shared graph and SymDex refreshed after source edits and refreshed again after this final log entry. SymDex estimated approximately 4,135 tokens avoided for the focused symbol retrieval (tool estimate, not account usage). Local test server stopped; completed authorization tab closed; live dashboard left open.
 **Files:** AI-LOG.md; components/views/delivery-report.tsx; tests/reporting.browser.cjs; gridcast-research/22-reporting-release.md. This final log-only commit does not require another application rollout; deployed application SHA remains cecb047.
+
+### 2026-09-25 16:52 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Adversarial review of reporting release d67ae8f
+
+**Asked:** Sanan: review Codex's reporting release against doc 22. Read-only; no source edits.
+**No correctness defect found in the writer or read path.** Checked, with the lines read:
+- Prefetch covers every valid-clock write: `lib/firestore-store.ts:281` prefetches `at` only when
+  `at >= issued_at-60000 && at <= valid_until`, and `lib/devices.ts:199` makes `timestampValid` require the
+  same window, so a valid-clock play is never keyed to an unfetched row. Invalid clocks key on receive time,
+  prefetched with ±1 day neighbours.
+- Missed prefetch fails closed: new rows are written with `tx.create` (`lib/firestore-store.ts:423`), so a
+  wrong prefetch errors instead of overwriting counters.
+- Filler cannot reach an advertiser: filler items carry `campaign_id:null` (`lib/devices.ts:106`), assignment
+  `advertiser_id` is `c?.advertiser_id || null`, and `reportingVisible` (`lib/reporting.ts:66`) matches on
+  `advertiser_id`.
+- Client merges numerators and denominators across pages and divides once
+  (`components/views/delivery-report.tsx:61-63,126`); no mean of daily means.
+- `plays_billable` counts every billable play (billable implies rendered, valid clock, paid:
+  `lib/devices.ts` `candidateBillable`); settlement counts the per_play subset. Same `+330` day derivation.
+**Open, none blocking:**
+1. Doc 22 says "no mean-of-means". The figure is a play-weighted mean of per-play means, which matches the
+   presence definition in Standing Context. Wording only.
+2. Invalid-clock receipts set `first_at`/`last_at` and an hour bucket from receive time
+   (`lib/reporting.ts:31,55-60`), mixed with played-time values in the same fields. Presence unaffected.
+3. `row.org_id` is the screen's org, so an origin org that sold a campaign onto another org's screens sees
+   none of that delivery. Not a regression: the old path filtered `p.org_id === actor.org_id`
+   (`lib/access.ts:418`). Product decision for Sanan.
+4. Doc 21 test 10 (sum of `plays_billable` equals settlement `billable_plays` over many plays) exists only as
+   a single-play check (`tests/network-firestore.test.cjs:121-123`).
+5. Hypothesis, not measured: each receipt now adds 3 `screen_day` reads plus `_meta/reporting`, and the
+   dashboard pulls 500-row pages sequentially over screen×campaign×creative×day rows.
+**Checks:** HEAD `31bc9bf`: `tsc --noEmit` exit 0; `node --test tests/*.test.cjs` 226 tests, 222 pass,
+0 fail, 4 skip.
+**Files:** `AI-LOG.md`. Not committed.
+
+### 2026-09-25 17:02 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Settlement/reporting invariant test added
+
+**Asked:** Sanan: "decide" on the open items from the 16:52 review.
+**Did:** Added one test to `tests/network-firestore.test.cjs`: "daily report billable plays equal settlement
+billable plays across the IST day and month boundary". It sends five receipts starting 23:59:55 IST on 30 Sept
+(four billable, one 3 s play that is not rendered) and asserts each `screen_day` row's `plays_billable`
+equals the matching settlement bucket's `billable_plays` for 2026-09 and 2026-10, dates `2026-09-30` and
+`2026-10-01`, total 4, and the short play in `plays_not_rendered`. Test-only; no source change.
+First run failed with `Invalid play identity` because my `play_uid` values were shorter than the 8-character
+minimum at `lib/devices.ts:177`; renamed them and it passes.
+**Checks:** `tsc --noEmit` exit 0. `node --test tests/*.test.cjs`: 227 tests, 223 pass, 0 fail, 4 skip.
+**Decision recorded, not implemented:** review item 3 (origin org cannot see delivery of its campaign on
+another org's screens) conflicts with the Standing Context rule that every party sees the full economics of
+any transaction it is part of. Recommended as the next Codex change; needs Sanan's confirmation because it
+changes tenancy scope.
+**Files:** `tests/network-firestore.test.cjs`, `AI-LOG.md`. Not committed.
+
+
+### 2026-09-25 17:58 IST · GPT-6 (Codex desktop) · Latest reporting handoff acknowledged
+
+**Asked:** Update the log again.
+**Did:** Read the latest log, including Claude's 16:52 reporting review and 17:02 settlement/reporting invariant test entry; checked repository status and HEAD. Appended this handoff without rewriting any earlier entry.
+**Outcome:** Last verified Firebase deployment remains application cecb047 (build-2026-09-25-002), with reporting implementation d67ae8f and release-log commit 31bc9bf. No new deployment or production check performed in this turn. Claude reports 227 tests: 223 pass, zero fail, four skip after adding the multi-play IST day/month boundary invariant in tests/network-firestore.test.cjs. Those results are Claude's reported verification, not a fresh run by me. The test remains uncommitted in the shared working tree.
+**Open:** Origin-organisation visibility into delivery on another organisation's screens remains a recorded follow-up. No tenancy-scope change is implemented or approved by this log update. Other review caveats remain in Claude's entries and gridcast-research/22-reporting-release.md. Preserve unrelated staged and working changes.
+**Files:** AI-LOG.md; reviewed status of tests/network-firestore.test.cjs.
+**Commit:** Base 31bc9bfd07ae74252859514c46ebb3ca55ad1581; this entry is a documentation-only update.
