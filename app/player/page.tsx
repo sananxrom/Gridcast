@@ -10,7 +10,7 @@ import { cacheMedia, cachedMediaUrl, saveReadySchedule, readySchedule, reserveLo
 import { cameraConstraints, cameraError, frameSize } from '@/lib/player-vision';
 
 declare global { interface Window { YT: any; onYouTubeIframeAPIReady: () => void; cocoSsd: any; tf: any } }
-const APP_VERSION = 'gridcast-web/0.6.0';
+const APP_VERSION = 'gridcast-web/0.7.0';
 const MODEL_VERSION = 'coco-ssd@2.2.3/lite_mobilenet_v2';
 type Credential = { token: string; device_id: string; screen_id: string };
 type Item = { kind?: 'diagnostic' | 'paid' | 'filler'; diagnostic_has_camera?: boolean; assignment_id: string; valid_until: string; campaign_id: string | null; creative_id: string;
@@ -46,9 +46,11 @@ export default function Player() {
   const [restart, setRestart] = useState(0), [overlayEnabled, setOverlayEnabled] = useState(false), [diagnosticActive, setDiagnosticActive] = useState(false);
   const [publicFailure, setPublicFailure] = useState(false), [recoverySummary, setRecoverySummary] = useState('');
   const [storageWarning, setStorageWarning] = useState('');
+  const [soundBlocked, setSoundBlocked] = useState(false);
   const operationBusy = useRef(false);
   const settlePlayer = useRef<() => Promise<void>>(async () => {});
   const retryCamera = useRef<() => void>(() => {});
+  const recoverSound = useRef<() => Promise<void>>(async () => {});
   const camera = useRef<HTMLVideoElement>(null), canvas = useRef<HTMLCanvasElement>(null), media = useRef<HTMLVideoElement>(null), standbyMedia = useRef<HTMLVideoElement>(null), imageSurface = useRef<HTMLImageElement>(null), youtubeMount = useRef<HTMLDivElement>(null);
   useEffect(() => answerEvidenceProtocol(), []);
   useEffect(() => {
@@ -60,7 +62,7 @@ export default function Player() {
     if (!credential) return;
     const paired = credential;
     setRejected(false); setRecoveryOpen(false); setOverlayEnabled(false); setDiagnosticActive(false); setPublicFailure(false);
-    setCurrent(null); setErr(''); setStorageWarning(''); setRecoverySummary(''); setDiagnosticStatus('');
+    setCurrent(null); setErr(''); setStorageWarning(''); setRecoverySummary(''); setDiagnosticStatus(''); setSoundBlocked(false);
     const writes = new Set<Promise<void>>();
     const unsaved = new Map<string, () => Promise<void>>();
     let retryingWrites = false;
@@ -79,6 +81,7 @@ export default function Player() {
     };
     let yt: any = null, ytReady = false, detector: any = null, stream: MediaStream | null = null, cameraOK = false;
     let startup = false, pulling = false, flushing = false, heartbeatBusy = false, fatal = true, actualOffset = 0;
+    let requestedAudio = true, browserBlockedAudio = false;
     let diagnosticBlockedMessage = '';
     let diagnosticFlushing = false, lastSampleAt: string | null = null;
     const attemptedDiagnostics = new Set<string>();
@@ -141,7 +144,50 @@ export default function Player() {
         setVisionStatus('Ready · counts update during playback'); setVisionRetry(false);
       }
     }
-    function stopMedia() { try { activeMedia?.pause(); yt?.stopVideo?.(); } catch {} }
+    function blockAudio() {
+      browserBlockedAudio = true; setSoundBlocked(true);
+      if (currentSlot?.item.asset_url && activeMedia) activeMedia.muted = true;
+      if (currentSlot && !currentSlot.item.asset_url) yt?.mute?.();
+    }
+    async function playNative(video: HTMLVideoElement) {
+      const withSound = requestedAudio && !browserBlockedAudio;
+      video.muted = !withSound;
+      try { await video.play(); }
+      catch (error: any) {
+        if (error?.name !== 'NotAllowedError' || !withSound) throw error;
+        blockAudio(); video.muted = true;
+        await video.play();
+      }
+    }
+    function applyAudio(enabled: boolean) {
+      const changed = requestedAudio !== enabled;
+      requestedAudio = enabled;
+      if (!enabled || changed) { browserBlockedAudio = false; setSoundBlocked(false); }
+      const playingYouTube = !!currentSlot && !currentSlot.item.asset_url;
+      if (media.current) media.current.muted = true;
+      if (standbyMedia.current) standbyMedia.current.muted = true;
+      if (!enabled || browserBlockedAudio || !playingYouTube) yt?.mute?.();
+      else { yt?.unMute?.(); yt?.setVolume?.(100); }
+      if (enabled && !browserBlockedAudio && currentSlot?.item.asset_url && activeMedia) activeMedia.muted = false;
+      else if (activeMedia) activeMedia.muted = true;
+    }
+    recoverSound.current = async () => {
+      if (!requestedAudio || !currentSlot || currentSlot.done) return;
+      browserBlockedAudio = false; setSoundBlocked(false);
+      if (!currentSlot.item.asset_url) {
+        yt?.unMute?.(); yt?.setVolume?.(100); yt?.playVideo?.();
+        return;
+      }
+      const video = activeMedia;
+      if (!video) return;
+      video.muted = false;
+      try { await video.play(); }
+      catch { blockAudio(); video.muted = true; }
+    };
+    function stopMedia() {
+      try { if (media.current) media.current.muted = true; if (standbyMedia.current) standbyMedia.current.muted = true;
+        activeMedia?.pause(); yt?.mute?.(); yt?.stopVideo?.(); } catch {}
+    }
     function vision() { return { camera_state: !playlist?.screen.has_camera ? 'disabled' : cameraStarting ? 'starting' : cameraHealthyNow() ? 'ready' : 'unavailable', model_state: detectorBroken ? 'error' : detector ? 'ready' : cameraStarting ? 'loading' : 'not_loaded', model_ver: detector && !detectorBroken ? MODEL_VERSION : null, last_sample_at: lastSampleAt }; }
     async function flushTest() {
       if (diagnosticFlushing || disposed || fatal) return;
@@ -213,6 +259,7 @@ export default function Player() {
         if (disposed || fatal) return;
         const received = Date.now(); actualOffset = Date.parse(d.server_time) - ((started + received) / 2);
         if (!Number.isFinite(actualOffset)) actualOffset = 0;
+        applyAudio(d.config.audio_enabled !== false);
         setOverlayEnabled(d.config.diagnostics_overlay === true); pending = d; needsAllowanceRefresh = d.items.some(i => exhausted.has(i.assignment_id)); void initCamera();
         void saveReadySchedule(paired.device_id, d, actualOffset).then(ready => { if (!disposed) setOfflineStatus(ready ? d.items.some(i => i.youtube_id) ? 'Uploaded media ready offline · YouTube requires internet' : 'Schedule and uploaded media ready offline' : d.items.some(i => i.youtube_id) ? 'YouTube playback requires internet' : 'Preparing uploaded media for offline playback'); }).catch(() => { if (!disposed) setOfflineStatus('Offline media unavailable; online playback only'); });
         if (currentSlot?.diagnosticRun && d.diagnostic?.assignment_id === currentSlot.item.assignment_id && d.diagnostic.status === 'revoked') void finish('interrupted');
@@ -232,6 +279,7 @@ export default function Player() {
           width: '100%', height: '100%', playerVars: { autoplay: 1, controls: 0, rel: 0, disablekb: 1, fs: 0, playsinline: 1, mute: 1 },
           events: {
             onReady: (e: any) => { ytReady = true; e.target.mute(); resolve(); },
+            onAutoplayBlocked: () => { if (requestedAudio && !browserBlockedAudio) { blockAudio(); yt?.mute?.(); yt?.playVideo?.(); } },
             onStateChange: (e: any) => {
               if (!currentSlot || currentSlot.item.asset_url || currentSlot.done) return;
               if (yt?.getVideoData?.().video_id !== currentSlot.item.youtube_id) return;
@@ -275,7 +323,7 @@ export default function Player() {
       activeMedia = media.current; activeSurface = 0; setSurface(0);
       if (!activeMedia) { void finish('error'); return true; }
       activeMedia.src = item.asset_url!; activeMedia.load();
-      try { await activeMedia.play(); } catch { void finish('error'); }
+      try { await playNative(activeMedia); } catch { void finish('error'); }
       return true;
     }
     const eligible = (item: Item) => !exhausted.has(item.assignment_id) && (failedUntil.get(item.assignment_id) || 0) <= Date.now()
@@ -301,7 +349,7 @@ export default function Player() {
         if (!target) return;
         const url = await mediaUrl(candidate);
         if (disposed || fatal || target === activeMedia) return;
-        target.src = url; target.load(); prepared = { id: candidate.assignment_id, video: target, url };
+        target.muted = true; target.src = url; target.load(); prepared = { id: candidate.assignment_id, video: target, url };
       } finally { preparing = false; }
     }
     async function startNext() {
@@ -363,8 +411,8 @@ export default function Player() {
           }
           if (activeMedia.readyState >= 1 && (!Number.isFinite(activeMedia.duration) || Math.abs(activeMedia.duration - item.duration_s) > 1 || item.width && item.width !== activeMedia.videoWidth || item.height && item.height !== activeMedia.videoHeight)) throw new Error('Video metadata does not match');
           activeSurface = activeMedia === media.current ? 0 : 1; setSurface(activeSurface); setCurrent(item);
-          try { await activeMedia.play(); } catch { void finish('error'); }
-        } else { setCurrent(item); yt.loadVideoById({ videoId: item.youtube_id, startSeconds: 0 }); yt.playVideo(); }
+          try { await playNative(activeMedia); } catch { void finish('error'); }
+        } else { setCurrent(item); if (requestedAudio && !browserBlockedAudio) { yt.unMute(); yt.setVolume(100); } else yt.mute(); yt.loadVideoById({ videoId: item.youtube_id, startSeconds: 0 }); yt.playVideo(); }
         void prepareNext();
       } catch (e: any) { state(e.message || 'Playback could not start'); if (currentSlot) void finish('error'); }
       finally { startup = false; }
@@ -607,10 +655,11 @@ export default function Player() {
   if (!credential) return <div className="grid min-h-screen place-items-center bg-slate-950 p-4">{pairingForm}</div>;
   return <div className="fixed inset-0 bg-black text-white">
     <div ref={youtubeMount} className={`absolute inset-0 h-full w-full ${!current || current.asset_url ? 'hidden' : ''}`} />
-    <video data-role="creative" data-active={surface === 0} ref={media} muted playsInline preload="auto" className={`absolute inset-0 h-full w-full object-contain ${current?.asset_url && current.media_type !== 'image' && surface === 0 ? '' : 'hidden'}`} />
-    <video data-role="creative" data-active={surface === 1} ref={standbyMedia} muted playsInline preload="auto" className={`absolute inset-0 h-full w-full object-contain ${current?.asset_url && current.media_type !== 'image' && surface === 1 ? '' : 'hidden'}`} />
+    <video data-role="creative" data-active={surface === 0} ref={media} playsInline preload="auto" className={`absolute inset-0 h-full w-full object-contain ${current?.asset_url && current.media_type !== 'image' && surface === 0 ? '' : 'hidden'}`} />
+    <video data-role="creative" data-active={surface === 1} ref={standbyMedia} playsInline preload="auto" className={`absolute inset-0 h-full w-full object-contain ${current?.asset_url && current.media_type !== 'image' && surface === 1 ? '' : 'hidden'}`} />
     <img ref={imageSurface} src={imageSource || undefined} alt="" className={`absolute inset-0 h-full w-full object-contain ${current?.media_type === 'image' ? '' : 'hidden'}`} />
     <div className="pointer-events-none absolute inset-0 z-[2]" />
+    {soundBlocked && current && <Button data-role="enable-sound" className="fixed bottom-4 left-1/2 z-20 -translate-x-1/2" onClick={() => { void recoverSound.current(); }}>Enable sound</Button>}
     {(commissioning || !current || publicFailure || rejected || !!storageWarning) && <div data-role="player-status" className="fixed left-3 top-3 z-10 rounded bg-black/80 p-3 text-xs" role="status">
       {commissioning && <><b>{screen?.name || 'Gridcast'}</b> · {diagnosticActive ? 'Screen test' : 'Media playback'}<br /></>}
       {storageWarning || status}{commissioning && offlineStatus && <p className="mt-1">{offlineStatus}</p>}

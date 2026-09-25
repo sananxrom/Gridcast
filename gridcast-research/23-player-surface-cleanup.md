@@ -4,7 +4,7 @@
 
 **Last verified deployment:** `34bf878` / `build-2026-09-25-005`; Firebase rollout succeeded, build READY, 100% traffic. Verified 2026-09-25 22:23 IST.
 
-**Status:** Release B deployed and smoke-tested on Firebase, including Release A. The required Mumbai Firestore index is READY. Audio and caption/control changes remain planned.
+**Status:** Release B (`0.6.0`) is deployed and smoke-tested on Firebase, including Release A. The required Mumbai Firestore index is READY. Audio release `0.7.0` is implemented and locally verified; its release rollout is pending. Caption/control work remains planned.
 
 **Decision record:** [AI-LOG.md](../AI-LOG.md), Codex/Claude reviews from 19:06 through 20:49 IST on 25 Sep.
 
@@ -231,13 +231,15 @@ credential logging. Export cancellation, queue changes and replacement must not 
 
 ## 4. Audio — separate change after Release A
 
-Add `audio_enabled` to the playback configuration group, default `true`, with normal platform → organization
-→ group → screen inheritance and existing server-side scope enforcement. It is a playback preference, not
-a change to locked measurement/privacy keys. Test validation and inheritance rather than assuming the new
-key reaches every layer. The reported one-laptop exception remains unverified; user interaction, another
-media surface or browser state are possibilities, not findings.
+`audio_enabled` is now in the playback configuration group with default `true`, common visibility and normal
+platform → organization → group → screen inheritance. It is a playback preference, not a change to locked
+measurement/privacy keys. The player requests sound for uploaded videos and YouTube. Native `NotAllowedError`
+and YouTube `onAutoplayBlocked` trigger one muted retry of the same creative; a small **Enable sound** control
+retries from a direct user gesture. New sound-off config mutes active and standby surfaces as soon as the next
+successful playlist sync arrives. Standby media and camera remain muted. The reported one-laptop exception
+remains unverified; user interaction, another media surface or browser state are possibilities, not findings.
 
-Track requested sound, browser-blocked sound and the active playback surface separately. An unmuted element
+Keep requested sound, browser-blocked sound and the active playback surface separate. An unmuted element
 does not prove audible speakers, a non-silent source or that anyone heard it. Add no billing interpretation
 or new receipt schema for this cleanup.
 

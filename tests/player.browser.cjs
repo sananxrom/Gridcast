@@ -57,8 +57,8 @@ async function harness(options={}) {
  if(options.partialAllowance){db.campaigns[0].committed_budget=2;db.campaigns.push({...db.campaigns[0],id:'campaign2',advertiser_id:'advertiser2',committed_budget:10000});}
  const overrides=new Map();let configVersion=7;
  const requests=[],bodies=[],replies=[];let failedAck=false,base='',stopItems=false,playlistFailed=false;
- const config={diagnostics_overlay:true,model:'coco-ssd',sample_interval_s:options.modelWorking?.5:2,loop_length_s:4,slot_duration_s:2,count_ceiling:50,camera_fail_mode:'continue',heartbeat_s:10,sync_interval_min:1,offline_buffer_plays:5000,telemetry_batch:25,telemetry_retry_h:72,...options.config};
- const callback=()=>{const p={config,config_version:configVersion,items:[],[options.filler?'filler_items':'items']:(stopItems||options.empty)?[]:[{campaign_id:'campaign1',creative_id:'creative1',creative_name:'Browser fixture',duration_s:2,rate_value:2,rate_type:'per_play',asset_url:base+(options.image?'/fixture.png':'/fixture.webm'),media_type:options.image?'image':'video',asset_id:'fixture',asset_mime:options.image?'image/png':'video/webm',width:128,height:72,...(options.offline?{asset_bytes:(options.image?picture:video).length,asset_sha256:crypto.createHash('sha256').update(options.image?picture:video).digest('hex')}:{})}]};if(options.twoFillers&&p.filler_items?.length)p.filler_items.push({...p.filler_items[0],creative_id:'creative2'});if(options.partialAllowance&&p.items.length)p.items.push({...p.items[0],campaign_id:'campaign2',creative_id:'creative2'});return p;};
+ const config={diagnostics_overlay:true,audio_enabled:true,model:'coco-ssd',sample_interval_s:options.modelWorking?.5:2,loop_length_s:4,slot_duration_s:2,count_ceiling:50,camera_fail_mode:'continue',heartbeat_s:10,sync_interval_min:1,offline_buffer_plays:5000,telemetry_batch:25,telemetry_retry_h:72,...options.config};
+ const callback=()=>{const p={config,config_version:configVersion,items:[],[options.filler?'filler_items':'items']:(stopItems||options.empty)?[]:[{campaign_id:'campaign1',creative_id:'creative1',creative_name:'Browser fixture',duration_s:2,rate_value:2,rate_type:'per_play',asset_url:options.youtube?undefined:base+(options.image?'/fixture.png':'/fixture.webm'),youtube_id:options.youtube?'abcdefghijk':undefined,media_type:options.image?'image':'video',asset_id:'fixture',asset_mime:options.image?'image/png':'video/webm',width:128,height:72,...(options.offline?{asset_bytes:(options.image?picture:video).length,asset_sha256:crypto.createHash('sha256').update(options.image?picture:video).digest('hex')}:{})}]};if(options.twoFillers&&p.filler_items?.length)p.filler_items.push({...p.filler_items[0],creative_id:'creative2'});if(options.partialAllowance&&p.items.length)p.items.push({...p.items[0],campaign_id:'campaign2',creative_id:'creative2'});return p;};
  const code=issuePairing(db,db.screens[0]);const paired=deviceRoute(db,'POST',['pair'],{code:code.code},null,{playlist:callback,playerProtocol:2}).body;
  if(options.diagnostic){db.campaigns=[];require('./load-lib.cjs')('diagnostics').requestDiagnostic(db,db.screens[0],{id:'admin'},{config,config_version:7});}
  const server=http.createServer(async(req,res)=>{
@@ -97,6 +97,8 @@ async function harness(options={}) {
   await page.addInitScript(({credential,options})=>{
     if(!options.unpaired&&!localStorage.getItem('gc_device'))localStorage.setItem('gc_device',JSON.stringify(credential));window.fixtureModelWorking=!!options.modelWorking;window.fixtureRealModel=!!options.realModel;
     window.fixtureLoadWait=!!options.loadWait;
+    if(options.blockUnmutedAudio){const original=HTMLMediaElement.prototype.play;HTMLMediaElement.prototype.play=function(){if(this.matches?.('video[data-role="creative"]')&&!this.muted&&!window.fixtureUnmutedBlocked){window.fixtureUnmutedBlocked=true;return Promise.reject(new DOMException('Audio autoplay blocked','NotAllowedError'));}return original.call(this);};}
+    if(options.youtube){window.YT={Player:function(_host,playerOptions){let videoId='',startedAt=0,endTimer;const player={muted:true,startedAt:0,mute(){this.muted=true;},unMute(){this.muted=false;},setVolume(v){this.volume=v;},loadVideoById({videoId:id}){videoId=id;},getVideoData(){return {video_id:videoId};},getCurrentTime(){return startedAt?Math.max(0,(Date.now()-startedAt)/1000):0;},playVideo(){if(options.blockYouTubeAudio&&!this.muted&&!window.fixtureYouTubeBlocked){window.fixtureYouTubeBlocked=true;playerOptions.events.onAutoplayBlocked();return;}startedAt=Date.now();this.startedAt=startedAt;playerOptions.events.onStateChange({data:1});clearTimeout(endTimer);endTimer=setTimeout(()=>playerOptions.events.onStateChange({data:0}),2000);},stopVideo(){clearTimeout(endTimer);startedAt=0;this.startedAt=0;},destroy(){clearTimeout(endTimer);}};window.fixtureYT=player;setTimeout(()=>playerOptions.events.onReady({target:player}),0);return player;}};}
     const original=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
     navigator.mediaDevices.getUserMedia=async constraints=>{
       window.fixtureCameraStarts=(window.fixtureCameraStarts||0)+1;window.fixtureConstraints=constraints;
@@ -105,7 +107,7 @@ async function harness(options={}) {
       const result=await original({audio:false,video:{width:640,height:480}});window.fixtureStream=result;return result;
     };
   },{credential:{token:paired.token,device_id:paired.device.id,screen_id:'screen1'},options});
-  await Promise.race([pageFailure,(async()=>{await page.goto(base+'/player');if(options.image)await page.waitForFunction(()=>document.querySelector('img')?.naturalWidth>0);else if(!options.empty&&!options.unpaired)await page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.1;},{},{timeout:15000});})()]);
+  await Promise.race([pageFailure,(async()=>{await page.goto(base+'/player');if(options.image)await page.waitForFunction(()=>document.querySelector('img')?.naturalWidth>0);else if(options.youtube)await page.waitForFunction(()=>window.fixtureYT?.startedAt>0,{},{timeout:15000});else if(!options.empty&&!options.unpaired)await page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.1;},{},{timeout:15000});})()]);
   return {page,db,requests,bodies,replies,paired,pageErrors,setConfig:values=>{Object.assign(config,values);configVersion++;},setReply:(path,reply)=>reply?overrides.set(path,reply):overrides.delete(path),cleanup:async()=>{await browser.close();await new Promise(r=>server.close(r));fs.rmSync(temp,{recursive:true,force:true});assert.deepEqual(pageErrors,[],'Player fixture must not have uncaught browser errors');}};
  }catch(e){await browser?.close();await new Promise(r=>server.close(r));fs.rmSync(temp,{recursive:true,force:true});throw e;}
 }
@@ -510,5 +512,45 @@ test('Release B replacement leaves an old player tab stopped after its maintenan
   await new Promise(r=>setTimeout(r,1200));
   assert.equal(h.requests.filter(r=>r.path.startsWith('/api/playlist/')).length,requests);
   assert.equal(await h.page.evaluate(()=>document.querySelector('video[data-role="creative"][data-active="true"]').paused),true);
+ }finally{await h.cleanup();}
+});
+
+test('uploaded creatives use the default-on sound setting', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness();try{
+  await h.page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.1;});
+  assert.equal(await h.page.locator('video[data-role="creative"][data-active="true"]').evaluate(v=>v.muted),false);
+  assert.equal(await h.page.getByRole('button',{name:'Enable sound',exact:true}).count(),0);
+  h.setConfig({audio_enabled:false});await h.page.evaluate(()=>window.dispatchEvent(new Event('online')));
+  await h.page.waitForFunction(()=>document.querySelector('video[data-role="creative"][data-active="true"]')?.muted===true);
+ }finally{await h.cleanup();}
+});
+
+test('browser sound autoplay rejection retries muted and exposes gesture recovery without a second play', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({blockUnmutedAudio:true});try{
+  await h.page.getByRole('button',{name:'Enable sound',exact:true}).waitFor();
+  assert.equal(await h.page.locator('video[data-role="creative"][data-active="true"]').evaluate(v=>v.muted),true);
+  await h.page.getByRole('button',{name:'Enable sound',exact:true}).click();
+  await h.page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.muted;});
+  await waitFor(()=>h.bodies.length===1,5000);
+  assert.equal(h.bodies.length,1,'Sound recovery must not create another delivery record');
+ }finally{await h.cleanup();}
+});
+
+test('creative sound can be disabled by inherited playback config', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({config:{audio_enabled:false}});try{
+  await h.page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.1;});
+  assert.equal(await h.page.locator('video[data-role="creative"][data-active="true"]').evaluate(v=>v.muted),true);
+  assert.equal(await h.page.getByRole('button',{name:'Enable sound',exact:true}).count(),0);
+ }finally{await h.cleanup();}
+});
+
+test('YouTube playback requests sound by default and uses the autoplay-blocked fallback', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({youtube:true,blockYouTubeAudio:true});try{
+  await h.page.getByRole('button',{name:'Enable sound',exact:true}).waitFor();
+  assert.equal(await h.page.evaluate(()=>window.fixtureYT.muted),true,'blocked YouTube autoplay should retry muted');
+  await h.page.getByRole('button',{name:'Enable sound',exact:true}).click();
+  await h.page.waitForFunction(()=>window.fixtureYT&&!window.fixtureYT.muted);
+  await waitFor(()=>h.bodies.length===1,5000);
+  assert.equal(h.bodies.length,1,'YouTube sound recovery must not create another delivery record');
  }finally{await h.cleanup();}
 });

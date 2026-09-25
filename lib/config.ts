@@ -98,6 +98,8 @@ export const SETTINGS: Setting[] = [
   T('operating_hours', 'Trading hours', 'playback', 'timerange', { from: '08:00', to: '20:00' }, { common: true, priced: true,
     info: 'When the venue is open. The player sleeps outside this window, and it prices the screen.' }),
   T('start_automatically', 'Start automatically', 'playback', 'toggle', true, { common: true }),
+  T('audio_enabled', 'Creative sound', 'playback', 'toggle', true, { common: true,
+    info: 'Request sound for uploaded videos and YouTube. Browsers may require a tap before allowing sound; playback then continues muted until you enable it.' }),
   T('resume_playlist', 'Resume playlist', 'playback', 'toggle', true, { common: true,
     info: 'Continue from the last played slide after a restart.' }),
   T('start_from_cache', 'Start from cache', 'playback', 'toggle', true, {
