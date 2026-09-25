@@ -5,6 +5,7 @@ const load=require('./load-lib.cjs');
 const {createFirestoreStore}=load('firestore-store');
 const {deviceRoute}=load('devices');
 const {settlementKey,settlementPeriod}=load('settlement');
+const {reportingKey}=load('reporting');
 const clone=x=>x===undefined?undefined:JSON.parse(JSON.stringify(x));
 // In-memory Firestore protocol fake: atomic commit, create preconditions and retry
 // on a concurrent committed transaction. No project credentials or network calls.
@@ -29,7 +30,7 @@ class FakeFirestore {
           if (q.path) { this.reads.push(q.path); return snap(q); }
           this.reads.push({ collection: q.collection, filters: q.filters, limit: q.max });
           let docs = Object.entries(base).filter(([k]) => k.split('/')[0] === q.collection).map(([k, row]) => ({ k, row }));
-          docs = docs.filter(({ row }) => q.filters.every(([k, op, v]) => op === '==' ? row[k] === v : op === 'array-contains' ? row[k]?.includes(v) : op === '>' ? row[k] > v : false));
+          docs = docs.filter(({ row }) => q.filters.every(([k, op, v]) => op === '==' ? row[k] === v : op === 'array-contains' ? row[k]?.includes(v) : op === '>' ? row[k] > v : op === '>=' ? row[k] >= v : op === '<' ? row[k] < v : op === '<=' ? row[k] <= v : false));
           if (q.order) {
             const [key, direction] = q.order;
             docs = docs.filter(({ row }) => row[key] !== undefined).sort((a, b) => String(a.row[key]).localeCompare(String(b.row[key])) * (direction === 'desc' ? -1 : 1));
@@ -94,14 +95,16 @@ function deviceFixture() {
 test('Firestore operator snapshot loads shared network campaigns but only own screens, receipts and settlement buckets',async()=>{
  const f=fixture(),d=await f.store.transact(f.context,()=>f.store.read());
  assert.deepEqual(new Set(d.campaigns.map(c=>c.id)),new Set(['local','cn']));assert.deepEqual(d.screens.map(s=>s.id),['sa']);
- assert.deepEqual(d.plays.map(p=>p.id),['pa']);assert.deepEqual(d.settlement_buckets.map(b=>b.id),['ba']);
+ assert.deepEqual(d.plays,[]);
+ const detail=await f.store.transact({...f.context,path:['screen','sa']},()=>f.store.read());assert.deepEqual(detail.plays.map(p=>p.id),['pa']);assert.deepEqual(d.settlement_buckets.map(b=>b.id),['ba']);
  assert.ok(d.advertisers.some(a=>a.id==='ad'));assert.ok(d.creatives.some(c=>c.id==='cr'));
 });
 
 test('Firestore advertiser snapshot joins their campaign screens and receipts across receiving organisations',async()=>{
  const f=fixture(),d=await f.store.transact({...f.context,uid:'viewer'},()=>f.store.read());
  assert.deepEqual(d.campaigns.map(c=>c.id),['cn']);assert.deepEqual(new Set(d.screens.map(s=>s.id)),new Set(['sa','sb']));
- assert.deepEqual(new Set(d.plays.map(p=>p.id)),new Set(['pa','pb']));assert.deepEqual(new Set(d.settlement_buckets.map(b=>b.id)),new Set(['ba','bb']));
+ assert.deepEqual(d.plays,[]);
+ const detail=await f.store.transact({...f.context,uid:'viewer',path:['campaign','cn']},()=>f.store.read());assert.deepEqual(new Set(detail.plays.map(p=>p.id)),new Set(['pa','pb']));assert.deepEqual(new Set(d.settlement_buckets.map(b=>b.id)),new Set(['ba','bb']));
 });
 
 test('network campaign directory pagination merges local and participated campaigns without duplicates or omissions',async()=>{
@@ -115,6 +118,7 @@ test('late cross-org device receipt and its monthly bucket commit once without c
  const f=deviceFixture(),before=clone(f.database.rows['campaigns/cn']);
  const results=await Promise.all([f.send(),f.send()]);for(const r of results) assert.equal(r.body.ok,true,JSON.stringify(r));
  assert.equal(results.filter(r=>r.body.duplicate).length,1);
+ const report=f.database.rows['screen_day/'+reportingKey('sa','cn','cr',f.start)];assert.equal(report.plays_rendered,1);assert.equal(report.plays_billable,1);assert.equal(report.org_id,'a');assert.equal(report.advertiser_id,'ad');
  const id=settlementKey('cn','sa','2026-09','e1'),bucket=f.database.rows[`settlement_buckets/${id}`];
  assert.equal(bucket.org_id,'a');assert.equal(bucket.period,'2026-09');assert.equal(bucket.billable_plays,1);assert.equal(bucket.gross_paise,7);
  assert.equal(bucket.gross_paise,bucket.fee_paise+bucket.owner_paise+bucket.net_paise);assert.deepEqual(f.database.rows['campaigns/cn'],before);
@@ -154,7 +158,7 @@ test('foreign assignment hints and device payload ownership fields never grant a
 
 test('authoritative settlement buckets remain available when receipt history is truncated',async()=>{
  const extra=Object.fromEntries(Array.from({length:1501},(_,i)=>[`plays/event${i}`,{id:`event${i}`,org_id:'a',campaign_id:'cn',advertiser_id:'ad',screen_id:'sa',ended_at:`2026-09-${String(i).padStart(6,'0')}`}]))
- const f=fixture(extra),d=await f.store.transact(f.context,()=>f.store.read());assert.equal(d.history.truncated,true);assert.equal(d.plays.length,1500);assert.deepEqual(d.settlement_buckets.map(b=>b.gross_paise),[100]);
+ const f=fixture(extra),d=await f.store.transact({...f.context,path:['screen','sa']},()=>f.store.read());assert.equal(d.history.truncated,true);assert.equal(d.plays.length,1500);assert.deepEqual(d.settlement_buckets.map(b=>b.gross_paise),[100]);
 });
 
 const EMULATOR='127.0.0.1:8185';
@@ -171,9 +175,16 @@ test('Enterprise emulator commits duplicate network receipts once and enforces o
   assert.equal((await db.doc('campaigns/cn').get()).data().accrued_spend,999);
   assert.equal((await db.collection('plays').where('play_uid','==',f.body.play_uid).get()).size,1);
   assert.equal((await db.collection('presence').get()).size,1);
+  const report=(await db.doc('screen_day/'+reportingKey('sa','cn','cr',f.start)).get()).data();assert.equal(report.plays_rendered,1);assert.equal(report.plays_billable,1);assert.equal(report.org_id,'a');assert.equal(report.advertiser_id,'ad');assert.equal((await db.doc('_meta/reporting').get()).data().started_at,new Date(f.now).toISOString());
+  const realNow=Date.now;Date.now=()=>f.now;
+  try { for (const uid of ['a_owner','viewer']) {
+    const date=require('./load-lib.cjs')('reporting').reportDay(f.start);
+    const metrics=await store.transact({method:'GET',path:['metrics'],uid,from:date,to:date,reportScreen:'sa',reportCampaign:'cn'},()=>store.read());
+    assert.equal(metrics.screen_day.length,1);assert.equal(metrics.screen_day[0].plays_rendered,1);assert.equal(metrics.report_page.has_more,false);
+  } } finally {Date.now=realNow;}
   const owner=await store.transact({method:'GET',path:['bootstrap'],uid:'a_owner'},()=>store.read());
-  assert.deepEqual(owner.screens.map(s=>s.id),['sa']);assert.ok(owner.plays.every(p=>p.org_id==='a'));assert.ok(owner.settlement_buckets.every(b=>b.org_id==='a'));assert.ok(owner.campaigns.some(c=>c.id==='cn'));
-  const adv=await store.transact({method:'GET',path:['bootstrap'],uid:'viewer'},()=>store.read());assert.deepEqual(new Set(adv.screens.map(s=>s.id)),new Set(['sa','sb']));assert.ok(adv.plays.every(p=>p.advertiser_id==='ad'));assert.ok(adv.settlement_buckets.every(b=>b.advertiser_id==='ad'));
+  assert.deepEqual(owner.screens.map(s=>s.id),['sa']);assert.deepEqual(owner.plays,[]);const ownerDetail=await store.transact({method:'GET',path:['screen','sa'],uid:'a_owner'},()=>store.read());assert.ok(ownerDetail.plays.length>0);assert.ok(ownerDetail.plays.every(p=>p.org_id==='a')); assert.ok(owner.settlement_buckets.every(b=>b.org_id==='a'));assert.ok(owner.campaigns.some(c=>c.id==='cn'));
+  const adv=await store.transact({method:'GET',path:['bootstrap'],uid:'viewer'},()=>store.read());assert.deepEqual(new Set(adv.screens.map(s=>s.id)),new Set(['sa','sb']));assert.deepEqual(adv.plays,[]);const advertiserDetail=await store.transact({method:'GET',path:['campaign','cn'],uid:'viewer'},()=>store.read());assert.ok(advertiserDetail.plays.length>0);assert.ok(advertiserDetail.plays.every(p=>p.advertiser_id==='ad')); assert.ok(adv.settlement_buckets.every(b=>b.advertiser_id==='ad'));
   await assert.rejects(store.transact(f.context,async()=>{const d=await store.read();d.campaigns.find(c=>c.id==='cn').accrued_spend=0;await store.write(d);}),{status:403});
   await assert.rejects(store.transact(f.context,async()=>{const d=await store.read();d.settlement_buckets.push({id:'forbidden',org_id:'b',campaign_id:'cn',screen_id:'sb'});await store.write(d);}),{status:403});
   assert.equal((await db.doc('settlement_buckets/forbidden').get()).exists,false);

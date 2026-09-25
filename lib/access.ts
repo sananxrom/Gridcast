@@ -30,7 +30,7 @@ export function campaignVisible(c: any, actor: any) {
 // Exact method/path policy: new business routes are denied until explicitly listed here.
 // Empty capabilities mean a valid human session, not an anonymous route.
 export const ROUTES: { method: string; path: RegExp; caps: Cap[] }[] = [
-  { method: 'GET', path: /^(me|bootstrap)$/, caps: [] },
+  { method: 'GET', path: /^(me|bootstrap|metrics)$/, caps: [] },
   { method: 'GET', path: /^network-inventory$/, caps: ['platform'] },
   { method: 'POST', path: /^(password|logout)$/, caps: [] },
   { method: 'GET', path: /^team$/, caps: ['team'] },
@@ -154,7 +154,13 @@ export function authorize(db: any, actor: any, method: string, seg: string[], in
   }
   if (path === 'reset' && (process.env.NODE_ENV === 'production' || process.env.GC_ALLOW_RESET !== '1')) fail(403, 'Reset is disabled');
   const requestedOrg = q.get('org') || q.get('org_id');
-  if (['team','bootstrap','directory','audit','config','network-inventory'].includes(path) && requestedOrg) org(db, requestedOrg, actor);
+  if (['team','bootstrap','directory','audit','config','network-inventory','metrics'].includes(path) && requestedOrg) org(db, requestedOrg, actor);
+  if (path === 'metrics') {
+    if (!admin(actor) && actor.role !== ADVERTISER && !can(actor.role,'screens') && !can(actor.role,'sales') && !can(actor.role,'money')) fail(403,'Not permitted for this role');
+    const campaignId = q.get('campaign'), screenId = q.get('screen');
+    if (campaignId && !db.campaigns.some((c: any) => c.id === campaignId && campaignVisible(c,actor))) fail(404,'Not found');
+    if (screenId && actor.role !== ADVERTISER) own(db.screens,screenId,actor);
+  }
   if (entity === 'advertiser' && id) {
     const a = own(db.advertisers, id, actor);
     if (method === 'POST') {
@@ -426,7 +432,7 @@ export function bootstrap(db: any, actor: any, screenStatus: (s: any) => any, or
     creatives: db.creatives.filter((c: any) => admin(actor) || (sales && c.org_id === actor.org_id) || crIds.has(c.id)),
     groups: (db.groups || []).filter((g: any) => admin(actor) || (!advertiser && g.org_id === actor.org_id)),
     devices: can(actor.role, 'screens') ? db.devices.filter((d: any) => admin(actor) || d.org_id === actor.org_id) : [],
-    plays, presence: db.presence.filter((p: any) => playIds.has(p.play_id) && (admin(actor) || advertiser || p.org_id === actor.org_id)),
+    plays: [], presence: [],
     settings: admin(actor) ? db.settings || {} : {},
     configs: can(actor.role, 'screens') ? (db.configs || []).filter((c: any) => admin(actor) || c.org_id === actor.org_id || c.layer === 'platform') : [],
     caps: capabilities(actor),

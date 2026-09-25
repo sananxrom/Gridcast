@@ -1,3 +1,4 @@
+import { accrueScreenDay } from './reporting';
 import { reserveBudget, budgetReceipt, physicalPlays } from './budgets';
 import { accrueSettlement, appliedOffset, economics } from './settlement';
 import crypto from 'crypto';
@@ -269,6 +270,7 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
   }
   device.last_seq_no = Math.max(device.last_seq_no || 0, body.seq_no);
   if (device.now_playing?.campaign_id === assignment.campaign_id && device.now_playing?.creative_id === assignment.creative_id) delete device.now_playing;
+  accrueScreenDay(db,play,assignment,playedAt,db.presence[db.presence.length - 1]);
   accrueSettlement(db,play,assignment,playedAt);
   if (billable && assignment.rate_type === 'per_play' && !assignment.econ_version) {
     const c = db.campaigns.find((c: any) => c.id === assignment.campaign_id);

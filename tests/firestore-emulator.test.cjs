@@ -111,7 +111,7 @@ if (process.argv[2] === 'worker') {
     try {
       const d = await f.store.transact(f.context, () => f.store.read());
       assert.deepEqual(d.orgs.map(o => o.id), ['a']); assert.deepEqual(d.screens.map(s => s.id), ['sa']);
-      assert.ok(d.users.every(u => u.org_id === 'a')); assert.equal(d.history.returned, 0);
+      assert.ok(d.users.every(u => u.org_id === 'a')); assert.deepEqual(d.plays, []); assert.deepEqual(d.presence, []);
       await assert.rejects(f.store.provision(f.initial), { status: 409 });
       await f.store.transact({ ...f.context, method: 'POST', path: ['screen','sa'] }, async () => {
         const d = await f.store.read(); d.screens[0].name = 'Updated'; await f.store.write(d);
@@ -161,13 +161,13 @@ if (process.argv[2] === 'worker') {
       await f.db.doc(`devices/${deviceId}`).create({ id: deviceId, org_id: 'a', screen_id: 'sa', status: 'online', token_hash: crypto.createHash('sha256').update(token).digest('hex'), expires_at: new Date(now + 86400000).toISOString() });
       await f.db.doc('device_assignments/assignment1').create({ id: 'assignment1', device_id: deviceId, org_id: 'a', screen_id: 'sa', campaign_id: 'c1', advertiser_id: 'ad1', creative_id: 'cr1',
         duration_s: 10, rate_type: 'per_play', rate_value: 1, issued_at: new Date(now-20000).toISOString(), valid_until: new Date(now+600000).toISOString(), accept_until: new Date(now+86400000).toISOString(), config_version: 1, camera_fail_mode: 'unmeasured', model_configured: 'coco-ssd', sample_interval_s: 2, count_ceiling: 50 });
-      const job = { database: f.id, action: 'play', token, body, context: { method: 'POST', path: ['play'], deviceId, playUid: body.play_uid, seqNo: 1, assignmentId: 'assignment1' } };
+      const job = { database: f.id, action: 'play', token, body, context: { method: 'POST', path: ['play'], deviceId, playUid: body.play_uid, seqNo: 1, assignmentId: 'assignment1', startedAtDevice:body.started_at_device, clockOffset:body.server_clock_offset_ms } };
       const results = await Promise.all([worker(job), worker(job)]);
       for (const r of results) { assert.equal(r.error, undefined, JSON.stringify(r)); assert.equal(r.result.body.ok, true); }
       assert.equal(results.filter(r => r.result.body.duplicate).length, 1);
       assert.equal((await f.db.collection('plays').get()).size, 1); assert.equal((await f.db.collection('presence').get()).size, 1);
       assert.equal((await f.db.doc('campaigns/c1').get()).data().accrued_spend, 1);
-      await assert.rejects(f.store.transact(f.context, async () => { const d = await f.store.read(); d.plays[0].billable = false; await f.store.write(d); }), { status: 409 });
+      await assert.rejects(f.store.transact({...f.context,path:['screen','sa']}, async () => { const d = await f.store.read(); d.plays[0].billable = false; await f.store.write(d); }), { status: 409 });
     } finally { await f.db.terminate(); }
   });
 
@@ -199,6 +199,7 @@ if (process.argv[2] === 'worker') {
       assert.equal(settled.billable_plays,3);assert.equal(settled.org_id,'b');
       assert.deepEqual([settled.gross_paise,settled.fee_paise,settled.owner_paise,settled.net_paise],[300,30,54,216]);
       assert.equal((await f.db.collection('plays').get()).size,3);assert.equal((await f.db.collection('presence').get()).size,3);
+      const reportRows=(await f.db.collection('screen_day').get()).docs.map(d=>d.data());assert.equal(reportRows.reduce((n,r)=>n+r.plays_rendered,0),3);assert.equal(reportRows.reduce((n,r)=>n+r.plays_billable,0),3);assert.ok(reportRows.every(r=>r.org_id==='b'&&r.advertiser_id==='ad1'));
       assert.deepEqual((await f.db.doc('campaigns/c1').get()).data(),campaign,'receiving devices must not mutate the origin-owned campaign');
       for(const row of (await f.db.collection('plays').get()).docs){assert.equal(row.data().org_id,'b');assert.equal(row.data().econ_version,assignment.econ_version);assert.equal(row.data().rate_version,'rate1');}
 
@@ -213,11 +214,13 @@ if (process.argv[2] === 'worker') {
       assert.deepEqual(operator.screens.map(s=>s.id),['sb']);assert.deepEqual(operator.campaigns[0].screen_ids,['sb']);
       assert.equal(operator.campaigns[0].accrued_spend,3);assert.equal(operator.campaigns[0].committed_budget,undefined);
       assert.equal(operator.settlement_buckets.length,1);assert.equal(operator.settlement_buckets[0].org_id,'b');
-      assert.equal(operator.plays.length,3);assert.ok(operator.plays.every(p=>p.org_id==='b'));
+      assert.deepEqual(operator.plays,[]);
+      const operatorDetail=await f.store.transact({method:'GET',path:['screen','sb'],uid:'b_owner'},()=>f.store.read());assert.equal(operatorDetail.plays.length,3);assert.ok(operatorDetail.plays.every(p=>p.org_id==='b'));
       const advertiser=await view('advertiser');
       assert.deepEqual(advertiser.screens.map(s=>s.id).sort(),['sa','sb']);
       assert.equal(advertiser.campaigns[0].accrued_spend,13);assert.equal(advertiser.settlement_buckets.length,2);
-      assert.equal(advertiser.plays.length,3);assert.ok(advertiser.plays.every(p=>p.advertiser_id==='ad1'));
+      assert.deepEqual(advertiser.plays,[]);
+      const advertiserDetail=await f.store.transact({method:'GET',path:['campaign','c1'],uid:'advertiser'},()=>f.store.read());assert.equal(advertiserDetail.plays.length,3);assert.ok(advertiserDetail.plays.every(p=>p.advertiser_id==='ad1'));
       for(const bucket of advertiser.settlement_buckets)for(const field of ['fee_paise','owner_paise','net_paise','owner_share_pct','platform_fee_pct'])assert.equal(bucket[field],undefined);
 
       // Snapshot loading may read origin references, but the tenant-write guard stays strict.

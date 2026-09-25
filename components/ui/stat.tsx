@@ -1,10 +1,12 @@
+import { Explain } from './explain';
+import type { MetricId, Period, Completeness } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { Card } from './card';
 
-export function Stat({ label, value, hint, className }: { label: string; value: React.ReactNode; hint?: React.ReactNode; className?: string }) {
+export function Stat({ label, value, hint, className, metric, period, completeness }: { metric?: MetricId; period?: Period; completeness?: Completeness; label: string; value: React.ReactNode; hint?: React.ReactNode; className?: string }) {
   return (
     <Card className={cn('p-4', className)}>
-      <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">{label}</div>
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">{label}{metric && <Explain metric={metric} period={period} completeness={completeness} className="ml-1" />}</div>
       <div className="mt-1.5 text-[26px] font-semibold tracking-tight tnum leading-none">{value}</div>
       {hint && <div className="mt-1.5 text-[12px] text-muted-foreground">{hint}</div>}
     </Card>

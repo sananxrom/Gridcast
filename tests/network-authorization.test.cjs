@@ -67,7 +67,8 @@ function assertOwnCampaign(c,a) {
 test('network operator bootstrap exposes its own commitment and settlement, without another organisation or private contacts',async()=>{
  const f=networkFixture(), b=expectStatus(await f.call('GET','bootstrap',{},f.token('u_op1')),200);
  assertOwnCampaign(b.campaigns.find(c=>c.id==='network-campaign'),f.a);
- assert.ok(b.screens.every(s=>s.org_id==='org_sec17')); assert.deepEqual(b.plays.map(p=>p.id),['network-play-0']);
+ assert.ok(b.screens.every(s=>s.org_id==='org_sec17')); assert.deepEqual(b.plays,[]);
+ const diagnostic=expectStatus(await f.call('GET','campaign/network-campaign',{},f.token('u_op1')),200);assert.deepEqual(diagnostic.plays.map(p=>p.id),['network-play-0']);
  assert.deepEqual(b.settlement_buckets.map(b=>b.id),['bucket-0']);
  const raw=JSON.stringify(b); for(const denied of [f.b,'network-play-1','bucket-1','PRIVATE-CONTACT','PRIVATE-PHONE','PRIVATE-NOTES','private@example.invalid','999999','777777']) assert.equal(raw.includes(denied),false,denied);
 });
@@ -75,7 +76,7 @@ test('network operator bootstrap exposes its own commitment and settlement, with
 test('network campaign detail, directory and screen views cannot reveal campaign-wide commitments or foreign delivery',async()=>{
  const f=networkFixture(), token=f.token('u_op1');
  const detail=expectStatus(await f.call('GET','campaign/network-campaign',{},token),200);
- assertOwnCampaign(detail.campaign,f.a); assert.deepEqual(detail.byScreen.map(x=>x.screen.id),[f.a]);assert.equal(detail.totals.plays,1);
+ assertOwnCampaign(detail.campaign,f.a); assert.deepEqual(detail.byScreen.map(x=>x.screen.id),[f.a]);assert.equal(detail.totals,null);assert.equal(detail.totals_source,'/api/metrics');assert.equal(detail.plays.length,1);assert.equal(detail.plays[0].org_id,'org_sec17');
  const directory=expectStatus(await f.call('GET','directory?entity=campaigns',{},token),200);
  assertOwnCampaign(directory.items.find(c=>c.id==='network-campaign'),f.a);
  const screen=expectStatus(await f.call('GET',`screen/${f.a}`,{},token),200);
@@ -94,7 +95,7 @@ test('network money remains hidden from sales while advertiser sees own cross-or
   const b=expectStatus(await f.call('GET',route,{},f.token('network-viewer')),200);
   const campaign=b.campaign||b.campaigns.find(c=>c.id==='network-campaign');
   assert.deepEqual(new Set(campaign.screen_ids),new Set([f.a,f.b]));assert.equal(campaign.accrued_spend,333);
-  assert.equal(b.plays.length,2);
+  assert.equal(b.plays.length,route==='bootstrap'?0:2);
   for(const key of ['fee_paise','owner_paise','net_paise','platform_fee_pct','owner_share_pct','fee_basis','fee_version','econ_version']) assert.equal(hasKey(b,key),false,key);
  }
 });

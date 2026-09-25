@@ -76,20 +76,41 @@ test('a role without money access never reads billing state it cannot write', as
   }
 });
 
-test('reports separate rendered, billable and measured', async () => {
+test('daily reports separate rendered, billable and measured; detail returns no capped totals', async () => {
   const f = apiFixture();
-  const campaign = f.data().campaigns[0];
+  const {accrueScreenDay} = require('./load-lib.cjs')('reporting');
+  const campaign = f.data().campaigns[0], at=Date.parse('2026-09-24T12:00:00Z');
+  let all, measured;
   f.change(db => {
-    const rows = db.plays.filter(x => x.campaign_id === campaign.id);
-    rows[0].rendered = false; rows[0].billable = false;   // never reached the screen
-    rows[1].rendered = true;  rows[1].billable = false;   // played in full, failed a billing check
+    const rows=db.plays.filter(p=>p.campaign_id===campaign.id);
+    all=rows.length; measured=0; db.screen_day=[];
+    rows.forEach((row,i)=>{
+      const presence=db.presence.find(p=>p.play_id===row.id) || {measured:false,avg_persons:null};
+      const play={...row,rendered:i!==0,billable:i>1,timestamp_valid:true,playing_duration_ms:10000,server_received_at:'2026-09-24T12:01:00Z'};
+      accrueScreenDay(db,play,{advertiser_id:campaign.advertiser_id},at,presence);
+      if(i!==0&&presence.measured)measured++;
+    });
   });
-  const owner = f.userBy('owner'), token = f.token(owner.id);
-  const t = (await f.call('GET', 'campaign/' + campaign.id, {}, token)).body.totals;
-  const all = f.data().plays.filter(p => p.campaign_id === campaign.id).length;
-  assert.equal(t.not_rendered, 1, 'only the slot that never played counts as not rendered');
-  assert.equal(t.plays, all - 1, 'the unbilled-but-played slot is still delivery');
-  assert.equal(t.billable, all - 2, 'and it is not counted as billable');
+  const owner=f.userBy('owner'), token=f.token(owner.id);
+  const detail=await f.call('GET','campaign/'+campaign.id,{},token);
+  assert.equal(detail.body.totals,null);assert.equal(detail.body.totals_source,'/api/metrics');
+  const report=await f.call('GET','metrics?from=2026-09-24&to=2026-09-24&campaign='+campaign.id,{},token);
+  assert.equal(report.status,200);const t=report.body.totals;
+  assert.equal(t.plays_not_rendered,1);
+  assert.equal(t.plays_rendered,all-1,'unbilled delivery remains delivered');
+  assert.equal(t.plays_billable,all-2);
+  assert.equal(t.presence_n,measured,'failed measured attempts excluded from delivered denominator');
+});
+
+test('metrics route rejects guessed foreign organisations and campaigns and requires a session',async()=>{
+  const f=apiFixture(),owner=f.userBy('owner'),token=f.token(owner.id);
+  const foreign=f.data().orgs.find(o=>o.id!==owner.org_id);
+  const route='metrics?from=2026-09-24&to=2026-09-24';
+  assert.equal((await f.call('GET',route)).status,401);
+  assert.equal((await f.call('GET',route+'&org='+foreign.id,{},token)).status,404);
+  assert.equal((await f.call('GET',route+'&campaign=unknown-campaign',{},token)).status,404);
+  assert.equal((await f.call('GET','metrics?from=bad&to=2026-09-24',{},token)).status,400);
+  assert.equal((await f.call('GET',route,{},token)).status,200);
 });
 
 // ---- device-transport harness (same shape as tests/devices.test.cjs) ----

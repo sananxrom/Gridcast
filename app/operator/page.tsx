@@ -1,15 +1,14 @@
 'use client';
-import { HistoryNotice } from '@/components/views/history-notice';
+import { DeliveryReport, useDeliveryReport } from '@/components/views/delivery-report';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { tabFor } from '@/lib/roles';
 import { campaignInterval } from '@/lib/inventory';
 import { api, session, type SessionUser } from '@/lib/client';
-import { inr, isLive, ytId, daySeries } from '@/lib/utils';
+import { inr, isLive, ytId } from '@/lib/utils';
 import { operatorNav } from '@/lib/nav';
 import { AppShell, PageHead, SectionHead, type Crumb } from '@/components/ui/app-shell';
 import { DataTable, type BulkAction } from '@/components/ui/table';
 import { InlineSelect } from '@/components/ui/popover';
-import { Spark } from '@/components/ui/spark';
 import { Stat, Progress } from '@/components/ui/stat';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -35,6 +34,9 @@ export default function Operator() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [d, setD] = useState<any>(null);
   const [view, setView] = useState('overview');
+  const [screenPage, setScreenPage] = useState(0);
+  const [screenSearch, setScreenSearch] = useState('');
+  const report = useDeliveryReport({ enabled: !!user && ['overview', 'screens', 'analytics', 'reports'].includes(view) });
 
   const reload = useCallback(async (u?: SessionUser) => {
     const who = u ?? user; if (!who) return;
@@ -67,9 +69,16 @@ export default function Operator() {
   const advName = (id: string) => d.advertisers.find((a: any) => a.id === id)?.name ?? '—';
   const liveOn = (sid: string) => d.campaigns.filter((c: any) => c.screen_ids.includes(sid) && isLive(c));
   const bookedOn = (sid: string) => d.campaigns.filter((c: any) => {if(!c.screen_ids.includes(sid)||!['active','pending','paused'].includes(c.status))return false;try{const [start,end]=campaignInterval(c);return start<=Date.now()&&Date.now()<end;}catch{return false;}});
-  const playsOn = (sid: string, cid: string) => d.plays.filter((p: any) => p.screen_id === sid && p.campaign_id === cid).length;
 
+  const measurementAlerts = d.screens.flatMap((screen:any) => {
+    const device = d.devices?.find((v:any)=>v.screen_id===screen.id && v.status!=='revoked');
+    const vision = device?.vision;
+    if (!screen.has_camera || !vision || !Number.isFinite(Date.parse(vision.reported_at)) || Date.now()-Date.parse(vision.reported_at)>300000) return [];
+    if (vision.camera_state!=='unavailable' && vision.model_state!=='error') return [];
+    return [{ kind:'Measurement', tone:'warn', text:`${screen.name}: device reports ${vision.camera_state==='unavailable'?'camera unavailable':'detector error'}`, go:'s/'+screen.id }];
+  });
   const alerts = [
+    ...measurementAlerts,
     ...d.screens.filter((s: any) => s._status?.state === 'offline' || s._status?.state === 'stalled')
       .map((s: any) => ({ kind: 'Screen', tone: 'destructive', text: `${s.name} is ${s._status?.label}`, go: 's/' + s.id })),
     ...d.campaigns.filter((c: any) => c.committed_budget && c.accrued_spend / c.committed_budget >= 0.8 && c.status === 'active')
@@ -82,12 +91,7 @@ export default function Operator() {
   const nav = operatorNav({ inbox: alerts.length }, caps);
   const orgs = [{ id: user.org_id, name: user.orgName, type: 'operator' }];
   const titleOf: Record<string, string> = { overview: 'Overview', screens: 'My screens', groups: 'Screen groups', advertisers: 'Advertisers', campaigns: 'Campaigns', creatives: 'Creatives', settlement: 'Settlement', inbox: 'Inbox', analytics: 'Analytics', reports: 'Reports', profile: 'Profile', configs: 'Device configs', settings: 'Organisation', 'set-org': 'Organisation', 'set-billing': 'Billing & payouts', 'set-team': 'Team & users', 'set-api': 'API keys', 'set-hooks': 'Webhooks' };
-  const presFor = (sid: string) => d.presence.filter((x: any) => x.screen_id === sid && x.measured);
-  const trendScreen = (sid: string) => daySeries(presFor(sid).map((x: any) => ({ at: x.at, value: x.avg_persons })));
-  const trendCampaign = (cid: string) => {
-    const pids = new Set(d.plays.filter((p: any) => p.campaign_id === cid).map((p: any) => p.id));
-    return daySeries(d.presence.filter((x: any) => x.measured && pids.has(x.play_id)).map((x: any) => ({ at: x.at, value: x.avg_persons })));
-  };
+  const screenPeople = (id: string) => { const r = report.data?.byScreen[id]; return r?.presence_n ? r.presence_sum / r.presence_n : null; };
   const setCampaign = async (c: any, patch: any) => { await api(`/campaign/${c.id}`, patch); reload(); };
   const setScreen = async (x: any, patch: any) => { await api(`/screen/${x.id}`, patch); reload(); };
   const STATUS_CHOICES = [
@@ -137,7 +141,6 @@ export default function Operator() {
       orgs={orgs} currentOrg={orgs[0]} onOrgSelect={() => {}} breadcrumb={trail}
       cmdItems={cmdItems} onGo={go} user={{ name: user.name, role: user.role }}>
 
-      <HistoryNotice history={d.history} />
       {view === 'configs' && caps.includes('screens') && <ConfigList user={user} onOpen={id => go('cfg/' + id)} onChanged={() => reload()} />}
       {view.startsWith('cfg/') && caps.includes('screens') && <ConfigEditor id={view.slice(4)} user={user} onGo={go} onChanged={() => reload()} />}
 
@@ -151,19 +154,26 @@ export default function Operator() {
       {view === 'overview' && (<>
         <PageHead title={user.orgName} sub={`${d.screens.length} screens · ${d.advertisers.length} advertisers · ${d.campaigns.filter(isLive).length} live campaigns`} />
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {caps.includes('sales') && <Stat label="Monthly inventory" value={inr(d.screens.reduce((s: number, x: any) => s + x.monthly_value, 0))} hint="at full sell-through" />}
-          {caps.includes('sales') && <Stat label="Accrued on your screens" value={d.campaigns.some((c:any)=>typeof c.accrued_spend!=='number')?'—':inr(d.campaigns.reduce((s: number, c: any) => s + c.accrued_spend, 0))} hint={d.campaigns.some((c:any)=>typeof c.accrued_spend!=='number')?'Full totals require finance access':'reported lifetime accrual'} />}
-          {caps.includes('screens') && <Stat label="Screens on air" value={`${d.screens.filter((s: any) => s._status?.state === 'live').length}/${d.screens.length}`} hint="paired and playing" />}
-          <Stat label="Avg people / play" value={(() => { const m = d.presence.filter((p: any) => p.measured); return m.length ? (m.reduce((a: number, b: any) => a + b.avg_persons, 0) / m.length).toFixed(1) : '—'; })()} hint="reported presence" />
+          {caps.includes('sales') && <Stat metric="monthly_inventory_value" period={{from:'',to:'',label:'Current loaded records'}} label="Monthly inventory" value={inr(d.screens.reduce((s: number, x: any) => s + x.monthly_value, 0))} hint="at full sell-through" />}
+          {caps.includes('sales') && <Stat metric="recorded_campaign_accrual" period={{from:'',to:'',label:'Campaign lifetime · visible records'}} label="Accrued on your screens" value={d.campaigns.some((c:any)=>typeof c.accrued_spend!=='number')?'—':inr(d.campaigns.reduce((s: number, c: any) => s + c.accrued_spend, 0))} hint={d.campaigns.some((c:any)=>typeof c.accrued_spend!=='number')?'Full totals require finance access':'reported lifetime accrual'} />}
+          {caps.includes('screens') && <Stat metric="live_screen_count" period={{from:'',to:'',label:'Current loaded records'}} label="Screens on air" value={`${d.screens.filter((s: any) => s._status?.state === 'live').length}/${d.screens.length}`} hint="Current reported device status" />}
+          <Stat metric="current_exceptions" period={{from:'',to:'',label:'Current loaded records'}} label="Needs attention" value={alerts.length} hint="Screen, measurement, budget and creative exceptions" />
         </div>
         <Card className="mt-4 border-primary/25 bg-primary/[0.04] p-4 text-[13px] text-primary">
           <b>You keep 100% of what you sell.</b> Gridcast takes no cut on campaigns you bring to your own screens. A fee applies only if you release slots to the network and Gridcast brings you a client.
         </Card>
+        <SectionHead>Needs attention</SectionHead>
+        <DataTable cols={[
+          { label: 'Type', render: (a: any) => <Badge variant={a.tone as any}>{a.kind}</Badge> },
+          { label: 'Issue', render: (a: any) => a.text },
+          { label: '', render: (a: any) => <Button variant="ghost" size="sm" onClick={() => go(a.go)}>Open →</Button> },
+        ]} rows={alerts} empty="No screen, measurement, budget or approval exceptions in this view." />
+        <DeliveryReport report={report} screens={d.screens} campaigns={d.campaigns} creatives={d.creatives} />
         <SectionHead>Your screens</SectionHead>
         <DataTable cols={[
           { className: 'min-w-[168px]', label: 'Screen', sort: (s: any) => s.name, render: (s: any) => <><button onClick={() => go('s/' + s.id)} className="text-left font-medium text-primary hover:underline">{s.name}</button><div className="text-[12px] text-muted-foreground">{s.address}</div></> },
           { label: 'State', sort: (s: any) => s._status?.state, render: (s: any) => s._status ? <StatusBadge st={s._status} /> : <span className="text-muted-foreground">—</span> },
-          { label: 'People / play', sort: (s: any) => trendScreen(s.id).filter(Boolean).slice(-1)[0] ?? -1, render: (s: any) => <Spark data={trendScreen(s.id)} /> },
+          { label: 'People / measured paid play', sort: (s: any) => screenPeople(s.id) ?? -1, render: (s: any) => screenPeople(s.id)?.toFixed(1) ?? '—' },
           { label: 'Running', num: true, sort: (s: any) => liveOn(s.id).length, render: (s: any) => liveOn(s.id).length ? <><b>{liveOn(s.id).length}</b> <span className="text-muted-foreground">campaigns</span></> : <span className="text-muted-foreground">idle</span> },
           ...(caps.includes('sales') ? [{ label: 'Per slot / mo', num: true, sort: (s: any) => s.slot_price_month, render: (s: any) => inr(s.slot_price_month) }] : []),
         ]} rows={d.screens} rowId={(s: any) => s.id} exportName="screens" bulk={caps.includes('screens') ? screenBulk : undefined} onDone={() => reload()}
@@ -172,16 +182,23 @@ export default function Operator() {
       </>)}
 
       {view === 'screens' && (() => {
-        const pres = (sid: string) => d.presence.filter((x: any) => x.screen_id === sid && x.measured);
-        const avgOn = (sid: string) => { const m = pres(sid); return m.length ? m.reduce((a: number, b: any) => a + b.avg_persons, 0) / m.length : null; };
-        const plays7 = (sid: string) => { const cut = Date.now() - 7 * 864e5;
-          return d.plays.filter((p: any) => p.screen_id === sid && new Date(p.ended_at || p.started_at).getTime() >= cut).length; };
+        const filteredScreens = d.screens.filter((s:any) => `${s.name} ${s.venue_name} ${s.address}`.toLowerCase().includes(screenSearch.toLowerCase()));
+        const pageCount = Math.max(1, Math.ceil(filteredScreens.length / 24));
+        const page = Math.min(screenPage, pageCount - 1);
         return (<>
         <PageHead title="My screens" sub={caps.includes('sales') ? `${d.screens.length} screens · ${inr(d.screens.reduce((a: number, x: any) => a + x.monthly_value, 0))} of monthly inventory` : `${d.screens.length} screens`} actions={caps.includes('screens') && caps.includes('sales') ? <Button onClick={()=>go('new-screen')}>Add screen</Button> : undefined} />
+        <Input className="mb-3 max-w-sm" aria-label="Find a screen" placeholder="Find a screen…" value={screenSearch} onChange={e=>{setScreenSearch(e.target.value);setScreenPage(0);}} />
+        <div className="mb-3 flex flex-wrap items-end gap-3">
+          <Field label="From (IST)"><Input aria-label="Screen delivery from" type="date" value={report.period.from} onChange={e=>report.setPeriod({...report.period,from:e.target.value})}/></Field>
+          <Field label="To (IST)"><Input aria-label="Screen delivery to" type="date" value={report.period.to} onChange={e=>report.setPeriod({...report.period,to:e.target.value})}/></Field>
+          <Button variant="outline" onClick={report.reload} disabled={report.loading}>{report.loading?'Loading…':'Refresh delivery'}</Button>
+        </div>
+        {report.error && <p role="alert" className="mb-3 text-sm text-destructive">{report.error}</p>}
+        <p className="mb-3 text-xs text-muted-foreground">Delivery: {report.period.from} to {report.period.to} (IST). {report.data?.coverage.complete ? 'Daily summary coverage is complete.' : 'Coverage is partial or unavailable; — means no available summary.'}</p>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {d.screens.map((s: any) => {
+          {filteredScreens.slice(page * 24, (page + 1) * 24).map((s: any) => {
             const booked = new Set(bookedOn(s.id).map((c:any)=>c.advertiser_id)).size, pct = Math.round(booked / s.advertiser_slots * 100);
-            const avg = avgOn(s.id);
+            const avg = screenPeople(s.id);
             const tags = [`${s.size_in}"`, s.location_tier, ...Object.entries(s.tags || {}).map(([k, v]) => `${k}:${v}`)];
             return (
               <Card key={s.id} className="group overflow-hidden">
@@ -201,8 +218,8 @@ export default function Operator() {
                 <div className="grid grid-cols-4 divide-x divide-border/60 border-b border-border/60">
                   {[['Slot price', inr(s.slot_price_month), '/mo'],
                     ['Advertisers today', `${booked}/${s.advertiser_slots}`, ''],
-                    ['Avg people', avg == null ? '—' : avg.toFixed(1), avg == null ? '' : '/play'],
-                    ['Plays 7d', String(plays7(s.id)), '']].filter(([k]) => k !== 'Slot price' || caps.includes('sales')).map(([k, v, suf]) => (
+                    ['People / paid play', avg == null ? '—' : avg.toFixed(1), avg == null ? '' : '/play'],
+                    ['Paid plays', String(report.data?.byScreen[s.id]?.plays_rendered ?? (report.data?.coverage.complete ? 0 : '—')), '']].filter(([k]) => k !== 'Slot price' || caps.includes('sales')).map(([k, v, suf]) => (
                     <div key={k} className="px-3 py-2.5">
                       <div className="text-[9.5px] font-semibold uppercase tracking-wider text-muted-foreground/70">{k}</div>
                       <div className="font-mono tnum text-[15px] font-semibold leading-tight">{v}<span className="text-[10.5px] font-normal text-muted-foreground">{suf}</span></div>
@@ -228,6 +245,8 @@ export default function Operator() {
             );
           })}
         </div>
+        {!filteredScreens.length && <Empty>No screens match this search.</Empty>}
+        <div className="mt-4 flex items-center justify-between gap-3"><span className="text-xs text-muted-foreground">{filteredScreens.length} screens · Page {page + 1} of {pageCount}</span><div className="flex gap-2"><Button variant="outline" disabled={page === 0} onClick={()=>setScreenPage(page-1)}>Previous</Button><Button variant="outline" disabled={page + 1 >= pageCount} onClick={()=>setScreenPage(page+1)}>Next</Button></div></div>
         </>);
       })()}
 
@@ -252,33 +271,13 @@ export default function Operator() {
             { label: 'Alert', render: (a: any) => a.text },
             { label: '', render: (a: any) => <Button variant="ghost" size="sm" onClick={() => go(a.go)}>Open →</Button> },
           ]} rows={alerts} />
-        ) : <Empty>Nothing needs your attention. Screens are responding, budgets are under 80%, no creatives waiting.</Empty>}
+        ) : <Empty>No reported screen, measurement, budget or approval exceptions in this view.</Empty>}
       </>)}
 
-      {view === 'analytics' && (<>
-        <PageHead title="Analytics" sub="Delivery and presence across your network" />
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Stat label="Play reports loaded" value={d.plays.length.toLocaleString('en-IN')} />
-          <Stat label="Measured plays" value={d.presence.filter((p: any) => p.measured).length} hint="camera working" />
-          <Stat label="Screens" value={d.screens.length} hint={`${d.screens.filter((s: any) => s.has_camera).length} with camera`} />
-          <Stat label="Inventory value" value={inr(d.screens.reduce((s: number, x: any) => s + x.monthly_value, 0))} hint="per month at full sell-through" />
-        </div>
-        <SectionHead>By screen</SectionHead>
-        <DataTable cols={[
-          { label: 'Screen', render: (s: any) => <button onClick={() => go('s/' + s.id)} className="text-left font-medium text-primary hover:underline">{s.name}</button> },
-          { label: 'Venue', render: (s: any) => <Badge variant="muted">{s.venue_type}</Badge> },
-          { label: 'Play reports', num: true, render: (s: any) => d.plays.filter((p: any) => p.screen_id === s.id).length },
-          { label: 'Avg people', num: true, sort: (s: any) => { const r = presFor(s.id); return r.length ? r.reduce((a: number, b: any) => a + b.avg_persons, 0) / r.length : -1; },
-            render: (s: any) => { const r = presFor(s.id);
-              return r.length ? <b>{(r.reduce((a: number, b: any) => a + b.avg_persons, 0) / r.length).toFixed(1)}</b> : <span className="text-muted-foreground">—</span>; } },
-          { label: 'Last 7 days', render: (s: any) => <Spark data={trendScreen(s.id)} /> },
-          ...(caps.includes('sales') ? [{ label: 'Monthly value', num: true, sort: (s: any) => s.monthly_value, render: (s: any) => inr(s.monthly_value) }] : []),
-        ]} rows={d.screens} rowId={(s: any) => s.id} exportName="screen-performance"
-          search={(s: any) => s.name} facets={[{ label: 'Venue', get: (s: any) => s.venue_type }]} />
-        <div className="mt-4"><SoonPage title="Trends, dayparting and exports" note="Time-series charts, daypart breakdowns and CSV export are not built yet. The underlying play and presence data is already being collected." /></div>
+      {['analytics', 'reports'].includes(view) && (<>
+        <PageHead title={view === 'reports' ? 'Reports' : 'Analytics'} sub="Recorded delivery and presence · daily summaries and CSV export" />
+        <DeliveryReport report={report} screens={d.screens} campaigns={d.campaigns} creatives={d.creatives} />
       </>)}
-
-      {['reports'].includes(view) && <><PageHead title="Reports" /><SoonPage title="Scheduled and exportable reports" note="Per-advertiser PDF and CSV reports on a schedule. Not built yet — campaign pages already carry the same numbers." /></>}
       {view === 'profile' && <ProfilePage user={user} onSaved={() => { const u = session.get(); if (u) setUser(u); reload(); }} />}
       {(view === 'settings' || view === 'set-org') && caps.includes('org') && <OrgPage d={d} user={user} onSaved={() => { const u = session.get(); if (u) setUser(u); reload(); }} />}
       {view === 'set-billing' && <PayoutPage d={d} user={user} onSaved={() => reload()} />}

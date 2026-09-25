@@ -1,6 +1,6 @@
 'use client';
-import { HistoryNotice } from '@/components/views/history-notice';
-import React, { useEffect, useState } from 'react';
+import { DeliveryReport, useDeliveryReport } from '@/components/views/delivery-report';
+import React, { useEffect, useRef, useState } from 'react';
 import { defaultSlotsPerLoop, physicalCapacity } from '@/lib/inventory';
 import { Settlement } from './settlement';
 import { api } from '@/lib/client';
@@ -19,6 +19,8 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
   id: string; boot: any; onGo: (g: string) => void; onChanged: () => void;
 }) {
   const [d, setD] = useState<any>(null);
+  const currentId = useRef(id); currentId.current = id;
+  const report = useDeliveryReport({ campaign: id });
   const [edit, setEdit] = useState(false);
   const [f, setF] = useState<any>(null);
   const [err, setErr] = useState('');
@@ -26,8 +28,8 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
   const [inventoryError,setInventoryError]=useState('');
   const platform=(boot.caps??[]).includes('platform');
 
-  const load = () => api(`/campaign/${id}`).then(x => { setD(x); setF({ ...x.campaign }); });
-  useEffect(() => {setD(null);setEdit(false);setErr('');load().catch(e=>setErr(e.message)); /* eslint-disable-next-line */ }, [id]);
+  const load = () => api(`/campaign/${id}`).then(x => { if (currentId.current !== id) return; setD(x); setF({ ...x.campaign }); });
+  useEffect(() => {setD(null);setEdit(false);setErr('');load().catch(e=>{if(currentId.current===id)setErr(e.message);}); /* eslint-disable-next-line */ }, [id]);
   useEffect(()=>{
     let current=true;setInventory(null);setInventoryError('');
     if(edit && platform && d?.campaign?.campaign_type==='network')api(`/network-inventory?org=${encodeURIComponent(d.campaign.org_id)}`).then(x=>{if(current)setInventory(x);}).catch(e=>{if(current)setInventoryError(e.message);});
@@ -36,7 +38,7 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
 
   if(!d && err)return <Card className="p-5"><p role="alert">{err}</p><Button className="mt-3" onClick={()=>{setErr('');load().catch(e=>setErr(e.message));}}>Retry</Button></Card>;
 
-  if (!d) return (
+  if (!d || d.campaign.id !== id) return (
     <div className="space-y-3">
       <Skeleton className="h-9 w-64" />
       <Skeleton className="h-40 w-full" />
@@ -76,6 +78,10 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
   const tick = (arr: string[], v: string) => arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v];
   const mine = [...boot.creatives,...(inventory?.creatives??[])].filter((cr:any,i:number,rows:any[])=>rows.findIndex(x=>x.id===cr.id)===i).filter((x: any) => x.advertiser_id === c.advertiser_id);
 
+  const diagnosticTimes = d.plays.map((p:any)=>Date.parse(p.ended_at || p.started_at)).filter(Number.isFinite).sort((a:number,b:number)=>a-b);
+  const diagnosticDate = (at:number) => new Date(at).toLocaleString('en-IN', {timeZone:'Asia/Kolkata'});
+  const diagnosticWindow = diagnosticTimes.length ? `${diagnosticDate(diagnosticTimes[0])} – ${diagnosticDate(diagnosticTimes[diagnosticTimes.length-1])} IST` : 'No dated receipts loaded';
+
   return (
     <>
       <PageHead
@@ -90,7 +96,6 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
         </>}
       />
 
-      <HistoryNotice history={d.history} />
       {scopedNetwork && <Card className="mb-4 p-4 text-sm text-muted-foreground">Gridcast manages this network campaign. Delivery and amounts below cover your organisation’s screens only.</Card>}
       {!edit && err && <p role="alert" className="mb-3 text-sm text-destructive">{err}</p>}
       {edit && mayEdit && f && (
@@ -151,38 +156,33 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
         </Card>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Play reports" value={d.totals.plays.toLocaleString('en-IN')} hint={`across ${d.byScreen.length} screen${d.byScreen.length === 1 ? '' : 's'}`} />
-        <Stat label="Avg people / play" value={d.totals.avg === null ? '—' : d.totals.avg.toFixed(1)} hint="while the ad was on screen" />
-        <Stat label="Measured" value={<>{d.totals.measured}<span className="text-[15px] text-muted-foreground"> / {d.totals.plays}</span></>} hint="reports with presence samples" />
-        {typeof c.accrued_spend==='number'&&<Stat label={scopedNetwork?"Gross on your screens":"Spend"} value={inr(c.accrued_spend)} hint={scopedNetwork?"Verified per-play accrual":`of ${inr(c.committed_budget)} · new bookings: ${rate}`} />}
-      </div>
+      {typeof c.accrued_spend==='number'&&<Stat metric="recorded_campaign_accrual" period={{from:'',to:'',label:'Campaign lifetime · visible records'}} label={scopedNetwork?"Lifetime gross on your screens":"Lifetime spend"} value={inr(c.accrued_spend)} hint={scopedNetwork?"Recorded accrual on your screens · independent of report dates":`of ${inr(c.committed_budget)} · independent of report dates · new bookings: ${rate}`} />}
+      <DeliveryReport report={report} screens={d.byScreen.map((r:any)=>r.screen)} campaigns={[c]} creatives={d.byCreative.map((r:any)=>r.creative)} />
       {c.committed_budget!=null&&<Progress className="mt-3" value={pct} hot={pct >= 80} />}
       {mayMoney&&<><SectionHead>Verified settlement</SectionHead><Settlement buckets={d.settlement_buckets??[]} campaigns={[c]} screens={d.byScreen.map((r:any)=>r.screen)}/></>}
 
-      <SectionHead>Per-screen delivery</SectionHead>
+      <SectionHead>Screen bookings</SectionHead>
       <DataTable
         cols={[
           { label: 'Screen', render: (r: any) => <><div className="font-medium">{r.screen.name}</div><div className="text-[12px] text-muted-foreground">{r.screen.address}</div></> },
           { label: 'Venue', render: (r: any) => <Badge variant="muted">{r.screen.venue_type}</Badge> },
           {label:'Booking',render:(r:any)=>{const b=c.bookings?.find((x:any)=>x.screen_id===r.screen.id);return b?<span className="text-xs">{b.rotation_weight ?? b.slots_per_loop ?? 1} turns / round<br/>{b.rate_type==='per_play'&&typeof b.rate_value==='number'?`${inrRate(b.rate_value)} / play`:b.rate_type==='flat'?'Agreed flat rate':'Rate unavailable'}</span>:<span className="text-xs text-muted-foreground">Legacy booking</span>;}},
-          { label: 'Play reports', num: true, render: (r: any) => r.plays },
-          { label: 'Share', num: true, render: (r: any) => { const p = d.totals.plays ? Math.round(r.plays / d.totals.plays * 100) : 0; return <div className="flex items-center justify-end gap-2">{p}%<Progress value={p} className="w-16" /></div>; } },
-          { label: 'Avg people', num: true, render: (r: any) => r.avg === null ? <span className="text-muted-foreground">—</span> : <b>{r.avg.toFixed(1)}</b> },
         ]}
-        rows={d.byScreen} rowId={(r: any) => r.screen.id} exportName="campaign-screens" empty="No screens on this campaign" />
+        rows={d.byScreen.map((r:any)=>({screen:r.screen}))} rowId={(r: any) => r.screen.id} exportName="campaign-screens" empty="No screens on this campaign" />
 
-      <SectionHead>Per-creative performance</SectionHead>
+      <SectionHead>Assigned creatives</SectionHead>
+      <p className="mb-3 text-xs text-muted-foreground">Creative delivery is shown in the selected-period report above. Rotation is not a controlled A/B experiment: differences may reflect screen, time and audience.</p>
       <DataTable
         cols={[
           { label: 'Creative', render: (r: any) => <div className="flex items-center gap-3"><Thumb id={r.creative.youtube_id} w={58} /><div><div className="font-medium">{r.creative.name}</div><div className="font-mono text-[11.5px] text-muted-foreground">{r.creative.duration_s}s</div></div></div> },
           { label: 'Approval', render: (r: any) => <Badge variant={r.creative.approval_status === 'approved' ? 'ok' : r.creative.approval_status === 'rejected' ? 'destructive' : 'warn'}>{r.creative.approval_status}</Badge> },
-          { label: 'Play reports', num: true, render: (r: any) => r.plays },
-          { label: 'Avg people', num: true, render: (r: any) => r.avg === null ? <span className="text-muted-foreground">—</span> : <b>{r.avg.toFixed(1)}</b> },
         ]}
-        rows={d.byCreative} rowId={(r: any) => r.creative.id} exportName="campaign-creatives" empty="No creatives on this campaign" />
+        rows={d.byCreative.map((r:any)=>({creative:r.creative}))} rowId={(r: any) => r.creative.id} exportName="campaign-creatives" empty="No creatives on this campaign" />
 
-      <SectionHead hint="· loaded reports">Play log</SectionHead>
+      <details className="mt-5 rounded-xl border border-border p-4">
+      <summary className="cursor-pointer text-sm font-semibold">Play diagnostics · {d.plays.length} newest available receipts</summary>
+      <p className="mb-2 mt-3 text-xs text-muted-foreground">Loaded receipt window: {diagnosticWindow}. This limited window is independent of the selected report dates.</p>
+      <p className="mb-3 text-xs text-muted-foreground">Recent diagnostic records only. This table is not full delivery history and does not determine the report totals above. Reports can include incomplete or non-billable playback; each row shows its evidence.</p>
       <DataTable
         cols={[
           { label: 'When', render: (p: any) => <span className="font-mono text-[12px] text-muted-foreground">{fmtDate(p.ended_at, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span> },
@@ -194,7 +194,8 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
               ? <><b>{p.presence.avg_persons.toFixed(1)}</b> <span className="text-[11.5px] text-muted-foreground">({p.presence.sample_count})</span></>
               : <span className="text-muted-foreground">not measured</span> },
         ]}
-        rows={d.plays} rowId={(p: any) => p.id} exportName="play-log" empty="No plays recorded yet — pair a player to one of these screens" />
+        rows={d.plays} rowId={(p: any) => p.id} exportName="limited-recent-diagnostics" empty="No plays recorded yet — pair a player to one of these screens" />
+      </details>
     </>
   );
 }

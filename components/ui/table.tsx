@@ -80,6 +80,8 @@ export function DataTable<T>({
   const [undo, setUndo] = React.useState<{ label: string; rows: T[]; fn: (r: T[]) => any } | null>(null);
   const [sort, setSort] = React.useState<{ i: number; dir: 1 | -1 } | null>(null);
   const [q, setQ] = React.useState('');
+  const [page, setPage] = React.useState(0);
+  const pageSize = 50;
   const [picked, setPicked] = React.useState<Record<string, string>>({});
   const lastIdx = React.useRef<number | null>(null);
   const selectable = !!rowId;
@@ -101,6 +103,10 @@ export function DataTable<T>({
     }
     return out;
   }, [rows, q, search, facets, picked, sort, cols]);
+
+  React.useEffect(() => { setPage(0); lastIdx.current = null; }, [q,picked,sort]);
+  const currentPage = Math.min(page,Math.max(0,Math.ceil(view.length / pageSize)-1));
+  const pageStart = currentPage * pageSize;
 
   const ids = React.useMemo(() => (rowId ? view.map(rowId) : []), [view, rowId]);
 
@@ -214,7 +220,8 @@ export function DataTable<T>({
                 </tr>
               </thead>
               <tbody>
-                {view.map((r, i) => {
+                {view.slice(pageStart,pageStart+pageSize).map((r, pageIndex) => {
+                  const i = pageStart + pageIndex;
                   const on = selectable && sel.has(ids[i]);
                   return (
                     <tr key={selectable ? ids[i] : i}
@@ -236,6 +243,12 @@ export function DataTable<T>({
           )}
         </div>
       </div>
+
+      {view.length > pageSize && <nav aria-label="Table pages" className="my-2 flex items-center justify-end gap-3 text-xs text-muted-foreground">
+        <span>{pageStart+1}–{Math.min(pageStart+pageSize,view.length)} of {view.length} · selection spans filtered rows</span>
+        <Button size="sm" variant="outline" disabled={currentPage===0} onClick={()=>{setPage(currentPage-1);lastIdx.current=null;}}>Previous</Button>
+        <Button size="sm" variant="outline" disabled={pageStart+pageSize>=view.length} onClick={()=>{setPage(currentPage+1);lastIdx.current=null;}}>Next</Button>
+      </nav>}
 
       {/* one floating bar, so it stays put on a long list */}
       {selectable && (someOn || undo) && (

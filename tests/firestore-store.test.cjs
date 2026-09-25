@@ -33,7 +33,7 @@ class FakeFirestore {
           if (q.path) { this.reads.push(q.path); return snap(q); }
           this.reads.push({ collection: q.collection, filters: q.filters, limit: q.max });
           let docs = Object.entries(base).filter(([k]) => k.split('/')[0] === q.collection).map(([k, row]) => ({ k, row }));
-          docs = docs.filter(({ row }) => q.filters.every(([k, op, v]) => op === '==' ? row[k] === v : op === 'array-contains' ? row[k]?.includes(v) : op === '>' ? row[k] > v : false));
+          docs = docs.filter(({ row }) => q.filters.every(([k, op, v]) => op === '==' ? row[k] === v : op === 'array-contains' ? row[k]?.includes(v) : op === '>' ? row[k] > v : op === '>=' ? row[k] >= v : op === '<' ? row[k] < v : op === '<=' ? row[k] <= v : false));
           if (q.order) {
             const [key, direction] = q.order;
             docs = docs.filter(({ row }) => row[key] !== undefined).sort((a, b) => String(a.row[key]).localeCompare(String(b.row[key])) * (direction === 'desc' ? -1 : 1));
@@ -76,7 +76,8 @@ test('tenant-scoped snapshot loads no unrelated tenant records or event history'
     'presence/a_play': { id: 'presence1', play_id: 'a_play', org_id: 'a', measured: false, avg_persons: null } });
   const data = await f.store.transact(f.context, () => f.store.read());
   assert.deepEqual(data.orgs.map(x => x.id), ['a']); assert.deepEqual(data.users.map(x => x.id), ['a_owner']);
-  assert.deepEqual(data.plays.map(x => x.id), ['a_play']); assert.equal(data.presence[0].avg_persons, null);
+  assert.deepEqual(data.plays, []); assert.deepEqual(data.presence, []);
+  assert.ok(!f.database.reads.some(q=>typeof q==='object'&&['plays','presence'].includes(q.collection)));
   assert.deepEqual(data.settings, { config_revision: 2 });
   const queries = f.database.reads.filter(x => typeof x === 'object' && x.collection !== 'configs');
   assert.ok(queries.every(q => q.filters.some(f => f[0] === 'org_id' && f[2] === 'a') || (q.collection === 'campaigns' && q.filters.some(f => f[0] === 'participant_org_ids' && f[1] === 'array-contains' && f[2] === 'a'))));
@@ -139,17 +140,17 @@ test('event append is atomic with device sequence reservation, and evidence cann
   const id = playKey('dev1', 'event1');
   await f.store.transact({ method: 'POST', path: ['play'], deviceId: 'dev1', playUid: 'event1', seqNo: 1 }, async () => {
     const d = await f.store.read();
-    d.plays.push({ id, org_id: 'a', device_id: 'dev1', play_uid: 'event1', seq_no: 1, ended_at: '2026-01-01' });
+    d.plays.push({ id, org_id: 'a', screen_id:'sa', device_id: 'dev1', play_uid: 'event1', seq_no: 1, ended_at: '2026-01-01' });
     d.presence.push({ id: 'presence1', play_id: id, org_id: 'a', measured: false, avg_persons: null }); await f.store.write(d);
   });
   assert.ok(f.database.rows[`plays/${id}`]); assert.ok(f.database.rows[`presence/${id}`]);
   assert.equal(f.database.rows[`_device_sequences/${sequenceKey('dev1', 1)}`].play_id, id);
-  await assert.rejects(f.store.transact(f.context, async () => { const d = await f.store.read(); d.plays[0].billable = true; await f.store.write(d); }), { status: 409 });
+  await assert.rejects(f.store.transact({...f.context,path:['screen','sa']}, async () => { const d = await f.store.read(); d.plays[0].billable = true; await f.store.write(d); }), { status: 409 });
 });
 
 test('bounded reports explicitly disclose truncation', async () => {
-  const rows = Object.fromEntries(Array.from({ length: 1501 }, (_, i) => [`plays/p${i}`, { id: `p${i}`, org_id: 'a', ended_at: `2026-${String(i).padStart(6,'0')}` }]));
-  const f = fixture(rows); const d = await f.store.transact(f.context, () => f.store.read());
+  const rows = Object.fromEntries(Array.from({ length: 1501 }, (_, i) => [`plays/p${i}`, { id: `p${i}`, org_id: 'a', screen_id:'sa', ended_at: `2026-${String(i).padStart(6,'0')}` }]));
+  const f = fixture(rows); const d = await f.store.transact({...f.context,path:['screen','sa']}, () => f.store.read());
   assert.equal(d.plays.length, 1500); assert.equal(d.history.truncated, true); assert.equal(d.history.complete, false);
 });
 
@@ -283,4 +284,82 @@ test('audit evidence cannot be changed or deleted after an authorized directory 
   }),e=>e.status===409&&/append-only/.test(e.message));
   assert.deepEqual(f.database.rows['audit/audit1'],original);assert.equal(f.database.commits.length,0);
  }
+});
+
+
+const reporting=require('./load-lib.cjs')('reporting');
+function reportingDeviceFixture(){
+ const crypto=require('node:crypto'),now=Date.now(),start=now-60000;
+ const id='dev_12345678-1234-1234-1234-123456789abc',token='gcp_'+id+'.'+crypto.randomBytes(32).toString('base64url');
+ const device={id,org_id:'a',screen_id:'sa',status:'online',token_hash:crypto.createHash('sha256').update(token).digest('hex'),expires_at:new Date(now+86400000).toISOString()};
+ const assignment={id:'reporting-assignment',device_id:id,org_id:'a',screen_id:'sa',campaign_id:'campaign',advertiser_id:'advertiser',creative_id:'creative',duration_s:10,issued_at:new Date(start-60000).toISOString(),valid_until:new Date(now+3600000).toISOString(),accept_until:new Date(now+72*3600000).toISOString(),config_version:1,camera_fail_mode:'continue',model_configured:'coco-ssd',sample_interval_s:2,count_ceiling:50,rate_type:'per_play',rate_value:.01,rate_paise:1,rate_version:'r1',platform_fee_pct:0,owner_share_pct:0,fee_basis:'gross',econ_version:'e1'};
+ const f=fixture({['devices/'+id]:device,'device_assignments/reporting-assignment':assignment,'screens/sa':{id:'sa',org_id:'a',status:'active'},'campaigns/campaign':{id:'campaign',org_id:'a',screen_ids:['sa'],creative_ids:[],advertiser_id:'advertiser',committed_budget:10000,accrued_spend:0}});
+ const event=(seq,when=start)=>({assignment_id:assignment.id,play_uid:'report-event-'+seq,seq_no:seq,campaign_id:'campaign',creative_id:'creative',config_version:1,started_at_device:new Date(when).toISOString(),ended_at_device:new Date(when+10000).toISOString(),playing_duration_ms:10000,media_started_s:0,media_ended_s:10,ended_reason:'ended',measured:true,avg_persons:2,sample_count:5,model_ver:'coco-ssd@2.2.3/lite_mobilenet_v2',server_clock_offset_ms:0});
+ const send=body=>f.store.transact({method:'POST',path:['play'],deviceId:id,assignmentId:assignment.id,playUid:body.play_uid,seqNo:body.seq_no,startedAtDevice:body.started_at_device,clockOffset:body.server_clock_offset_ms},async()=>{
+  const d=await f.store.read(),r=require('./load-lib.cjs')('devices').deviceRoute(d,'POST',['play'],body,token,{now,playlist:()=>({items:[],config:{},config_version:1})});
+  if(r.changed)await f.store.write(d);return r;
+ });
+ return {...f,now,start,event,send,assignment};
+}
+
+test('daily rollup and first coverage marker commit atomically across duplicate and distinct concurrent receipts',async()=>{
+ const f=reportingDeviceFixture();const results=await Promise.all([f.send(f.event(1)),f.send(f.event(1)),f.send(f.event(2))]);
+ for(const r of results)assert.equal(r.body.ok,true,JSON.stringify(r));assert.equal(results.filter(r=>r.body.duplicate).length,1);
+ const key=reporting.reportingKey('sa','campaign','creative',f.start),row=f.database.rows['screen_day/'+key];
+ assert.equal(row.plays_rendered,2);assert.equal(row.plays_billable,2);assert.equal(row.presence_n,2);assert.equal(row.presence_sum,4);assert.equal(row.org_id,'a');
+ assert.equal(f.database.rows['_meta/reporting'].started_at,new Date(f.now).toISOString());
+ assert.equal(f.database.commits.filter(w=>w.some(x=>x[1]==='_meta/reporting')).length,1);
+ for(const writes of f.database.commits.filter(w=>w.some(x=>x[1].startsWith('screen_day/')))){
+  assert.ok(writes.some(x=>x[1].startsWith('plays/')));assert.ok(writes.some(x=>x[1].startsWith('presence/')));assert.ok(writes.some(x=>x[1].startsWith('settlement_buckets/')));
+ }
+ const first=f.database.rows['_meta/reporting'].started_at;await f.send(f.event(3));assert.equal(f.database.rows['screen_day/'+key].plays_rendered,3);assert.equal(f.database.rows['_meta/reporting'].started_at,first);
+ assert.ok(!f.database.reads.some(q=>typeof q==='object'&&['plays','presence','screen_day'].includes(q.collection)),'device path reads only exact receipt and rollup keys');
+});
+
+test('invalid-clock receipts prefetch the receive-day bucket and update it without making delivered plays',async()=>{
+ const f=reportingDeviceFixture(),old=Date.parse('2000-01-01T00:00:00Z');
+ for(const seq of [1,2]){const result=await f.send(f.event(seq,old));assert.equal(result.body.ok,true,JSON.stringify(result));assert.equal(result.body.billable,false);}
+ const key=reporting.reportingKey('sa','campaign','creative',f.now),row=f.database.rows['screen_day/'+key];
+ assert.equal(row.plays_time_invalid,2);assert.equal(row.plays_rendered,0);assert.equal(row.presence_n,0);
+ assert.equal(Object.keys(f.database.rows).filter(k=>k.startsWith('screen_day/')).length,1);
+ assert.equal(f.database.rows['screen_day/'+reporting.reportingKey('sa','campaign','creative',old)],undefined);
+});
+
+test('report rollup writes preserve the cross-organisation guard',async()=>{
+ const f=reportingDeviceFixture();await assert.rejects(f.store.transact({...f.context,method:'POST',path:['screen','sa']},async()=>{
+  const d=await f.store.read();d.screen_day.push({id:'foreign',org_id:'b',screen_id:'sb'});await f.store.write(d);
+ }),e=>e.status===403);assert.equal(f.database.rows['screen_day/foreign'],undefined);
+});
+
+function reportingReadFixture(){
+ const rows={};for(let i=0;i<2207;i++){
+  const org=i<2105?'a':'b',screen=org==='a'?'sa':'sb',campaign=i%2?'campaign1':'campaign2',creative='creative'+i;
+  const id=reporting.reportingKey(screen,campaign,creative,Date.parse('2026-09-23T10:00:00Z'));
+  rows['screen_day/'+id]={id,org_id:org,advertiser_id:i%2?'advertiser1':'advertiser2',screen_id:screen,campaign_id:campaign,creative_id:creative,date:'2026-09-23',...reporting.emptyCounters(),plays_rendered:1};
+ }
+ const f=fixture({...rows,'users/admin':{id:'admin',org_id:'a',role:'platform_admin'},'users/viewer':{id:'viewer',org_id:'a',role:'advertiser_viewer',advertiser_id:'advertiser1'},'_meta/reporting':{version:1,started_at:'2026-09-22T00:00:00Z'}});
+ return {...f,context:{method:'GET',path:['metrics'],uid:'a_owner',from:'2026-09-23',to:'2026-09-23'}};
+}
+async function allReportPages(f,context){
+ const rows=[];let after;
+ for(let i=0;i<20;i++){
+  const d=await f.store.transact({...context,after},()=>f.store.read());assert.ok(d.screen_day.length<=500);rows.push(...d.screen_day);
+  if(!d.report_page.has_more){assert.equal(d.report_page.next_cursor,null);return rows;}
+  assert.equal(d.report_page.next_cursor,d.screen_day.at(-1).id);assert.ok(!after||d.report_page.next_cursor>after);after=d.report_page.next_cursor;
+ }
+ assert.fail('pagination did not terminate');
+}
+test('metrics paginate beyond 2000 rollup rows without receipt or domain scans',async()=>{
+ const f=reportingReadFixture(),rows=await allReportPages(f,f.context);
+ assert.equal(rows.length,2105);assert.equal(new Set(rows.map(r=>r.id)).size,2105);assert.ok(rows.every(r=>r.org_id==='a'));
+ assert.ok(!f.database.reads.some(q=>typeof q==='object'&&q.collection!=='screen_day'));
+ const absent=await f.store.transact({...f.context,from:'2026-09-22',to:'2026-09-22'},()=>f.store.read());assert.deepEqual(absent.screen_day,[]);
+});
+test('metrics scope operator, advertiser, admin organisation, campaign and screen at the database query',async()=>{
+ const f=reportingReadFixture();
+ const viewer=await allReportPages(f,{...f.context,uid:'viewer'});assert.equal(viewer.length,1103);assert.ok(viewer.every(r=>r.advertiser_id==='advertiser1'));assert.ok(viewer.some(r=>r.org_id==='b'));
+ const global=await allReportPages(f,{...f.context,uid:'admin'});assert.equal(global.length,2207);
+ const scoped=await allReportPages(f,{...f.context,uid:'admin',orgId:'b'});assert.equal(scoped.length,102);assert.ok(scoped.every(r=>r.org_id==='b'));
+ const campaign=await allReportPages(f,{...f.context,reportCampaign:'campaign1',reportScreen:'sa'});assert.equal(campaign.length,1052);assert.ok(campaign.every(r=>r.campaign_id==='campaign1'&&r.screen_id==='sa'));
+ const foreign=await allReportPages(f,{...f.context,reportScreen:'sb',orgId:'b'});assert.equal(foreign.length,0,'operator hints cannot change authenticated org');
 });

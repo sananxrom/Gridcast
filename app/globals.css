@@ -15,22 +15,26 @@
     --accent-foreground: 215 25% 12%;
     --border: 214 16% 89%;
     --input: 214 16% 86%;
-    --ring: 38 92% 33%;
+    --ring: 38 92% 32%;
 
     /* #A16207 ochre — the brand colour, and the only accent hue.
        States are told apart by weight and fill, not by inventing hues. */
-    --primary: 38 92% 33%;
+    --primary: 38 92% 32%;
     --primary-foreground: 0 0% 100%;
     --secondary: 210 16% 95%;
     --secondary-foreground: 215 25% 20%;
 
-    /* open / pending — the same hue, lighter and softer than an action */
-    --warn: 36 84% 44%;
+    /* open / pending — the same hue, deeper than an action so it reads as ink.
+       Was 44% L: contrast 2.97 on the card, below AA for an 11px badge label.
+       Darkening also widens the gap from --onair, which is the pill it sits beside. */
+    --warn: 34 92% 30%;
     --warn-foreground: 0 0% 100%;
 
-    /* live — the hottest point on the ramp, and the only thing that blinks */
+    /* live — the hottest point on the ramp, and the only thing that blinks.
+       Foreground is warm near-black, not white: white on this orange is 2.67,
+       and the one badge that must always be readable is the one saying "live". */
     --onair: 32 95% 48%;
-    --onair-foreground: 0 0% 100%;
+    --onair-foreground: 30 100% 8%;
 
     /* settled / verified — the deep end of the ramp, reads as weight */
     --ok: 34 78% 26%;

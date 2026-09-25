@@ -1,3 +1,4 @@
+import { reportingKey, reportRange, REPORT_PAGE_SIZE } from './reporting';
 import { budgetId } from './budgets';
 import { appliedOffset, settlementKey, settlementPeriod } from './settlement';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -8,14 +9,14 @@ import type { Firestore, Transaction } from 'firebase-admin/firestore';
 export type StoreContext = {
   method: string; path: string[]; uid?: string; deviceId?: string; loginEmail?: string;
   pairingCodeHash?: string; playUid?: string; seqNo?: number; assignmentId?: string;
-  startedAtDevice?: string; clockOffset?: number; orgId?: string; entity?: string; after?: string; limit?: number; targetOrg?: string;
+  startedAtDevice?: string; clockOffset?: number; orgId?: string; entity?: string; after?: string; limit?: number; targetOrg?: string; from?: string; to?: string; reportScreen?: string; reportCampaign?: string;
 };
 export class StoreError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 const DOMAIN = ['orgs', 'users', 'screens', 'advertisers', 'creatives', 'campaigns', 'groups', 'devices', 'configs', 'assets'] as const;
 const EVENTS = ['plays', 'presence', 'device_assignments', 'audit', 'diagnostic_results'] as const;
-const COLLECTIONS = [...DOMAIN, ...EVENTS, 'diagnostic_assignments', 'settlement_buckets', 'campaign_budgets'];
+const COLLECTIONS = [...DOMAIN, ...EVENTS, 'diagnostic_assignments', 'settlement_buckets', 'campaign_budgets', 'screen_day'];
 const DOMAIN_LIMIT = 2000;
 export const HISTORY_LIMIT = 1500;
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -141,6 +142,22 @@ export function createFirestoreStore(database: Firestore) {
     if (actor) await referenced(tx, 'orgs', [actor.org_id], snapshot.orgs);
     if (health || (!orgId && !state.admin)) {
       state.readOnly = true;
+    } else if (context.path[0] === 'metrics' && context.method === 'GET') {
+      state.readOnly = true;
+      const range = reportRange(context.from,context.to);
+      snapshot.reporting_coverage = await readDoc(tx,'_meta','reporting');
+      if (context.reportCampaign) await referenced(tx,'campaigns',[context.reportCampaign],snapshot.campaigns);
+      if (context.reportScreen && actor?.role !== 'advertiser_viewer') await referenced(tx,'screens',[context.reportScreen],snapshot.screens);
+      let q: any = database.collection('screen_day').where('id','>=',range.lower).where('id','<',range.upper);
+      if (actor?.role === 'advertiser_viewer') q = q.where('advertiser_id','==',actor.advertiser_id || '__none__');
+      else if (scoped) q = q.where('org_id','==',orgId);
+      if (context.reportScreen) q = q.where('screen_id','==',context.reportScreen);
+      if (context.reportCampaign) q = q.where('campaign_id','==',context.reportCampaign);
+      if (context.after) q = q.where('id','>',context.after);
+      const result: any = await tx.get(q.orderBy('id').limit(REPORT_PAGE_SIZE + 1));
+      const rows = result.docs.map((d: any) => d.data());
+      snapshot.screen_day = rows.slice(0,REPORT_PAGE_SIZE);
+      snapshot.report_page = {has_more:rows.length > REPORT_PAGE_SIZE,next_cursor:rows.length > REPORT_PAGE_SIZE ? snapshot.screen_day.at(-1)?.id : null};
     } else if (['directory','audit'].includes(context.path[0]) && context.method === 'GET') {
       const collection = context.path[0] === 'audit' ? 'audit' : context.entity || '';
       if (!['orgs','advertisers','creatives','campaigns','screens','users','configs','groups','devices','assets','audit'].includes(collection)) throw new StoreError(400, 'Unknown directory');
@@ -257,6 +274,13 @@ export function createFirestoreStore(database: Firestore) {
         const a = snapshot.device_assignments.find((a: any) => a.id === context.assignmentId && a.device_id === device.id && a.org_id === orgId);
         const at = Date.parse(context.startedAtDevice) + appliedOffset(device,context.clockOffset);
         if (a?.campaign_id && a?.econ_version && Number.isFinite(at)) await referenced(tx,'settlement_buckets',[settlementKey(a.campaign_id,a.screen_id,settlementPeriod(at),a.econ_version)],snapshot.settlement_buckets);
+        if (a && Number.isFinite(at) && context.path[0] === 'play') {
+          // Include receive-day neighbours: invalid clock reports use receive time, which may
+          // cross midnight between prefetch and validation without resetting an existing row.
+          const receive = Date.now();
+          await referenced(tx,'screen_day',[...(at >= Date.parse(a.issued_at)-60000 && at <= Date.parse(a.valid_until) ? [at] : []),receive-86400000,receive,receive+86400000].map(t => reportingKey(a.screen_id,a.campaign_id,a.creative_id,t)),snapshot.screen_day);
+          snapshot.reporting_coverage = await readDoc(tx,'_meta','reporting');
+        }
       }
       if (actor && context.method === 'GET' && ['bootstrap','campaign','screen'].includes(context.path[0])) {
         const filters: [string,any,any][] = actor.role === 'advertiser_viewer' ? [['advertiser_id','==',actor.advertiser_id || '__none__']] : scoped ? [['org_id','==',orgId]] : [];
@@ -265,6 +289,7 @@ export function createFirestoreStore(database: Firestore) {
         // Full bounded authoritative buckets, never a total from the truncated receipt history.
         snapshot.settlement_buckets = await query(tx,'settlement_buckets',filters);
       }
+      if (actor?.role === 'advertiser_viewer') await referenced(tx,'screens',snapshot.settlement_buckets.map((b: any) => b.screen_id),snapshot.screens);
       await referenced(tx, 'advertisers', snapshot.campaigns.map((c: any) => c.advertiser_id), snapshot.advertisers);
       if (device && context.path[0] === 'playlist') snapshot.creatives.push(...await query(tx,'creatives',[['org_id','==',orgId],['purpose','==','filler'],['approval_status','==','approved']]));
       await referenced(tx, 'creatives', snapshot.campaigns.flatMap((c: any) => c.creative_ids || []), snapshot.creatives);
@@ -283,7 +308,7 @@ export function createFirestoreStore(database: Firestore) {
         if (sequence?.play_id) await referenced(tx, 'plays', [sequence.play_id], snapshot.plays);
       }
       // Device writes do not reread growing event history. Human reporting is bounded.
-      if (!deviceRequest && context.method === 'GET' && ['bootstrap', 'screen', 'campaign'].includes(context.path[0])) {
+      if (!deviceRequest && context.method === 'GET' && ['screen', 'campaign'].includes(context.path[0])) {
         let q: any = database.collection('plays');
         let scope = !scoped ? 'platform' : 'organisation';
         if (scoped && actor?.role !== 'advertiser_viewer') q = q.where('org_id', '==', orgId);
@@ -390,6 +415,8 @@ export function createFirestoreStore(database: Firestore) {
     }
     if (changes.length + emailChanges.length * 2 + sequences.size + Number(changedSettings) > 450)
       throw new StoreError(413, 'Split this operation into smaller batches');
+    if (!original.reporting_coverage && snapshot.reporting_coverage && changes.some(c => c.collection === 'screen_day'))
+      tx.create(doc('_meta','reporting'),clean(snapshot.reporting_coverage));
     for (const change of changes) {
       const ref = doc(change.collection, change.key);
       if (!change.after) tx.delete(ref);

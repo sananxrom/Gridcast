@@ -1,3 +1,4 @@
+import { ReportingError, reportRange, reportingVisible, summarizeReport, REPORT_PAGE_SIZE } from './reporting';
 import { ensureBudget, validateBudgetEdit } from './budgets';
 import { createHash } from 'node:crypto';
 import { creativeRotationIndex } from './rotation';
@@ -131,6 +132,7 @@ export function handle(method: string, seg: string[], q: URLSearchParams, body: 
         playUid: typeof body.play_uid === 'string' ? body.play_uid : undefined,
         startedAtDevice:body.started_at_device,clockOffset:body.server_clock_offset_ms,seqNo: body.seq_no, assignmentId: body.assignment_id, orgId: q.get('org') || q.get('org_id') || undefined,
         targetOrg: typeof body.org_id === 'string' ? body.org_id : undefined, entity:q.get('entity') || undefined,
+        from:q.get('from') || undefined,to:q.get('to') || undefined,reportScreen:q.get('screen') || undefined,reportCampaign:q.get('campaign') || undefined,
         after:q.get('after') || undefined,limit:Number(q.get('limit')) || 100 }, async () => {
         db = null; auditContext = null;
         const result = await dispatch(method, seg, q, body, token, clientKey);
@@ -139,7 +141,7 @@ export function handle(method: string, seg: string[], q: URLSearchParams, body: 
         return result;
       });
     } catch (e) {
-      if (e instanceof DiagnosticError || e instanceof AccessError || e instanceof InventoryError || e instanceof store.StoreError) return { status: e.status, body: { error: e.message } };
+      if (e instanceof ReportingError || e instanceof DiagnosticError || e instanceof AccessError || e instanceof InventoryError || e instanceof store.StoreError) return { status: e.status, body: { error: e.message } };
       if (e instanceof Error && e.message.startsWith('Set GC_DEMO_PASSWORD'))
         return { status: 503, body: { error: e.message } };
       if (e instanceof Error && e.message.startsWith('GC_AUTH_SECRET'))
@@ -328,6 +330,17 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
       org_id: u.org_id, org: db.orgs.find((o: any) => o.id === u.org_id)?.name, last_login_at: u.last_login_at })) };
   }
 
+  if (method === 'GET' && p === 'metrics') {
+    const range = reportRange(q.get('from') || undefined,q.get('to') || undefined);
+    const rows = (db.screen_day || []).filter((r: any) => reportingVisible(r,actor,q.get('org') || q.get('org_id') || undefined)
+      && r.id >= range.lower && r.id < range.upper && (!q.get('after') || r.id > q.get('after')!)
+      && (!q.get('screen') || r.screen_id === q.get('screen')) && (!q.get('campaign') || r.campaign_id === q.get('campaign')))
+      .sort((a: any,b: any) => a.id.localeCompare(b.id));
+    const items = rows.slice(0,REPORT_PAGE_SIZE);
+    const page = db.report_page || {has_more:rows.length > REPORT_PAGE_SIZE,next_cursor:rows.length > REPORT_PAGE_SIZE ? items.at(-1)?.id : null};
+    return {body:{...summarizeReport(items,range,db.reporting_coverage),...page}};
+  }
+
   if (method === 'GET' && p === 'bootstrap') return { body: redact(bootstrap(db, actor, screenStatus, q.get('org') || q.get('org_id')), actor) };
   if (method === 'POST' && p === 'logout') {
     actor.auth_version = (actor.auth_version || 0) + 1;
@@ -340,21 +353,13 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     const c = campaignView(db,original,actor);
     const plays = db.plays.filter((x: any) => x.campaign_id === c.id && (isAdmin || actor.role === ADVERTISER || x.org_id === actor.org_id));
     const byPlay = Object.fromEntries(db.presence.map((x: any) => [x.play_id, x]));
-    // Rendered, measured and billable are three separate questions and are reported as three numbers.
-    // A slot that played in full but failed a billing check is delivery that happened and was not charged;
-    // collapsing it into either "plays" or "not rendered" alone would misstate one side or the other.
-    const agg = (all: any[]) => { const shown = all.filter((r: any) => r.rendered !== false);
-      const m = shown.map(r => byPlay[r.id]).filter((x: any) => x?.measured);
-      return { plays: shown.length, not_rendered: all.length - shown.length,
-        billable: all.filter((r: any) => r.billable !== false).length, measured: m.length,
-        avg: m.length ? m.reduce((a: number, b: any) => a + b.avg_persons, 0) / m.length : null }; };
     return { body: {
       settlement_buckets:settlementView(db,actor,c.id), history: db.history || { complete: true, scope: 'local_demo' }, campaign: c, advertiser: advertiserView(db.advertisers.find((a: any) => a.id === c.advertiser_id), actor),
-      org: orgView(db.orgs.find((o: any) => o.id === c.org_id), actor), totals: agg(plays),
+      org: orgView(db.orgs.find((o: any) => o.id === c.org_id), actor), totals: null, totals_source: '/api/metrics',
       byScreen: [...new Set([...c.screen_ids,...plays.map((p: any) => p.screen_id),...settlementView(db,actor,c.id).map((b: any) => b.screen_id)])].map((id: string) => db.screens.find((s: any) => s.id === id)).filter(Boolean)
-        .map((s: any) => ({ screen: screenView(s, actor), ...agg(plays.filter((p: any) => p.screen_id === s.id)) })),
+        .map((s: any) => ({ screen: screenView(s, actor) })),
       byCreative: c.creative_ids.map((id: string) => db.creatives.find((x: any) => x.id === id)).filter(Boolean)
-        .map((cr: any) => ({ creative: cr, ...agg(plays.filter((p: any) => p.creative_id === cr.id)) })),
+        .map((cr: any) => ({ creative: cr })),
       plays: plays.slice(-300).reverse().map((p: any) => ({ ...p, presence: byPlay[p.id] || null })),
     } };
   }
@@ -369,14 +374,12 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     const measured = plays.map((p: any) => byPlay[p.id]).filter((x: any) => x?.measured);
     const advOf = (id: string) => db.advertisers.find((a: any) => a.id === id);
     const camps = db.campaigns.filter((c: any) => c.screen_ids.includes(screen.id)).map((c: any) => {
-      const cp = plays.filter((p: any) => p.campaign_id === c.id);
-      const cm = cp.map((p: any) => byPlay[p.id]).filter((x: any) => x?.measured);
       return { id: c.id, name: c.name, status: c.status, campaign_type: c.campaign_type,
         live: c.status === 'active' && c.starts_at <= t && c.ends_at >= t,
         advertiser: advOf(c.advertiser_id)?.name || '—', starts_at: c.starts_at, ends_at: c.ends_at,
         ...((c.campaign_type === 'network' || c.bookings?.some((b: any) => b.econ_version)) ? {accrued_spend:settlementView(db,actor,c.id,screen.org_id).filter((b: any) => b.screen_id === screen.id).reduce((n: number,b: any) => n + (b.gross_paise || 0),0) / 100} : {committed_budget:c.committed_budget,accrued_spend:c.accrued_spend}),
         creatives: c.creative_ids.map((id: string) => db.creatives.find((x: any) => x.id === id)).filter(Boolean),
-        plays: cp.length, avg: cm.length ? cm.reduce((a: number, b: any) => a + b.avg_persons, 0) / cm.length : null };
+        totals_source: '/api/metrics' };
     });
     let np: any = null;
     if (st.device?.now_playing && st.state === 'live') {
@@ -397,9 +400,7 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
       configStack: cfg.applicable(screen, db.groups || [], db.configs || []).map((c: any) => ({ id: c.id, name: c.name, layer: c.layer, keys: Object.keys(c.values || {}).length })),
       configConflicts: cfg.conflicts(screen, db.groups || [], db.configs || []),
       pricingDrift: cfg.pricingDrift(screen, resolved),
-      stats: { plays: plays.length, playsToday: plays.filter((p: any) => (p.ended_at || '').slice(0, 10) === t).length,
-        measured: measured.length, avg: measured.length ? measured.reduce((a: number, b: any) => a + b.avg_persons, 0) / measured.length : null,
-        liveCampaigns: camps.filter((c: any) => c.live).length },
+      stats: { liveCampaigns: camps.filter((c: any) => c.live).length }, totals_source: '/api/metrics',
       recent: plays.slice(-40).reverse().map((p: any) => ({ ...p, creative: db.creatives.find((x: any) => x.id === p.creative_id), presence: byPlay[p.id] || null })) } };
   }
 

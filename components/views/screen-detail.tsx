@@ -1,6 +1,6 @@
 'use client';
-import { HistoryNotice } from '@/components/views/history-notice';
-import React, { useEffect, useState } from 'react';
+import { DeliveryReport, useDeliveryReport } from '@/components/views/delivery-report';
+import React, { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/client';
 import { inr, fmtDate, cn } from '@/lib/utils';
 import { PageHead, SectionHead } from '@/components/ui/app-shell';
@@ -19,25 +19,28 @@ import { ScreenDiagnostics } from './screen-diagnostics';
 
 export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: string) => void; onChanged: () => void }) {
   const [d, setD] = useState<any>(null);
+  const currentId = useRef(id); currentId.current = id;
+  const report = useDeliveryReport({ screen: id });
   const [edit, setEdit] = useState(false);
   const [tab, setTab] = useState<'live' | 'config'>('live');
   const [f, setF] = useState<any>(null);
   const [error,setError] = useState(''), [busy,setBusy] = useState(false), [pairing,setPairing] = useState<any>(null);
 
   const load = () => api(`/screen/${id}`).then(x => {
+    if (currentId.current !== id) return;
     setD(x);
     setF({ min_creative_duration_s:1, max_creative_duration_s:600, ...x.screen, tagStr: Object.entries(x.screen.tags || {}).map(([k, v]) => `${k}:${v}`).join(', '),
       excStr: (x.screen.exclusions?.categories || []).join(', '), advExcStr:(x.screen.exclusions?.advertisers||[]).join(', '), from:x.screen.operating_hours?.from ?? x.config?.operating_hours?.value?.from ?? '09:00', to:x.screen.operating_hours?.to ?? x.config?.operating_hours?.value?.to ?? '21:00' });
   });
-  useEffect(() => { load().catch(e=>setError(e.message)); /* eslint-disable-next-line */ }, [id]);
+  useEffect(() => { setD(null); setF(null); setError(''); setEdit(false); setPairing(null); load().catch(e=>{if(currentId.current===id)setError(e.message);}); /* eslint-disable-next-line */ }, [id]);
 
   // live ticker
   useEffect(() => {
-    const t = setInterval(() => { api(`/screen/${id}`, undefined, { quiet: true }).then(x => setD((prev: any) => prev ? { ...prev, nowPlaying: x.nowPlaying, status: x.status, stats: x.stats, device:x.device, config_version:x.config_version, readiness:x.readiness, eligibility:x.eligibility, campaigns:x.campaigns, diagnostic_assignments:x.diagnostic_assignments, diagnostic_results:x.diagnostic_results, diagnostic_history:x.diagnostic_history } : x)).catch(() => {}); }, 3000);
+    const t = setInterval(() => { api(`/screen/${id}`, undefined, { quiet: true }).then(x => { if(currentId.current!==id)return; setD((prev: any) => prev ? { ...prev, nowPlaying: x.nowPlaying, status: x.status, stats: x.stats, device:x.device, config_version:x.config_version, readiness:x.readiness, eligibility:x.eligibility, campaigns:x.campaigns, diagnostic_assignments:x.diagnostic_assignments, diagnostic_results:x.diagnostic_results, diagnostic_history:x.diagnostic_history } : x); }).catch(() => {}); }, 3000);
     return () => clearInterval(t);
   }, [id]);
 
-  if (!d || !f) return error ? <p role="alert" className="text-destructive">{error}</p> : (
+  if (!d || d.screen.id !== id || !f) return error ? <p role="alert" className="text-destructive">{error}</p> : (
     <div className="space-y-3">
       <Skeleton className="h-9 w-64" />
       <Skeleton className="h-40 w-full" />
@@ -72,6 +75,10 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
     setEdit(false); await load(); onChanged(); }catch(e){setError((e as Error).message);}finally{setBusy(false);}
   };
 
+  const diagnosticTimes = d.recent.map((p:any)=>Date.parse(p.ended_at || p.started_at)).filter(Number.isFinite).sort((a:number,b:number)=>a-b);
+  const diagnosticDate = (at:number) => new Date(at).toLocaleString('en-IN', {timeZone:'Asia/Kolkata'});
+  const diagnosticWindow = diagnosticTimes.length ? `${diagnosticDate(diagnosticTimes[0])} – ${diagnosticDate(diagnosticTimes[diagnosticTimes.length-1])} IST` : 'No dated receipts loaded';
+
   return (
     <>
       <PageHead title={s.name}
@@ -79,7 +86,6 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
         back={{ label: 'My screens', go: 'screens', onGo }}
         actions={<><StatusBadge st={st} />{mayEdit && <Button variant="outline" size="sm" onClick={() => setEdit(!edit)}>Edit screen</Button>}</>} />
 
-      <HistoryNotice history={d.history} />
       {error && <p role="alert" className="mb-3 text-sm text-destructive">{error}</p>}
       {pairing && <PairingCode pairing={pairing} onClose={()=>setPairing(null)} />}
       <div className="mb-4 inline-flex rounded-lg border border-border bg-card p-0.5">
@@ -192,11 +198,11 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
       {mayEdit && <ScreenDiagnostics screenId={id} device={d.device} assignments={d.diagnostic_assignments || []} results={d.diagnostic_results || []} history={d.diagnostic_history} onChanged={load} />}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Live campaigns" value={d.stats.liveCampaigns} hint={`${s.advertiser_slots} distinct-advertiser limit`} />
-        <Stat label="Play reports today" value={d.stats.playsToday} hint={`${d.stats.plays} reports loaded`} />
-        <Stat label="Avg people / play" value={d.stats.avg === null ? '—' : d.stats.avg.toFixed(1)} hint={`${d.stats.measured} measured`} />
-        {mayPrice && <Stat label="Price" value={inr(s.slot_price_month)} hint="per advertiser per month" />}
+        <Stat metric="live_campaign_count" period={{from:'',to:'',label:'Current loaded records'}} label="Live campaigns" value={d.stats.liveCampaigns} hint={`${s.advertiser_slots} distinct-advertiser limit`} />
+        {mayPrice && <Stat metric="advertiser_monthly_price" period={{from:'',to:'',label:'Current loaded records'}} label="Price" value={inr(s.slot_price_month)} hint="per advertiser per month" />}
       </div>
+
+      <DeliveryReport report={report} screens={[s]} campaigns={d.campaigns} creatives={d.campaigns.flatMap((c:any)=>c.creatives??[])} />
 
       <SectionHead hint={`· ${d.campaigns.length} total, ${d.campaigns.filter((c: any) => c.live).length} live`}>Campaigns on this screen</SectionHead>
       <DataTable
@@ -205,14 +211,17 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
           { label: 'Creatives', render: (c: any) => <div className="flex gap-1.5">{c.creatives.map((cr: any) => <Thumb key={cr.id} id={cr.youtube_id} w={58} />)}</div> },
           { label: 'Dates', render: (c: any) => <span className="font-mono text-[12px] text-muted-foreground">{c.starts_at}<br />→ {c.ends_at}</span> },
           { label: 'Status', render: (c: any) => c.live ? <Badge variant="onair" blip>live</Badge> : <Badge variant="muted">{c.status}</Badge> },
-          { label: 'Reports here', num: true, render: (c: any) => <b>{c.plays}</b> },
-          { label: 'Avg people', num: true, render: (c: any) => c.avg === null ? <span className="text-muted-foreground">—</span> : <b>{c.avg.toFixed(1)}</b> },
-          ...(mayPrice ? [{ label: 'Budget', num: true, render: (c: any) => { const p = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
+          { label: 'Paid plays · selected dates', num: true, render: (c: any) => report.data?.byCampaign[c.id]?.plays_rendered ?? (report.data?.coverage.complete ? 0 : '—') },
+          { label: 'People / measured paid play', num: true, render: (c: any) => { const r = report.data?.byCampaign[c.id]; return r?.presence_n ? (r.presence_sum / r.presence_n).toFixed(1) : '—'; } },
+          ...(mayPrice ? [{ label: 'Lifetime budget used', num: true, render: (c: any) => { const p = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
             return <div className="flex flex-col items-end gap-1"><span className="whitespace-nowrap">{inr(c.accrued_spend)} / {inr(c.committed_budget)}</span><Progress value={p} hot={p >= 80} className="w-20" /></div>; } }] : []),
         ]}
-        rows={d.campaigns} rowId={(c: any) => c.id} exportName="screen-campaigns" empty="No campaigns booked on this screen yet" />
+        rows={d.campaigns.map(({plays,avg,...campaign}:any)=>campaign)} rowId={(c: any) => c.id} exportName="screen-campaigns" empty="No campaigns booked on this screen yet" />
 
-      <SectionHead>Recent plays</SectionHead>
+      <details className="mt-5 rounded-xl border border-border p-4">
+      <summary className="cursor-pointer text-sm font-semibold">Play diagnostics · {d.recent.length} newest available receipts</summary>
+      <p className="mb-2 mt-3 text-xs text-muted-foreground">Loaded receipt window: {diagnosticWindow}. This limited window is independent of the selected report dates.</p>
+      <p className="mb-3 text-xs text-muted-foreground">Recent diagnostic records only. This table is not full delivery history and does not determine the report totals above. Reports can include incomplete or non-billable playback; each row shows its evidence.</p>
       <DataTable
         cols={[
           { label: 'When', render: (p: any) => <span className="font-mono text-[12px] text-muted-foreground">{fmtDate(p.ended_at, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span> },
@@ -221,7 +230,8 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
           {label:'Evidence',render:(p:any)=><span className="text-xs text-muted-foreground">{p.source==='seed'?'synthetic demo':p.source||'unknown source'} · {p.billable===true?'billable':p.billable===false?'non-billable':'billing unverified'}<br/>{p.presence?.measured? p.presence.model_ver||'model unspecified':'not measured'}</span>},
           { label: 'People present', num: true, render: (p: any) => p.presence?.measured ? <b>{p.presence.avg_persons.toFixed(1)}</b> : <span className="text-muted-foreground">not measured</span> },
         ]}
-        rows={d.recent} rowId={(p: any) => p.id} exportName="screen-plays" empty="No plays on this screen yet" />
+        rows={d.recent} rowId={(p: any) => p.id} exportName="limited-recent-diagnostics" empty="No plays on this screen yet" />
+      </details>
       </>)}
     </>
   );
