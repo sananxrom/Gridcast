@@ -3235,3 +3235,44 @@ Failed result writes keep the exact payload in memory, retry it and prevent pair
 **Files:** `app/player/page.tsx`, `lib/player-diagnostics.ts`, `lib/player-media-cache.ts`, `tests/player.browser.cjs`, `tests/player-diagnostics.browser.cjs`, `tests/player-media-cache.browser.cjs`, `gridcast-research/23-player-surface-cleanup.md`, `AI-LOG.md`.
 **Commit:** Prepared on `codex/gridcast-trust-layer-wp5` from `80fef42`; this entry travels with the implementation commit. Claude's concurrent append-only entries are preserved. Unrelated `CLAUDE.md` and untracked material remain untouched.
 **Outcome/Open:** Release A built and verified locally, ready for review. Not pushed/deployed; last verified deployed application remains `13ee21c` (not rechecked this turn). Authorized export is temporarily unavailable until Release B. Commercial blocked-evidence recovery is an explicit next fix, not solved here. Audio/captions and physical-device validation remain open. Shared indexes will be refreshed after this entry; generated indexes stay outside Git.
+
+### 2026-09-25 21:38 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Release A (f566bbb) reviewed: no blocker to push and deploy
+
+**Asked:** Sanan: "check now, good to push deploy", then "build should be fine right?"
+**Checked against doc 23's Release A acceptance list, source read this turn at `f566bbb`:**
+- No public export, diagnostic clear or credential deletion. `grep` finds no `exportQueue`, "Export saved",
+  "Clear saved diagnostic", `setCredential(null)` or unscoped `queuedPlays()` in `app/player/page.tsx`.
+  The only unscoped call left is inside `strandedPlays` (`lib/player-queue.ts:60`), which nothing in the player
+  calls.
+- "Enter a new pairing code" renders only when `rejected` (`:606`) and opens the form through `openRecovery`
+  (`:549`), which clears nothing. Retry is offered beside it. The message at `:97` reads "This device is not
+  currently authorized. Retry or enter a new pairing code."
+- Commissioning is `!rejected && (overlayEnabled || diagnosticActive)` (`:595`); `overlayEnabled` comes from
+  `d.config.diagnostics_overlay === true` (`:214`).
+- The camera `<video>` stays mounted (`:610`, `tabIndex={-1}`). Its container fades by opacity and
+  `aria-hidden` (`:609`). The retry button and stats render only when `commissioning` (`:611`, `:613`).
+**Runs here, on the Mac:**
+- `tsc --noEmit` exit 0.
+- `node --test tests/*.test.cjs`: 228 tests, 224 pass, 0 fail, 4 skip.
+- `node --test tests/player-diagnostics.browser.cjs tests/player-media-cache.browser.cjs
+  tests/player.browser.cjs`: 46 tests, 46 pass, 0 fail. This matches Codex's 46.
+- Not valid: I also started `admin`, `demo`, `device-queue`, `reporting` and `screen-readiness` browser suites.
+  Every admin case failed within about a second, because `tests/admin.browser.cjs:5` expects a running app at
+  `http://127.0.0.1:4012` and I had none. That is my setup, not the code. I stopped the run. These suites were
+  not verified by me; Codex should run them against its usual server before deploying, as it did for earlier
+  releases.
+- Not run: production build and physical device.
+**Verdict:** no blocker. Release A does what doc 23 agreed. The commercial blocked-row capacity defect from
+my 21:13 entry is pre-existing, which Codex agrees with, and it is not made worse by A. Codex's 21:17
+counter-position on it (reserve capacity transactionally; never present unrecorded paid playback as
+delivered) is reasonable, and I accept it as the basis for the follow-up.
+**Files:** `AI-LOG.md`. Not committed.
+
+
+### 2026-09-25 21:39 IST · GPT-6 (Codex desktop) · Release A approved for push and Firebase deployment
+
+**Asked:** Read the 21:38 review, then push and deploy.
+**Did:** Read and preserved Claude's review. Confirmed application source remains exactly `f566bbb`; only shared documentation and unrelated local files differ. Applied the Firebase App Hosting skill. Ran the previously unverified admin, demo, device-queue, reporting and screen-readiness browser suites against an isolated production-build server with memory-only storage: **20 passed, zero failed/skipped**. Their API fixtures do not mutate production. Existing frozen-source evidence remains 46 player/storage browser passes, 224 unit/API passes with four emulator-dependent skips, TypeScript and production build successful; Claude independently repeated the 46 browser cases and unit/type checks.
+**Deployment precheck:** Firebase project `gridcast-508011`, existing `gridcast-backend`, Singapore. Current build `build-2026-09-25-003` is READY at 100% traffic, source `13ee21c`. Signed-in deployment access works. Plan is exact reviewed application commit `f566bbb`; no main merge, resource/location change or Vercel action.
+**Failure:** The skill reference suggests `apphosting:rollouts:list`, which Firebase CLI 15.26.0 does not implement. Used read-only App Hosting API functions from the installed authenticated CLI instead. A sandboxed CLI help call also emitted an update-config permission warning; approved normal CLI execution worked. No secret values printed.
+**Files/commit:** `AI-LOG.md` only for this pre-release entry and Claude's review; application `f566bbb`. Push and rollout are next; this entry does not yet claim production success.
