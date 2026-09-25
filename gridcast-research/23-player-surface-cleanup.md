@@ -2,9 +2,9 @@
 
 **Updated:** 25 Sep 2026 · **Review base:** `80fef42`
 
-**Last verified deployment:** `f566bbb` / `build-2026-09-25-004`; Firebase rollout succeeded, build READY, 100% traffic. Verified 2026-09-25 21:45 IST.
+**Last verified deployment:** `34bf878` / `build-2026-09-25-005`; Firebase rollout succeeded, build READY, 100% traffic. Verified 2026-09-25 22:23 IST.
 
-**Status:** Release A deployed and smoke-tested on Firebase. Release B is implemented and tested locally, not deployed. Audio and caption/control changes remain planned.
+**Status:** Release B deployed and smoke-tested on Firebase, including Release A. The required Mumbai Firestore index is READY. Audio and caption/control changes remain planned.
 
 **Decision record:** [AI-LOG.md](../AI-LOG.md), Codex/Claude reviews from 19:06 through 20:49 IST on 25 Sep.
 
@@ -316,7 +316,7 @@ an absolute guarantee, or block the only interaction that can recover playback.
 2. Release A verified: lifecycle, authorization-state, queue/pairing and browser checks, TypeScript and
    production build passed. The reviewed commit was released through the existing Firebase workflow.
    The temporary export limitation remains documented below.
-3. Release B scoped maintenance is implemented locally; see §8 for the release prerequisite and verification boundaries.
+3. Release B scoped maintenance is deployed; see §8 for index readiness and verification boundaries.
 4. Review audio configuration/fallback and then caption/control changes as separate diffs after A. They need
    not wait for B and must not expand A's acceptance scope. Heartbeat-driven refresh remains a follow-up.
 5. Record actual results and exact release SHAs in AI-LOG.md. Keep source review, automated tests, desktop
@@ -330,8 +330,8 @@ redefine delivery acceptance, billing, measurement or browser-storage durability
 ## 7. Release A implementation and deployment handoff — 25 Sep 2026
 
 The implementation is in `app/player/page.tsx` (player version `gridcast-web/0.5.0`),
-`lib/player-diagnostics.ts` and `lib/player-media-cache.ts`. Application commit `f566bbb` is live on Firebase
-through `build-2026-09-25-004`. Health confirmed Firestore database `gridcast`; a fresh unpaired browser
+`lib/player-diagnostics.ts` and `lib/player-media-cache.ts`. Application commit `f566bbb` was deployed on Firebase
+through `build-2026-09-25-004`, and is now superseded by Release B below. Health confirmed Firestore database `gridcast`; a fresh unpaired browser
 loaded the player and version `gridcast-web/0.5.0` without page errors or HTTP 5xx responses. This was a
 read-only production smoke check, not a paired-device or venue-camera test.
 
@@ -360,13 +360,14 @@ Validation uses the unit/API suite, real Chromium browser integration tests, Typ
 build; exact outcomes and commit references are recorded in AI-LOG.md. Browser tests exercise the pinned
 TensorFlow/COCO-SSD model with a synthetic camera, plus deterministic frame/count cases. They do not prove
 venue counting accuracy, physical Android/WebView behavior, or Safari/Brave-specific behavior. Those checks
-remain open. Authorized export remains unavailable on the current production Release A until Release B is deployed; audio remains unchanged.
+remain open. Authorized export is now available through the scoped Release B maintenance flow below; audio remains unchanged.
 
 
-## 8. Release B local implementation handoff — 25 Sep 2026
+## 8. Release B implementation and deployment handoff — 25 Sep 2026
 
-**Application version:** `gridcast-web/0.6.0`. This section describes local source, not a production release.
-The verified live application at the top of this document remains Release A.
+**Application version:** `gridcast-web/0.6.0`, commit `34bf878`. Deployed through Firebase
+`build-2026-09-25-005`, rollout SUCCEEDED, build READY, 100% traffic. The prior Release A build
+`build-2026-09-25-004` / `f566bbb` remains the known previous release.
 
 ### Operator workflow
 
@@ -426,14 +427,20 @@ capacity defect is a separate follow-up. Audio, captions and YouTube hover/chang
 
 ### Release prerequisite and validation
 
-**Before deploying B**, deploy and wait for the new Firestore composite index:
-`maintenance_grants`: `screen_id ASC`, `expires_at ASC` (`firestore.indexes.json`). Then release the reviewed
-application commit through the existing Firebase workflow. No cloud resource or index was changed in this
-build task.
+The committed composite index `maintenance_grants`: `screen_id ASC`, `expires_at ASC`
+(`firestore.indexes.json`) was created in the existing Mumbai `gridcast` database and confirmed READY
+before deployment. Production index ID: `CICAgPi9lIEK`, COLLECTION scope, DENSE. A read-only query
+using both filters succeeded. No other index was added or removed.
+
+After rollout, production health returned HTTP 200 with `store: firestore`, `database: gridcast`.
+A fresh isolated Chrome context loaded `/player` and confirmed the live `gridcast-web/0.6.0` bundle;
+`/player/maintenance` returned HTTP 200 and showed the code gate with no export action before authorization.
+Both pages had no page errors or HTTP 5xx responses. These were read-only checks: production grants,
+exports, device pairing/replacement and retained evidence were not modified.
 
 Tests cover real browser IndexedDB/service-worker/lock behavior, dashboard and kiosk UI, device-specific
 exports, delayed responses after closure, planned replacement, and full-player pause/finalize/resume.
 Backend tests include cross-process one-time redemption and rate limits using the Firestore emulator.
-Exact test counts and source/commit references are in `AI-LOG.md`. Emulator success does not verify that
-the production composite index is ready. Tests do not establish OS download completion, physical Android
+Exact test counts and source/commit references are in `AI-LOG.md`. Production index readiness and
+the read-only query were verified separately from emulator results. Tests do not establish OS download completion, physical Android
 behavior, Safari/Brave-specific behavior, or camera accuracy at a venue.
