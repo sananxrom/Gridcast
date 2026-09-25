@@ -1926,3 +1926,36 @@ session, so it needs removing by hand or on the next cleanup.
 **Recovery and limits:** The first skills clone failed with an HTTP/2 disconnect; retrying the same command with command-local HTTP/1.1 succeeded. Initial search was slow while its public tokenizer data downloaded, then succeeded. An attempted `symdex status --help` showed there is no such CLI subcommand; freshness is checked through MCP `get_index_status`. A direct SQLite inspection initially failed under the filesystem sandbox; authorized read-only inspection succeeded. A temporary stale-index warning correctly identified a concurrent `AI-LOG.md` append, rather than stale application source. Refresh the index after final log/commit changes and before future work. No watcher or hosted embedding service was enabled.
 **Files:** `AGENTS.md` records SymDex-first retrieval alongside codebase-memory; `.gitignore` excludes generated `.symdex/` directories; `AI-LOG.md` records setup and failures. Preserve Claude's existing unstaged `CLAUDE.md` edits and shared-log entries. No application code or deployment changed.
 **Outcome:** Installed, indexed and tested. Restart Codex to load the new MCP server and skill into a fresh session; the CLI works now. Base HEAD `def4198`; deployed application remains `725b90f`.
+
+### 2026-09-25 10:22 IST · claude-opus-5 (Cowork) · SymDex closed out on the Cowork side
+
+**Read Codex's 10:15 entry.** SymDex 0.1.26 is installed on the Mac at `/Users/sanan/.local/bin/symdex`,
+venv at `~/.local/share/symdex/venv`, index at `~/.symdex`, registered as Codex MCP server `symdex`.
+`gridcast` indexed from `/Users/sanan/Downloads/gc`: 240 files, 2,146 symbols, embeddings off, zero errors.
+That is exactly where my 06:04 entry recommended it go, so nothing further is needed from me.
+
+**I cannot reach it, and should not try.** `/Users/sanan/.local/bin` and `/Users/sanan/.symdex` are outside
+the single connected folder, same boundary as `codebase-memory-mcp`. The Cowork-side attempt is abandoned:
+the container install indexes a staged snapshot that goes stale the moment Codex pushes, and the classifier
+denial on `symdex index` stands unchallenged.
+
+**Division of retrieval, so neither of us re-litigates it:** Codex uses SymDex (and codebase-memory) on the
+Mac against live files. Cowork uses `codebase-memory-mcp` in the device VM against the same live mount —
+procedure in `CLAUDE.md` under "From Cowork (cloud sessions)". Two tools, two hosts, one source tree. No
+shared index in either direction; `AI-LOG.md` remains the only shared memory.
+
+**Still to clean up:** `_scratch/gc-src.tgz` (546 KB), left by my staging attempt. Deletion is disabled for
+this session.
+**Outcome:** Closed. No source changes, tests, seed, deployment or push.
+**Files:** `AI-LOG.md`. Application `725b90f`.
+
+
+### 2026-09-25 10:35 IST · GPT-6 (Codex desktop) · Shared codebase-memory snapshot enabled
+
+**Asked:** Make the code index available through the connected `gc` folder so Claude can use it. User approved the proposed shared codebase-memory snapshot workflow.
+**Did:** Published `.codebase-memory/graph.db.zst` with `artifact.json` in the live `gc` folder, initially about 1.7 MiB compressed. These generated files remain Git-ignored. Added executable `tools/publish-code-index.sh`; it resolves the repository from its own path and supports `CBM_BIN` for the Linux executable on Cowork. Updated `AGENTS.md` and `CLAUDE.md`, preserving Claude's existing installation and research-numbering notes. Each host keeps its own working SQLite cache; the shared artifact transfers through the connected folder, not Git.
+**Important correction from source review:** Version 0.11.0 rewrites an existing artifact even with `persistence=false` (`src/pipeline/pipeline.c`, `export_after_publish`). Therefore that flag is not a read-only-consumer guarantee, contrary to the initial proposed setup. Both agents now use the helper, which acquires an atomic shared-folder directory lock before refresh and releases it on exit. Do not run raw indexing/background watchers concurrently against this shared artifact. Stale locks retain host/pid/time in an owner file and require checking the other session before removal.
+**Verification:** Published artifact successfully; confirmed Git ignores it; shell syntax passed. Simulated a competing refresh and verified exit 75 with the artifact hash unchanged. A copied source tree at a different path bootstrapped successfully as independent project `gridcast-sharing-check`, and its graph query resolved `deviceRoute` at `lib/devices.ts:57`. The test confirmed that refresh can rewrite artifact metadata, motivating the shared lock. Removed only the disposable test index afterward. Actual Cowork-side import remains for Claude to verify in its own session; this Mac test does not claim Linux execution. Existing partial JSX parse at `components/ui/app-shell.tsx:99` remains.
+**Failure logged:** The first verification attempted a separate `CBM_CACHE_DIR`; the tool rejected it because an active same-account daemon used another cache. Did not stop or bypass that daemon. Switched to an independent project in the existing cache and a temporary source path.
+**Scope:** Sharing only codebase-memory for now. SymDex remains local on the Mac; no attempt to bypass Cowork's separate SymDex restriction or share Mac binaries. No deployment or application source changes. `AI-LOG.md` remains shared decision/history memory. Refresh the snapshot after final log and commit changes.
+**Files/base:** `tools/publish-code-index.sh`, `AGENTS.md`, `CLAUDE.md`, `AI-LOG.md`; base `e20e528`; deployed application still `725b90f`. This supersedes earlier log descriptions that there was no shared index file.

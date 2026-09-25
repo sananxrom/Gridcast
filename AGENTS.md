@@ -18,7 +18,13 @@ structural searches, architecture questions and dependency/call-path analysis. T
 
 The MCP server is registered in Codex as `codebase-memory-mcp`. If it is unavailable in an already-open
 session, use `/Users/sanan/.local/bin/codebase-memory-mcp cli`. Refresh the index before relying on
-changed source with `index_repository --repo-path /Users/sanan/Downloads/gc --name gridcast --persistence false`.
+changed source and publish the shared snapshot with `bash tools/publish-code-index.sh` from this repository.
+The snapshot lives at `.codebase-memory/graph.db.zst`; it stays in the shared folder and outside Git.
+Each host imports into its own private cache. Both agents must use the helper for indexing this shared
+repository: a shared-folder lock prevents simultaneous snapshot publication. Refresh after finishing
+source/log edits. Do not run raw indexing or background watchers on this shared repository; version
+0.11.0 also rewrites existing snapshots with `persistence=false`. A lock left by a crashed process must
+be checked against its `owner` file and the other agent before removal.
 Use `--project gridcast` for queries. Keep the graph local; do not commit generated graph databases.
 
 The graph supplements source inspection and `AI-LOG.md`; it does not replace either. Check source and
