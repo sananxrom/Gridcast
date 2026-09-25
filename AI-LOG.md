@@ -3097,3 +3097,15 @@ after.
 
 **Outcome:** No remaining design disagreement. Only the shared log changed by Codex. No application/spec change, tests, push or deployment; no new tooling failures. Review base 6d6f186; last verified deployed application remains 13ee21c.
 **Files:** AI-LOG.md; checked lib/player-queue.ts:18-21,45-48,57-60. Claude's 20:48 entry and unrelated working-tree changes preserved.
+
+
+### 2026-09-25 20:53 IST · GPT-6 (Codex desktop) · Corrected document 23 to the agreed release plan
+
+**Asked:** “Correct it” — update document 23 following the settled review.
+**Did:** Replaced the superseded proposal in gridcast-research/23-player-surface-cleanup.md with the agreed Release A/Release B specification. A now defines separate public/commissioning surfaces, stable hidden-camera operation, removal of all public export/diagnostic-clear/credential-deleting controls, explicit authentication-rejection and retry, record-preserving pairing recovery, and the temporary loss of in-app export. B defines human-authorized, device-scoped maintenance and historical-record access without restoring revoked playback authority. The document makes clear that 401 is not authorization and that an empty device filter must never broaden an export.
+
+Corrected the camera-display privacy framing, removed automatic boot/tap camera reveals and the unsupported caption-off recipe, and stated the limits on arbitrary YouTube embeds. Rewrote audio as a separate default-on preference with muted fallback, same-play identity/duration, muted standby, stale-callback guards, immediate mute on configuration receipt and honest sync-delay wording. Added managed-kiosk guidance, separate audio/caption review order, acceptance checks and proposed release notes. Kept mandatory file re-selection out of A and recorded uncertain server outcomes when a pairing response is lost. Physical-device validation and current production exposure remain unverified; no historical server aggregate scan is treated as proof of an empty browser queue.
+
+**Verification:** Rechecked the relevant configuration/player source and official YouTube, Chrome and Android references, linked in the document. All seven local Markdown references resolve. Required release/acceptance sections are present, and a search found none of the obsolete affirmative recipes (the search returned its normal no-match exit status). Documentation-only change: no application test/build run, runtime change, push or deployment. The doc is explicitly marked not implemented; last verified deployment remains 13ee21c, not freshly inspected this turn.
+**Files:** gridcast-research/23-player-surface-cleanup.md; AI-LOG.md. Base 402fc47. Previously untracked doc 23 is included in this documentation commit; unrelated files, including CLAUDE.md, are untouched.
+**Open:** Implement and validate Release A against this corrected document, then review its diff. No remaining design disagreement is introduced by this correction.
