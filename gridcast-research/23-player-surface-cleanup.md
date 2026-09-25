@@ -4,7 +4,7 @@
 
 **Last verified deployment:** `f566bbb` / `build-2026-09-25-004`; Firebase rollout succeeded, build READY, 100% traffic. Verified 2026-09-25 21:45 IST.
 
-**Status:** Release A deployed and smoke-tested on Firebase. Release B, audio and caption/control changes remain planned.
+**Status:** Release A deployed and smoke-tested on Firebase. Release B is implemented and tested locally, not deployed. Audio and caption/control changes remain planned.
 
 **Decision record:** [AI-LOG.md](../AI-LOG.md), Codex/Claude reviews from 19:06 through 20:49 IST on 25 Sep.
 
@@ -316,7 +316,7 @@ an absolute guarantee, or block the only interaction that can recover playback.
 2. Release A verified: lifecycle, authorization-state, queue/pairing and browser checks, TypeScript and
    production build passed. The reviewed commit was released through the existing Firebase workflow.
    The temporary export limitation remains documented below.
-3. Implement Release B's scoped maintenance separately; do not make the public-exposure fix wait for it.
+3. Release B scoped maintenance is implemented locally; see §8 for the release prerequisite and verification boundaries.
 4. Review audio configuration/fallback and then caption/control changes as separate diffs after A. They need
    not wait for B and must not expand A's acceptance scope. Heartbeat-driven refresh remains a follow-up.
 5. Record actual results and exact release SHAs in AI-LOG.md. Keep source review, automated tests, desktop
@@ -360,4 +360,80 @@ Validation uses the unit/API suite, real Chromium browser integration tests, Typ
 build; exact outcomes and commit references are recorded in AI-LOG.md. Browser tests exercise the pinned
 TensorFlow/COCO-SSD model with a synthetic camera, plus deterministic frame/count cases. They do not prove
 venue counting accuracy, physical Android/WebView behavior, or Safari/Brave-specific behavior. Those checks
-remain open. Authorized export remains unavailable until Release B; audio is still unchanged in Release A.
+remain open. Authorized export remains unavailable on the current production Release A until Release B is deployed; audio remains unchanged.
+
+
+## 8. Release B local implementation handoff — 25 Sep 2026
+
+**Application version:** `gridcast-web/0.6.0`. This section describes local source, not a production release.
+The verified live application at the top of this document remains Release A.
+
+### Operator workflow
+
+1. On the human's own device, open the screen dashboard and **Saved records and player maintenance**.
+   Select the exact current or historical device identity. Create a one-time maintenance code.
+2. In the browser holding the saved records, open `/player/maintenance` in a **new tab** and enter that code.
+   Do not move the full dashboard session to the kiosk. Keep existing player tabs open; reload older tabs
+   when prompted so they participate in evidence coordination. Do not clear browser storage.
+3. Review pending/blocked delivery counts and diagnostic evidence. **Export this identity's records**
+   requests a JSON download including original payloads, identities, timestamps and errors. It never
+   deletes or relabels records, and it never exports another identity's history.
+4. For a grant covering this browser's current identity, **Prepare replacement** pauses cooperating player
+   tabs, finalizes pending writes and attempts a bounded retry with the original playback token. The pause
+   spans review, export and acknowledgement. Check the downloaded file yourself; a browser download event
+   cannot prove a durable backup. Enter a separate destination pairing code to confirm replacement.
+5. Cancellation/closure releases the pause. Expiry, hidden maintenance tab, reload, offline state and loss
+   of issuer authorization close the local tools. Original evidence remains; failed or uncertain pairing
+   does not imply server rollback, and cannot guarantee that the original token is still valid.
+
+### Authorization and persistence
+
+- Dashboard paths: `GET/POST /screens/:screenId/maintenance` and
+  `POST /screens/:screenId/maintenance/:grantId/revoke`. All require an authenticated human with screen
+  capability in that screen's organization, or platform scope.
+- Kiosk paths: `POST /maintenance/redeem`, `/maintenance/check`, `/maintenance/export`,
+  `/maintenance/replace`, `/maintenance/close`. Sensitive operations require explicit organization,
+  screen and device identity matching the grant. The maintenance capability cannot authorize playback,
+  dashboard access, relabeled receipts or another identity's export.
+- Codes contain 16 random characters and are displayed in four groups. Only their SHA-256 digest identifies
+  the persisted grant; session credentials are also stored only as hashes. Redemption is transactional and
+  one-time across instances. The original ten-minute deadline never extends. Kiosk authority lives only
+  in memory; monotonic expiry is bounded using server-reported remaining time.
+- Issuer status, role, organization and auth-version are rechecked at redemption and sensitive operations.
+  Historical revoked devices can be recovered under valid human scope without a valid playback token.
+- Guessing budgets are transactional and persist even on denied requests: 120 attempts globally and ten
+  per client bucket per minute. There are 4,096 fixed hashed client buckets plus one global counter;
+  collisions conservatively throttle. This bounds public limiter storage rather than creating unlimited
+  records from arbitrary client identifiers. Audit rows never contain codes, tokens or exported payloads.
+- Active grant listing excludes expired history; expired grants are retained and do not consume the current
+  query's row allowance. This release does not add retention deletion or evidence-import/billing changes.
+
+### Local evidence coordination and limits
+
+Player tabs hold shared evidence locks. Maintenance requests an exclusive lock; a player releases only
+when active evidence has been finalized and pending writes have settled. Planned replacement keeps a
+memory-only pause lease until confirmation, cancellation or session closure. Export and replacement
+re-read identity-scoped evidence; changed evidence requires a fresh review/export rather than weakening
+the comparison. Release waits for in-flight work. Public pairing still needs its own valid code and uses
+its existing cross-tab pairing lock.
+
+The service worker probes open `/player` tabs for this coordination protocol. Older tabs fail closed with
+reload instructions; their absence from the lock API is not mistaken for safety. Maintenance requires
+Web Locks, BroadcastChannel and service-worker support. The browser controls local storage and can evict
+it; this feature does not promise durability after browser clearing, forced termination or OS failure.
+Exports do **not** free commercial or diagnostic capacity. The previously identified commercial blocked-row
+capacity defect is a separate follow-up. Audio, captions and YouTube hover/change chrome remain unchanged.
+
+### Release prerequisite and validation
+
+**Before deploying B**, deploy and wait for the new Firestore composite index:
+`maintenance_grants`: `screen_id ASC`, `expires_at ASC` (`firestore.indexes.json`). Then release the reviewed
+application commit through the existing Firebase workflow. No cloud resource or index was changed in this
+build task.
+
+Tests cover real browser IndexedDB/service-worker/lock behavior, dashboard and kiosk UI, device-specific
+exports, delayed responses after closure, planned replacement, and full-player pause/finalize/resume.
+Backend tests include cross-process one-time redemption and rate limits using the Firestore emulator.
+Exact test counts and source/commit references are in `AI-LOG.md`. Emulator success does not verify that
+the production composite index is ready. Tests do not establish OS download completion, physical Android
+behavior, Safari/Brave-specific behavior, or camera accuracy at a venue.

@@ -18,8 +18,10 @@ const bundle=()=>`const q={exports:{}};new Function('module','exports',${JSON.st
 const cache={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-media-cache.ts'))})(cache,cache.exports);
 const diagnostic={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-diagnostics.ts'))})(diagnostic,diagnostic.exports);
 const vision={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-vision.ts'))})(vision,vision.exports);
+const evidence={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-evidence-lock.ts'))})(evidence,evidence.exports);
 const player={exports:{}};const fixtureRequire=name=>{
  if(name==='react')return React;
+ if(name==='@/lib/player-evidence-lock')return evidence.exports;
  if(name==='@/lib/player-queue')return q.exports;
  if(name==='@/lib/player-media-cache')return cache.exports;
  if(name==='@/lib/player-diagnostics')return diagnostic.exports;
@@ -43,7 +45,7 @@ const player={exports:{}};const fixtureRequire=name=>{
  throw new Error('Unmapped browser test dependency '+name);
 };
 new Function('require','module','exports',${JSON.stringify(compile('app/player/page.tsx'))})(fixtureRequire,player,player.exports);
-window.fixtureQueue=q.exports;window.fixtureCache=cache.exports;window.fixtureDiagnostic=diagnostic.exports;
+window.fixtureEvidence=evidence.exports;window.fixtureQueue=q.exports;window.fixtureCache=cache.exports;window.fixtureDiagnostic=diagnostic.exports;
 ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(player.exports.default));`;
 async function harness(options={}) {
  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'gridcast-playback-test-'));
@@ -474,5 +476,39 @@ test('Release A diagnostic storage failure is visible without exposing tools or 
   assert.equal(h.requests.filter(r=>r.path==='/api/diagnostic/start').length,0);
   assert.equal(await h.page.getByRole('button',{name:/Export|Clear saved|Enter a new/}).count(),0);
   assert.equal(await h.page.locator('[data-role="commissioning-preview"]').getAttribute('aria-hidden'),'true');
+ }finally{await h.cleanup();}
+});
+
+
+test('Release B maintenance lease waits for active-player evidence, keeps playback paused and resumes after release', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({continuous:true});try{
+  await h.page.evaluate(()=>{
+   const original=fixtureQueue.enqueuePlay;window.fixtureOriginalWriter=original;
+   fixtureQueue.enqueuePlay=async(...args)=>{window.fixtureSaving=true;await new Promise(resolve=>window.fixtureFinishSave=resolve);return original(...args);};
+   window.fixtureLeasePromise=fixtureEvidence.holdPlayerEvidence(JSON.parse(localStorage.getItem('gc_device')).device_id).then(lease=>{window.fixtureLease=lease;});
+  });
+  await h.page.waitForFunction(()=>window.fixtureSaving===true);
+  assert.equal(await h.page.evaluate(()=>!!window.fixtureLease),false);
+  await h.page.evaluate(()=>{window.fixtureFinishSave();});await h.page.waitForFunction(()=>!!window.fixtureLease);
+  await h.page.evaluate(()=>fixtureEvidence.verifyPlayerTabs());
+  const saved=await h.page.evaluate(async()=>({rows:(await fixtureQueue.queuedPlays()).length,paused:document.querySelector('video[data-role="creative"][data-active="true"]').paused}));
+  assert.ok(saved.rows>=1);assert.equal(saved.paused,true);
+  await new Promise(r=>setTimeout(r,2300));
+  assert.equal(await h.page.evaluate(async()=>(await fixtureQueue.queuedPlays()).length),saved.rows);
+  await h.page.evaluate(()=>{fixtureQueue.enqueuePlay=window.fixtureOriginalWriter;window.fixtureLease.release();});
+  await h.page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.1;});
+ }finally{await h.cleanup();}
+});
+
+
+test('Release B replacement leaves an old player tab stopped after its maintenance lease releases', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({continuous:true});try{
+  await h.page.evaluate(async()=>{window.fixtureLease=await fixtureEvidence.holdPlayerEvidence(JSON.parse(localStorage.getItem('gc_device')).device_id);});
+  const requests=h.requests.filter(r=>r.path.startsWith('/api/playlist/')).length;
+  await h.page.evaluate(()=>{const previous=localStorage.getItem('gc_device'),next=JSON.stringify({token:'replacement-token',device_id:'replacement',screen_id:'replacement-screen'});localStorage.setItem('gc_device',next);window.dispatchEvent(new StorageEvent('storage',{key:'gc_device',oldValue:previous,newValue:next}));window.fixtureLease.release();});
+  await h.page.getByText('Pairing changed in another tab. Reload this player. Saved records remain on this device.',{exact:true}).waitFor();
+  await new Promise(r=>setTimeout(r,1200));
+  assert.equal(h.requests.filter(r=>r.path.startsWith('/api/playlist/')).length,requests);
+  assert.equal(await h.page.evaluate(()=>document.querySelector('video[data-role="creative"][data-active="true"]').paused),true);
  }finally{await h.cleanup();}
 });

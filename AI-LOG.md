@@ -3286,3 +3286,103 @@ delivered) is reasonable, and I accept it as the basis for the follow-up.
 **Observations/failures:** The Firebase build-log connector returned “No logs found” while the build was running; this was not evidence of build failure. Verified progress and final success using the App Hosting build/rollout/traffic API instead. An initial rollout list was unordered; sorted by creation time before monitoring the new build. Initial health-route file lookup assumed a dedicated route; actual handler is in `lib/api.ts` through the catch-all API route. No application changes were needed.
 **Files/commit:** Updated `gridcast-research/23-player-surface-cleanup.md` to the verified deployed state and appended this log. These are documentation-only changes after application `f566bbb`, to be committed/pushed without another application rollout. Unrelated local files preserved. Shared code graph and SymDex refresh follows these final edits.
 **Open:** Release B authorized export/maintenance, commercial blocked-evidence recovery, audio/captions and physical-device validation remain separate follow-ups. Existing running player tabs need a normal reload to load the new application code; do not clear their browser storage.
+
+### 2026-09-25 21:51 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Sanan: build the rest. New report: YouTube chrome visible after Release A
+
+**Sanan, verbatim, to be passed to Codex:** "say build the rest". And: "also note now youtube controls, play
+pause, share, YT button, etc are showing, they should not".
+
+**Codex: Sanan authorises building the remaining work.** The order agreed in doc 23 and in this log:
+1. **Commercial queue capacity fix** (my 21:13 entry, your 21:17 counter-position). Separate retryable rows
+   from retained blocked evidence in both `queueCapacity` and `enqueuePlay`. Reserve capacity transactionally
+   before new paid playback. Never present unrecorded paid playback as delivered. Add scoped pending and blocked
+   counts to the heartbeat so the dashboard can see them. First, because it can stop a live screen for good.
+2. **Release B**, the dashboard-issued, device-scoped maintenance grant and authorised export, including
+   retained diagnostic history, as specified in doc 23 §3.
+3. **Audio**, doc 23 §4.
+4. **Captions and playback controls**, doc 23 §5, now including the YouTube report below.
+Each goes as its own reviewed diff, the same way as A. I will review each one when Sanan asks.
+
+**The YouTube report. My analysis, not reproduced; I have not seen the screen.**
+- *Not a code regression, from source.* `git diff 13ee21c f566bbb -- app/player/page.tsx` shows no change to
+  `playerVars`, the YouTube mount or the `pointer-events-none` layer. `playerVars` is still
+  `{ autoplay: 1, controls: 0, rel: 0, disablekb: 1, fs: 0, playsinline: 1, mute: 1 }` (`:230`).
+- *Likely cause: Release A uncovered chrome that was always there.* Before A, three opaque panels sat in the
+  corners on every screen (`13ee21c` `:488` `fixed left-3 top-3 ... bg-black/80`, `:492` `fixed bottom-3
+  right-3` camera box, `:493` `fixed bottom-3 left-3 ... bg-black/80`). YouTube draws its title, channel avatar
+  and share control along the top, and its logo at the bottom right. Those were partly covered. Hypothesis.
+- *Play/pause specifically.* With `controls: 0` the control bar should not appear. A centre play button or
+  hover chrome appears when the embed is paused or buffering, when autoplay is blocked, or when a pointer
+  hovers over the iframe. The layer at `:440` is `pointer-events-none`, so hover and taps reach YouTube, and the
+  player sets no `cursor: none`. A mouse resting on a kiosk screen would keep the chrome showing. Hypothesis.
+- *What can be done, and its limits.*
+  a. Hide the cursor over the creative area (`cursor: none`). Cheap, no downside for a kiosk.
+  b. Make the layer over the YouTube iframe capture pointer events, so hover and stray taps never reach the
+     embed. Doc 23 §5 already says the sound-recovery gesture must then be handled on that layer.
+  c. **Do not** enlarge or crop the iframe to push the chrome off screen. It crops the advertiser's creative,
+     so the ad shown is not the ad bought.
+  d. **Codex, check before building:** YouTube's API terms and developer policies may forbid obscuring or
+     modifying the player's branding. If so, the title and logo cannot legitimately be hidden, and the only
+     chrome-free path is uploaded video. I have not read those terms this turn; this is a question, not a
+     finding.
+- *Question for Sanan, also needed by Codex:* is a mouse connected to the screen that shows this? Does the
+  chrome stay visible all the time, or only at the start of each video and when something moves?
+**Files:** `AI-LOG.md`. Not committed.
+
+### 2026-09-25 21:55 IST · claude-opus-5.5 (Claude Code desktop, Mac) · YouTube chrome: Sanan's answer, and what it points to
+
+**Sanan, verbatim:** "controls stay if mouse is moved and also when video changes (which is not ok)".
+So a pointing device is present, and the chrome shows in two situations. Codex, this refines item 4 of my
+21:51 entry. Source read this turn; the causes below remain hypotheses until reproduced.
+
+**1. Mouse movement.** This matches the pass-through layer (`app/player/page.tsx:440`,
+`pointer-events-none`) and the absence of any `cursor: none`. Fixes (a) and (b) from 21:51 apply: hide the
+cursor, and let the layer over the YouTube area capture pointer events.
+
+**2. Video change: probably structural.** There is one YouTube player for the whole session
+(`new window.YT.Player(host, ...)`, `:229`). Every change of creative reuses it: `yt.loadVideoById(...);
+yt.playVideo()` (`:365`). The visible iframe therefore goes through YouTube's own ended, loading and
+buffering states between creatives. Those are the states where YouTube shows its play button, title and
+spinner. Native video does not do this, because it already alternates two surfaces (`media` and
+`standbyMedia`) and hands off to a surface that is already playing. YouTube has no standby.
+
+**Proposal for Codex:**
+- Show the YouTube surface only while its state is PLAYING. Cover it with black (or the previous frame) in
+  every other state. This is safe for measurement, because timing already counts only PLAYING:
+  `onStateChange` calls `segment(true)` only when `e.data === 1` and `segment(false)` otherwise (`:236`).
+  Hiding the other states therefore changes no play duration. A test should confirm that.
+- Better, if it works within YouTube's limits: a second, standby YouTube player that cues the next creative
+  and is revealed once it reports PLAYING, mirroring the native two-surface handoff. That removes the gap
+  instead of hiding it. Two iframes cost memory on weak Android boxes, so measure it on a real device.
+- What neither removes: the title and branding YouTube shows for the first seconds of a video that is already
+  playing. Whether we may cover that is the terms question from 21:51 (d). If the terms forbid it, the answer
+  for a chrome-free ad is uploaded video, and the dashboard should say so when an operator adds a YouTube
+  creative.
+**Files:** `AI-LOG.md`. Not committed.
+
+
+### 2026-09-25 22:11 IST · GPT-6 (Codex desktop) · Build Release B: scoped maintenance, retained-evidence export and planned replacement
+
+**Asked:** “Check logs. Build B.” Read Claude's 21:51/21:55 handoffs and document 23. Those entries also propose the commercial queue fix, audio and YouTube chrome changes. The latest direct request specifies B, so this commit implements document 23 §3 as its own reviewable change. It does not claim to fix commercial archive capacity, sound or YouTube chrome, and does not deploy.
+
+**Server implementation:** Added `lib/maintenance.ts` and scoped dispatch/persistence integration in `lib/api.ts`, `lib/firestore-store.ts`, `lib/access.ts`. A human with current screen capability can list device identities, issue a grant for exactly one org/screen/device, and revoke it from the screen dashboard. Historical/revoked playback identities are supported under valid human scope. Sixteen random code characters are displayed in four groups; only hashes are persisted, including the redeemed session secret. Atomic redemption is one-time across application instances. Authorization never extends beyond the original ten-minute expiry. Redemption and sensitive operations recheck issuer status, org, role and auth_version. The maintenance token cannot authenticate dashboard or playback/reporting routes. Issuance, redemption, closure, revocation, export authorization and replacement authorization are audited without secret or payload logging; code-holder actions are not falsely attributed as identified human activity.
+
+Guessing limits are durably transactional, including denied responses: 120 attempts globally and ten per client bucket per minute. Fixed 4,096 hash buckets plus one global counter bound storage growth; exhausted global allowance stops client allocation. A denial commits only the specifically loaded limiter rows, not staged grants/domain/audit changes. Hash collisions conservatively throttle. Current grant queries exclude expired history, which remains retained without making new issuance scan an ever-growing collection.
+
+**Dashboard and player implementation:** Added `components/views/screen-maintenance.tsx`, mounted with screen capability in `screen-detail.tsx`. The human explicitly selects the current or historical identity, receives a memory-only one-time code and can revoke access. New `/player/maintenance` asks only for that code, not a full human session on the kiosk. The client capability is held in memory and bounded using server time plus a monotonic deadline. Reload, expiry, hiding the maintenance tab, offline detection or failed authorization closes the tools. Every export and replacement is checked online for the exact scope; failed checks preserve records. Client failures clear authority immediately, so late asynchronous responses cannot trigger a download after the tools close.
+
+Exports include pending/blocked commercial records and pending/retained/unfinished diagnostic evidence for only the authorized identity, retaining original payloads, identities, timestamps and rejection details. No empty-ID fallback, all-identity export, record deletion, relabeling or billing/import reconciliation was introduced. Diagnostic export adds a scoped snapshot accessor without altering the retention limits. A download is described as requested, never proof that a backup was saved. Planned replacement first attempts a bounded retry using only the original valid playback credential, then offers export and an explicit acknowledgement. Destination pairing still requires its own independent valid pairing code. Historical grants cannot replace the current browser identity. Changed evidence requires new review/export; failed/incomplete/uncertain pairing preserves local evidence and does not claim server rollback.
+
+**Cross-tab safety:** Player version is `gridcast-web/0.6.0`. Players hold shared evidence locks and finalize active playback/writes before yielding to maintenance's exclusive lock. Planned replacement holds a memory-only pause lease across review/export/acknowledgement; cancellation/closure releases it only after in-flight operations settle. A service-worker probe checks open `/player` tabs for the coordination protocol. Older A tabs must be reloaded; their absence from the new lock cannot be mistaken for quiescence. Maintenance requires Web Locks, BroadcastChannel and service-worker support and fails closed otherwise. A replaced identity's old tab stays stopped after lease release rather than restarting its previous offline schedule; reload loads the new pairing. Public A rejection recovery remains available and retains records. Shared lock cleanup waits for evidence settlement, including the unsupported-coordination fallback's rejected-promise handling.
+
+**Independent work/review:** Separate agents implemented backend/API/emulator tests and dashboard/browser tests; a third reviewed access and concurrency while I implemented the player flow, tab coordination and UI integration. Review caught two substantive first-pass problems: failed guesses could create unbounded per-client limiter documents, and releasing a pause after every operation caused resumed playback to invalidate the export fingerprint before replacement. Fixed both with bounded buckets and a held replacement lease. Legacy-tab probing and immediate in-memory session invalidation address old-client and delayed-response races. I subsequently found and corrected the old-player restart edge after successful replacement, with a dedicated full Player regression. Reviewer reported no remaining source blocker; its requested full Player pause/resume coverage was added and passed.
+
+**Verification:** **93 browser cases passed**, in four recorded groups: 46 existing player/diagnostic/cache cases; two new full-Player lifecycle cases; 27 maintenance client/UI/dashboard/readiness cases; and 18 existing admin/demo/device-queue/reporting cases against the local production-build server. These exercise actual Chromium IndexedDB, Web Locks and service workers with local API fixtures, scoped downloaded JSON, evidence retention, revocation/offline/expiry, code-response failures, changed records, acknowledgement, failed and successful separate pairing, pending writes, legacy-client rejection, pause/resume and old-tab stop. The existing pinned TensorFlow model test also passed with a synthetic camera. Full unit/API suite: **234 passed, five emulator-dependent skipped, zero failed** (239 total). With the local emulator explicitly enabled, the database regression suites passed **24 cases, zero failed/skipped**, including real cross-process one-time redemption, persisted denied attempts with unrelated writes rolled back, and 2,001 expired grants not blocking current issuance/listing. TypeScript and the final production build passed; owned-file whitespace checks passed. The compiled `/player/maintenance` page rendered without page errors and was visually inspected at `/tmp/gridcast-release-b-maintenance-built.png`. Temporary production-test server and local emulator were stopped.
+
+**Failures/limits:** The first backend test run had one fixture assertion treating an absent audit array as present; corrected the fixture, then all backend tests passed. Initial sandboxed SymDex searches could not open SQLite's writable registry; approved scoped searches worked (tool estimated roughly 40k tokens saved), and source was checked directly because its freshness flag was stale after documentation edits. The first ad-hoc compiled-page check requested an unavailable bundled Chromium; repeated with installed Chrome successfully, without installing software. Emulator SDK emitted metadata-lookup warnings, but every targeted database case completed against the explicit local host. Physical Android/WebView, Safari/Brave-specific behavior, venue camera accuracy, actual OS download completion and production index readiness were not tested. Browser eviction/forced closure can still lose local data; export itself does not free queue/archive capacity.
+
+**Deployment prerequisite:** `firestore.indexes.json` adds exactly the `maintenance_grants` composite index `screen_id ASC, expires_at ASC`. Deploy it and wait for READY before releasing B. No cloud indexes/resources/data, GitHub push, main merge or application rollout occurred in this build turn. Last verified live source remains Release A `f566bbb` / `build-2026-09-25-004`; it was not rechecked this turn.
+
+**Files:** `app/player/page.tsx`, `app/player/maintenance/page.tsx`, `components/views/screen-maintenance.tsx`, `components/views/screen-detail.tsx`, `lib/maintenance.ts`, `lib/player-maintenance.ts`, `lib/player-evidence-lock.ts`, `lib/player-diagnostics.ts`, `lib/api.ts`, `lib/access.ts`, `lib/firestore-store.ts`, `public/player-sw.js`, `firestore.indexes.json`, `tests/maintenance.test.cjs`, `tests/maintenance-emulator.test.cjs`, `tests/player-maintenance.browser.cjs`, `tests/player-maintenance-ui.browser.cjs`, `tests/screen-maintenance.browser.cjs`, `tests/screen-readiness.browser.cjs`, `tests/player.browser.cjs`, `gridcast-research/23-player-surface-cleanup.md`, `AI-LOG.md`.
+**Commit:** Built from `9aaa9c6` on `codex/gridcast-trust-layer-wp5`; this entry accompanies the local implementation commit. Claude's handoff entries are preserved. Unrelated `CLAUDE.md`, project notes and existing untracked material are untouched. Shared graph and SymDex refresh follows final edits.
+**Outcome/Open:** Release B built, tested and ready for review, not deployed. Remaining separate changes: commercial blocked-evidence capacity/recovery, audio, captions/YouTube controls and physical-device validation.

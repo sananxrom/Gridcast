@@ -11,7 +11,7 @@ async function harness(options={}){
  const el=tag=>({children,...props})=>React.createElement(tag,props,children);
  const plain=el('div');
  function load(file){if(cache[file])return cache[file].exports;const m=cache[file]={exports:{}};new Function('require','module','exports',scripts[file])(req,m,m.exports);return m.exports;}
- function req(n){if(n==='react')return React;if(n==='@/lib/readiness')return load('lib/readiness.ts');if(n==='./screen-diagnostics')return load('components/views/screen-diagnostics.tsx');
+ function req(n){if(n==='react')return React;if(n==='@/lib/readiness')return load('lib/readiness.ts');if(n==='./screen-diagnostics')return load('components/views/screen-diagnostics.tsx');if(n==='./screen-maintenance')return {ScreenMaintenance:()=>null};
  if(n==='@/components/views/delivery-report')return {DeliveryReport:()=>null,useDeliveryReport:()=>({data:null})};
  if(n==='@/lib/client')return {api:async(p,b)=>{const r=await fetch('/api'+p,{method:b?'POST':'GET',headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined});if(!r.ok)throw Error('Request failed');return r.json();}};
  if(n==='@/lib/utils')return {inr:v=>'INR '+v,fmtDate:v=>v,cn:(...v)=>v.join(' ')};

@@ -1,5 +1,6 @@
 'use client';
 import React, { useEffect, useRef, useState } from 'react';
+import { joinPlayerEvidence, answerEvidenceProtocol } from '@/lib/player-evidence-lock';
 import { flushPlays, enqueuePlay, queueStatus, queueCapacity } from '@/lib/player-queue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,7 +10,7 @@ import { cacheMedia, cachedMediaUrl, saveReadySchedule, readySchedule, reserveLo
 import { cameraConstraints, cameraError, frameSize } from '@/lib/player-vision';
 
 declare global { interface Window { YT: any; onYouTubeIframeAPIReady: () => void; cocoSsd: any; tf: any } }
-const APP_VERSION = 'gridcast-web/0.5.0';
+const APP_VERSION = 'gridcast-web/0.6.0';
 const MODEL_VERSION = 'coco-ssd@2.2.3/lite_mobilenet_v2';
 type Credential = { token: string; device_id: string; screen_id: string };
 type Item = { kind?: 'diagnostic' | 'paid' | 'filler'; diagnostic_has_camera?: boolean; assignment_id: string; valid_until: string; campaign_id: string | null; creative_id: string;
@@ -49,6 +50,7 @@ export default function Player() {
   const settlePlayer = useRef<() => Promise<void>>(async () => {});
   const retryCamera = useRef<() => void>(() => {});
   const camera = useRef<HTMLVideoElement>(null), canvas = useRef<HTMLCanvasElement>(null), media = useRef<HTMLVideoElement>(null), standbyMedia = useRef<HTMLVideoElement>(null), imageSurface = useRef<HTMLImageElement>(null), youtubeMount = useRef<HTMLDivElement>(null);
+  useEffect(() => answerEvidenceProtocol(), []);
   useEffect(() => {
     try { const c = JSON.parse(localStorage.getItem('gc_device') || 'null'); if (c?.token && c?.device_id && c?.screen_id) setCredential(c); }
     catch { setErr('Saved pairing could not be read. Pair this player again.'); }
@@ -76,7 +78,7 @@ export default function Player() {
       return preparedImages.get(item.assignment_id)!;
     };
     let yt: any = null, ytReady = false, detector: any = null, stream: MediaStream | null = null, cameraOK = false;
-    let startup = false, pulling = false, flushing = false, heartbeatBusy = false, fatal = false, actualOffset = 0;
+    let startup = false, pulling = false, flushing = false, heartbeatBusy = false, fatal = true, actualOffset = 0;
     let diagnosticBlockedMessage = '';
     let diagnosticFlushing = false, lastSampleAt: string | null = null;
     const attemptedDiagnostics = new Set<string>();
@@ -520,13 +522,22 @@ export default function Player() {
       if (Date.now() - lastDetect > Math.max(500, (Number(currentSlot?.config.sample_interval_s ?? playlist?.config.sample_interval_s) || 2) * 1000)) { lastDetect = Date.now(); void detect(); }
     }, 250);
     const flusher = setInterval(() => { void retryUnsaved(); void flush(); void flushTest(); }, 5000);
+    let evidenceStarted = false;
+    const evidenceGuard = joinPlayerEvidence(paired.device_id, () => {
+      if (disposed || pairingChanged) return;
+      if (evidenceStarted) { setRestart(n => n + 1); return; }
+      evidenceStarted = true; fatal = false;
     void flushTest();
     void queueStatus(paired.device_id).then(s => { if (!disposed) setQueue(s); }).catch(() => { if (!disposed) { fatal = true; setPublicFailure(true); stopMedia(); void finish('interrupted'); state('This browser cannot persist delivery records. Playback stopped.'); } });
     void readySchedule(paired.device_id).then(saved => { if (!disposed && !fatal && !playlist && !pending && saved) { actualOffset = saved.offset; pending = saved.playlist; setScreen(saved.playlist.screen); setOfflineStatus('Using verified offline media and saved authorisations'); void startNext(); } }).catch(() => {});
     void pull();
+    }, async () => {
+      await settlePlayer.current(); stopCamera(); setCurrent(null); setOverlayEnabled(false); setDiagnosticActive(false);
+      setPublicFailure(true); state('Authorized maintenance is reading saved records. Playback will resume when it finishes.');
+    }, message => { if (!disposed) { setPublicFailure(true); state(message); } });
     if ('serviceWorker' in navigator) void navigator.serviceWorker.register('/player-sw.js', { scope: '/player' }).then(reg => { const worker = reg.active || reg.installing || reg.waiting; worker?.postMessage({ type: 'PREPARE_PLAYER', urls: performance.getEntriesByType('resource').map(r => r.name).filter(u => u.startsWith(location.origin + '/_next/static/')) }); }).catch(() => {});
     return () => {
-      disposed = true; if (currentSlot) void finish('interrupted'); clearInterval(ticker); clearInterval(flusher); timers.forEach(clearTimeout);
+      const settling = settlePlayer.current(); disposed = true; evidenceGuard.stop(settling); clearInterval(ticker); clearInterval(flusher); timers.forEach(clearTimeout);
       for (const native of natives) { native?.removeEventListener('playing', nativePlaying); native?.removeEventListener('pause', nativePause); native?.removeEventListener('waiting', nativePause);
       native?.removeEventListener('ended', nativeEnd); native?.removeEventListener('error', nativeError); native?.removeEventListener('loadedmetadata', metadata); }
       objectUrls.forEach(url => URL.revokeObjectURL(url));
@@ -542,7 +553,7 @@ export default function Player() {
     if (!credential) return true;
     try {
       const saved = await queueStatus(credential.device_id), diagnostic = await diagnosticRecordCounts(credential.device_id);
-      setRecoverySummary(`${saved.pending} pending and ${saved.blocked} blocked delivery records; ${diagnostic.total} saved or unfinished screen tests. Records stay on this device under their original pairing. They may no longer upload after replacement. Local export is temporarily unavailable.`);
+      setRecoverySummary(`${saved.pending} pending and ${saved.blocked} blocked delivery records; ${diagnostic.total} saved or unfinished screen tests. Records stay on this device under their original pairing. They may no longer upload after replacement. For authorized export, open /player/maintenance in another tab and use a code from the screen dashboard.`);
       return true;
     } catch { setRecoverySummary('Saved records could not be checked. Keep this player open for authorized review.'); return false; }
   };

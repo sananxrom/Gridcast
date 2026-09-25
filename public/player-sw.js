@@ -14,3 +14,19 @@ self.addEventListener('fetch', event => {
     event.respondWith(fetch(event.request).then(response => { if (response.ok) { const copy = response.clone(); void caches.open(CACHE).then(cache => cache.put('/player', copy)); } return response; }).catch(async () => (await caches.match('/player')) || Response.error()));
   } else if (safe(url)) event.respondWith(caches.match(event.request).then(saved => saved || fetch(event.request).then(response => { if (response.ok) { const copy = response.clone(); void caches.open(CACHE).then(cache => cache.put(event.request, copy)); } return response; })));
 });
+
+// Maintenance cannot assume older open player tabs participate in evidence locks.
+self.addEventListener('message', event => {
+  if (event.data?.type !== 'GRIDCAST_CHECK_PLAYER_TABS' || !event.ports[0]) return;
+  event.waitUntil((async () => {
+    const clients = (await self.clients.matchAll({ type: 'window', includeUncontrolled: true }))
+      .filter(client => new URL(client.url).origin === self.location.origin && new URL(client.url).pathname === '/player');
+    const supported = await Promise.all(clients.map(client => new Promise(resolve => {
+      const channel = new MessageChannel();
+      const timer = setTimeout(() => { channel.port1.close(); resolve(false); }, 1500);
+      channel.port1.onmessage = reply => { clearTimeout(timer); channel.port1.close(); resolve(reply.data?.protocol === 1); };
+      client.postMessage({ type: 'GRIDCAST_EVIDENCE_PROTOCOL' }, [channel.port2]);
+    })));
+    event.ports[0].postMessage({ protocol: 1, allSupported: supported.every(Boolean) });
+  })());
+});

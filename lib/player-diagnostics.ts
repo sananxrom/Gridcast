@@ -155,3 +155,8 @@ export async function flushDiagnostic(device: string, send: (body: any) => Promi
   });
   return changed ? accepted ? 'Diagnostic result saved. Counts are excluded from commercial reports.' : error : null;
 }
+
+/** Full identity-scoped maintenance evidence; authorization is enforced by its caller. */
+export async function diagnosticEvidence(device: string) {
+  return mutate(device, state => ({ reports: state.reports, reservations: state.reservations.map(({ padding: _padding, ...record }) => record) }));
+}

@@ -1,3 +1,4 @@
+import { maintenanceRoute, maintenanceCodeId, maintenanceTokenId, maintenanceLimiterIds } from './maintenance';
 import { ReportingError, reportRange, reportingVisible, summarizeReport, REPORT_PAGE_SIZE } from './reporting';
 import { ensureBudget, validateBudgetEdit } from './budgets';
 import { createHash } from 'node:crypto';
@@ -127,6 +128,8 @@ export function handle(method: string, seg: string[], q: URLSearchParams, body: 
       const claims = readToken(token);
       return await store.transact({ method, path: seg, uid: claims?.uid,
         deviceId: deviceIdFromToken(token) || undefined,
+        maintenanceId: seg.join('/') === 'maintenance/redeem' ? maintenanceCodeId(body.code) : maintenanceTokenId(token),
+        maintenanceLimiterIds: seg.join('/') === 'maintenance/redeem' ? maintenanceLimiterIds(clientKey) : undefined,
         loginEmail: seg.join('/') === 'login' ? String(body.email || '').trim().toLowerCase() : undefined,
         pairingCodeHash: seg.join('/') === 'pair' ? pairingCodeHash(String(body.code || '')) : undefined,
         playUid: typeof body.play_uid === 'string' ? body.play_uid : undefined,
@@ -162,6 +165,8 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
   const me = candidate && candidate.status !== 'disabled' &&
     claims!.ver === (candidate.auth_version || 0) &&
     db.orgs.some((o: any) => o.id === candidate.org_id && o.status !== 'disabled') ? candidate : null;
+  const maintenance = maintenanceRoute(db,method,seg,body,token,me,{clientKey});
+  if (maintenance) { if (maintenance.changed) await save(); return {status:maintenance.status,body:maintenance.body}; }
   const pairingAudit = method === 'POST' && p === 'pair' ? auditSnapshot(db) : null;
   const transport = deviceRoute(db, method, seg, body, token, { playlist: playlistFor, playerProtocol: Number(q.get('protocol') || 0), clientKey: clientKey || undefined });
   if (transport) {

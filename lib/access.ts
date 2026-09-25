@@ -443,7 +443,7 @@ export function bootstrap(db: any, actor: any, screenStatus: (s: any) => any, or
 export function redact(value: any, actor: any): any {
   if (Array.isArray(value)) return value.map(v => redact(v, actor));
   if (!value || typeof value !== 'object') return value;
-  const hidden = new Set(['password_hash','password_salt','auth_version','token_hash','pairing_code_hash','payload_hash','storage_path','frame','frame_url','preview_frame','frameUrl']);
+  const hidden = new Set(['password_hash','password_salt','auth_version','token_hash','session_hash','pairing_code_hash','payload_hash','storage_path','frame','frame_url','preview_frame','frameUrl']);
   if (!can(actor?.role, 'money')) for (const k of [...ORG_MONEY, 'owner_share_pct']) hidden.add(k);
   if (!can(actor?.role, 'sales') && !can(actor?.role, 'money'))
     for (const k of [...SCREEN_MONEY, ...(actor?.role === ADVERTISER ? [] : ['committed_budget']),...(actor?.role === ADVERTISER ? [] : ['rate_value','accrued_spend','gross_paise','rate_paise']), 'platform_fee_pct','invoice_status']) hidden.add(k);

@@ -1,3 +1,4 @@
+import { isMaintenancePath } from './maintenance';
 import { reportingKey, reportRange, REPORT_PAGE_SIZE } from './reporting';
 import { budgetId } from './budgets';
 import { appliedOffset, settlementKey, settlementPeriod } from './settlement';
@@ -8,7 +9,7 @@ import type { Firestore, Transaction } from 'firebase-admin/firestore';
 /** Lookups are hints only. Authentication and authorization still run inside fn. */
 export type StoreContext = {
   method: string; path: string[]; uid?: string; deviceId?: string; loginEmail?: string;
-  pairingCodeHash?: string; playUid?: string; seqNo?: number; assignmentId?: string;
+  maintenanceId?: string; maintenanceLimiterIds?: string[]; pairingCodeHash?: string; playUid?: string; seqNo?: number; assignmentId?: string;
   startedAtDevice?: string; clockOffset?: number; orgId?: string; entity?: string; after?: string; limit?: number; targetOrg?: string; from?: string; to?: string; reportScreen?: string; reportCampaign?: string;
 };
 export class StoreError extends Error {
@@ -16,7 +17,7 @@ export class StoreError extends Error {
 }
 const DOMAIN = ['orgs', 'users', 'screens', 'advertisers', 'creatives', 'campaigns', 'groups', 'devices', 'configs', 'assets'] as const;
 const EVENTS = ['plays', 'presence', 'device_assignments', 'audit', 'diagnostic_results'] as const;
-const COLLECTIONS = [...DOMAIN, ...EVENTS, 'diagnostic_assignments', 'settlement_buckets', 'campaign_budgets', 'screen_day'];
+const COLLECTIONS = [...DOMAIN, ...EVENTS, 'maintenance_grants', 'maintenance_limits', 'diagnostic_assignments', 'settlement_buckets', 'campaign_budgets', 'screen_day'];
 const DOMAIN_LIMIT = 2000;
 export const HISTORY_LIMIT = 1500;
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -48,7 +49,7 @@ function rowsByKey(collection: string, rows: any[]) {
 }
 type Session = {
   tx: Transaction; snapshot: any; original: any; dirty: boolean; provisioned: boolean;
-  allowedOrg?: string; admin: boolean; readOnly: boolean; deviceId?: string; budgetCampaignIds?: string[];
+  allowedOrg?: string; admin: boolean; readOnly: boolean; deviceId?: string; budgetCampaignIds?: string[]; maintenanceLimiterIds?: string[];
 };
 
 /**
@@ -116,6 +117,37 @@ export function createFirestoreStore(database: Firestore) {
     if (context.pairingCodeHash) {
       const matches = await query(tx, 'screens', [['pairing_code_hash', '==', context.pairingCodeHash]], 1);
       pairedScreen = matches[0] || null;
+    }
+    if (isMaintenancePath(context.path)) {
+      // Maintenance does not require (or confer) playback identity. Load only the
+      // exact grant/issuer/target plus fixed guessing counters in one transaction.
+      if (actor) snapshot.users.push(actor);
+      const dashboard = context.path[0] === 'screens';
+      if (dashboard && actor) {
+        const screen = await readDoc(tx,'screens',context.path[1]);
+        if (screen) {
+          snapshot.screens.push(screen);
+          snapshot.devices = await query(tx,'devices',[['screen_id','==',screen.id]]);
+          if (context.method === 'GET') snapshot.maintenance_grants = await query(tx,'maintenance_grants',[['screen_id','==',screen.id],['expires_at','>',new Date().toISOString()]]);
+          else if (context.path[3]) await referenced(tx,'maintenance_grants',[context.path[3]],snapshot.maintenance_grants);
+        }
+      } else if (context.maintenanceId) {
+        const grant = await readDoc(tx,'maintenance_grants',context.maintenanceId);
+        if (grant) {
+          snapshot.maintenance_grants.push(grant);
+          await referenced(tx,'users',[grant.issuer_id],snapshot.users);
+          await referenced(tx,'screens',[grant.screen_id],snapshot.screens);
+          await referenced(tx,'devices',[grant.device_id],snapshot.devices);
+        }
+      }
+      await referenced(tx,'orgs',[...snapshot.users.map((u:any)=>u.org_id),...snapshot.screens.map((s:any)=>s.org_id)],snapshot.orgs);
+      const grant = snapshot.maintenance_grants[0];
+      state.allowedOrg = dashboard ? actor?.org_id : grant?.org_id;
+      state.admin = dashboard && actor?.role === 'platform_admin';
+      state.maintenanceLimiterIds = context.path.join('/') === 'maintenance/redeem' ? context.maintenanceLimiterIds || [] : [];
+      await referenced(tx,'maintenance_limits',state.maintenanceLimiterIds,snapshot.maintenance_limits);
+      state.original = clone(snapshot);
+      return state;
     }
     state.allowedOrg = actor?.org_id || device?.org_id || pairedScreen?.org_id;
     state.admin = actor?.role === 'platform_admin';
@@ -355,7 +387,8 @@ export function createFirestoreStore(database: Firestore) {
         const budgetWrite = collection === 'campaign_budgets' && !!state.deviceId && !!b
           && state.budgetCampaignIds?.includes(b.campaign_id) && b.id === budgetId(b.campaign_id)
           && snapshot.campaigns.some((c: any) => c.id === b.campaign_id && c.org_id === b.org_id);
-        if (!state.admin && rowOrg !== state.allowedOrg && !budgetWrite) throw new StoreError(403, 'Cross-organisation write rejected');
+        const limiterWrite = collection === 'maintenance_limits' && state.maintenanceLimiterIds?.includes(key);
+        if (!state.admin && rowOrg !== state.allowedOrg && !budgetWrite && !limiterWrite) throw new StoreError(403, 'Cross-organisation write rejected');
         if (!state.admin && a?.org_id && b?.org_id !== undefined && a.org_id !== b.org_id)
           throw new StoreError(403, 'Organisation reassignment rejected');
         if (collection === 'configs' && !state.admin && (a?.layer === 'platform' || b?.layer === 'platform'))
@@ -442,6 +475,14 @@ export function createFirestoreStore(database: Firestore) {
           // Failed API requests can never commit partially staged mutations.
           if (!result || typeof result !== 'object' || !('status' in result) || Number((result as any).status || 200) < 400)
             await flush(state);
+          else if (state.dirty && state.maintenanceLimiterIds?.length) {
+            // Denial must not reset the guessing budget. Commit ONLY the expected
+            // counters, never any staged grant, audit or domain mutations.
+            for (const id of state.maintenanceLimiterIds) {
+              const counter = state.snapshot.maintenance_limits.find((r:any)=>r.id === id);
+              if (counter) tx.set(doc('maintenance_limits',id),clean(counter));
+            }
+          }
           return result;
         });
       });

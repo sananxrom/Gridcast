@@ -16,6 +16,7 @@ import { Skeleton } from '@/components/ui/loader';
 import { PairingCode } from './screen-onboarding';
 import { reasonLabel } from '@/lib/readiness';
 import { ScreenDiagnostics } from './screen-diagnostics';
+import { ScreenMaintenance } from './screen-maintenance';
 
 export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: string) => void; onChanged: () => void }) {
   const [d, setD] = useState<any>(null);
@@ -196,6 +197,8 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
       </Card>
 
       {mayEdit && <ScreenDiagnostics screenId={id} device={d.device} assignments={d.diagnostic_assignments || []} results={d.diagnostic_results || []} history={d.diagnostic_history} onChanged={load} />}
+
+      {mayEdit && <ScreenMaintenance key={id} screenId={id} />}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat metric="live_campaign_count" period={{from:'',to:'',label:'Current loaded records'}} label="Live campaigns" value={d.stats.liveCampaigns} hint={`${s.advertiser_slots} distinct-advertiser limit`} />
