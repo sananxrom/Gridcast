@@ -77,8 +77,9 @@ filler and diagnostic playback plus return to ordinary playback.
 
 ### Explicit rejection and retry
 
-Introduce an authentication-rejected state bound to the current credential generation. Set it from both
-authenticated-request and report-upload 401 paths. Ignore callbacks from a disposed or replaced generation.
+Introduce an authentication-rejected state bound to the current credential generation. Set it from every
+authenticated player request that returns 401, including playlist/heartbeat requests, commercial uploads
+and diagnostic-result uploads. The last currently calls request() directly through flushTest(). Ignore callbacks from a disposed or replaced generation.
 Queue failures, storage failures, network errors and other fatal states must not masquerade as 401s.
 
 Use a message such as “This device is not currently authorized. Retry or enter a new pairing code.” Offer
@@ -125,6 +126,49 @@ Do not change legitimate internal all-identity bookkeeping indiscriminately, or 
 solely to add a filter. `strandedPlays()` returns other identities; it does not establish screen or tenant
 scope. A new authorized exporter in B must enforce that scope regardless of what A removes.
 
+### Flows that currently depend on the removed controls
+
+*Added by Claude Code, 25 Sep 2026 20:54 IST, after reviewing this revision against source.*
+
+Removing export and diagnostic-clear changes two existing flows that the sections above do not cover.
+
+**A stuck diagnostic report would block screen tests permanently.** `app/player/page.tsx:208` refuses any new
+diagnostic run while `pendingDiagnostic(device_id)` returns a saved report. A report that expires or is
+rejected is marked `blocked` and kept (`lib/player-diagnostics.ts:13-22`); only a successful delivery removes
+it (`:20`). Today the public "Clear saved diagnostic report" button is the only other way out. Without it, one
+blocked report stops that device from ever running a screen test again, which would stall commissioning in A.
+Required in A: a blocked report must not prevent the next test merely because it occupies the single
+pending slot. Preserve it, including its original device/run identity, payload, creation time and rejection
+reason, in a separate retained diagnostic store. Move it idempotently and durably before freeing that slot;
+coordinate migration, flush completion and other tabs so an old callback cannot erase a newer report.
+Existing pending/blocked records must survive migration, interruption and reload. A still-pending,
+non-blocked report continues to gate new runs; that state does not guarantee the server will accept it.
+
+Bound retention with explicit record-count and byte limits chosen and documented in the implementation.
+Do not silently evict either old or new evidence. If the archive is full, corrupt or cannot be written,
+retain the original report and refuse a new diagnostic run with an honest storage message. Check/reserve
+capacity before consuming a diagnostic assignment so an unpersistable run is not started. Archive exhaustion
+may therefore block further tests until authorized maintenance is available; it must not independently stop
+otherwise eligible paid/filler playback. This is the necessary limit to the promise that one blocked report
+no longer prevents commissioning. No public delete/export bypass is introduced, and diagnostics remain
+separate from commercial delivery and billing. Release B's scoped export must include this retained history.
+
+**Messages must describe recovery that actually exists.** `:208` offers export/clear and `:265` offers
+export on queue-full; remove those instructions in A. Successful acknowledgements can free commercial queue
+space after reconnecting, but blocked/expired records remain and count against the limit
+(`lib/player-queue.ts:54-55,68-77`). Reconnection alone is not a guaranteed remedy; export itself never
+removed those queued rows either. For retryable records, say “Delivery storage is full. Reconnect to retry
+saved deliveries; new playback remains paused until space is available.” When blocked records prevent
+progress, say “Saved delivery records need authorized review. They remain on this device; new playback
+cannot start.” Do not suggest clearing browser storage, relabeling old records or re-pairing to bypass limits.
+In A there may be no self-service remedy; record that limitation instead of promising automatic recovery.
+
+The existing capacity check runs before paid, filler and diagnostic selection in startNext(), not only
+before paid creatives. Preserve that behavior in A and use “new playback” rather than “paid playback” in
+its status text. Changing filler/diagnostic behavior under a full commercial queue is a separate scheduler
+change, not an incidental wording fix. A diagnostic-result 401 must also enter the current identity's
+credential-rejected state; archiving its report does not authorize another run on a rejected credential.
+
 **Release-note text:** “The public player no longer exposes camera/statistics outside commissioning, or
 provides export and record-clearing controls. Saved delivery records remain on the device. Local in-app
 export is temporarily unavailable pending authorized maintenance access. Pairing recovery preserves
@@ -136,12 +180,19 @@ existing records, but does not guarantee that old-device records can be accepted
   record contents nor destructive maintenance controls; no hidden controls remain keyboard-accessible.
 - Explicit commissioning/active diagnostics show the intended preview/statistics and then hide them again.
   Detection continues with the preview hidden; camera failure remains unmeasured/null.
-- Both 401 paths offer recovery; other failures do not. Retry after re-enabling a screen works with the old
+- All authenticated player 401 paths, including diagnostic uploads, offer recovery; other failures do not. Retry after re-enabling a screen works with the old
   identity. Stale callbacks cannot reject a replacement identity.
 - Cancelling, invalid codes and failed/incomplete pairing responses preserve the local identity and records.
   Successful replacement retains old-device records; in-flight writes are not silently lost.
 - Count-read failure is distinct from zero, and no export or diagnostic-clear action remains publicly callable.
 - The lost-response case does not claim pairing success, rollback or safe replay without evidence.
+- A blocked diagnostic report is durably archived under its original device/run identity and permits a new
+  run when archive capacity is available; a still-pending report continues to gate. Migration, retries,
+  reload and competing tabs neither lose evidence nor erase a newer report.
+- Full/corrupt/unwritable diagnostic storage refuses new tests without evicting records or independently
+  stopping eligible paid/filler playback. Capacity is checked before a new diagnostic assignment is consumed.
+- Queue-full messages distinguish retryable from blocked records, do not promise reconnect will fix all
+  cases, and offer no removed export/clear action. Existing commercial-capacity behavior remains unchanged.
 
 ## 3. Release B — authorized local maintenance
 
@@ -164,7 +215,7 @@ access needs its own human scope check. A locally stored ID or hidden gesture is
 
 For planned replacement, attempt to flush deliverable records while the old identity is valid, then show
 what remains and offer scoped export before confirmation. Include pending/blocked commercial records and
-pending diagnostic evidence only for the authorized identity. Re-read the queue at replacement, coordinate
+pending and retained diagnostic evidence only for the authorized identity. Re-read the queue at replacement, coordinate
 in-flight operations and other player tabs, and preserve original records. Destination pairing still uses
 its own valid pairing code. Security revocation must not wait for successful export.
 
