@@ -1,10 +1,10 @@
 # Player surface, recovery and audio — agreed implementation plan
 
-**Updated:** 25 Sep 2026 · **Review base:** `402fc47`
+**Updated:** 25 Sep 2026 · **Review base:** `80fef42`
 
 **Last verified deployment:** `13ee21c` / `build-2026-09-25-003`; not rechecked for this document update.
 
-**Status:** corrected specification only. These changes are not implemented or deployed.
+**Status:** Release A implemented locally; not deployed. Release B, audio and caption/control changes remain planned.
 
 **Decision record:** [AI-LOG.md](../AI-LOG.md), Codex/Claude reviews from 19:06 through 20:49 IST on 25 Sep.
 
@@ -312,7 +312,7 @@ an absolute guarantee, or block the only interaction that can recover playback.
 
 ## 6. Delivery and verification sequence
 
-1. Correct this specification — this revision; no application behavior changes yet.
+1. Specification correction complete. Release A now has a local implementation; see the handoff below.
 2. Implement Release A as an independently reviewable change. Run targeted lifecycle, authorization-state,
    queue/pairing and browser checks above, then typecheck and production build. Document the temporary export
    regression and review the diff before release through the existing Firebase workflow.
@@ -325,3 +325,36 @@ an absolute guarantee, or block the only interaction that can recover playback.
 Presence remains presence, unmeasured remains null, and all existing tenant, provenance and locked-config
 rules continue to apply. This plan changes presentation, maintenance access and sound behavior; it does not
 redefine delivery acceptance, billing, measurement or browser-storage durability.
+
+
+## 7. Release A local implementation handoff — 25 Sep 2026
+
+The implementation is in `app/player/page.tsx` (player version `gridcast-web/0.5.0`),
+`lib/player-diagnostics.ts` and `lib/player-media-cache.ts`. Production has not been updated.
+
+- Preview visibility uses presentation state without replacing the camera element. Capture restarts are
+  keyed to camera/model settings, not unrelated configuration-version changes. Public export and diagnostic
+  clearing are removed, and the credential is preserved while pairing recovery is open.
+- All authenticated player requests use the same rejection handling. Explicit same-identity retry waits
+  for evidence/revocation writes and uses a fresh authenticated playlist plus a local revision check to
+  restore cache authorization. Old downloads cannot lift a newer rejection; existing play allowances remain
+  consumed. Pairing is serialized across tabs using Web Locks and rechecks the shared identity. Browsers
+  without Web Locks refuse pairing with an explanatory message rather than silently bypass coordination.
+- Diagnostic storage uses transactional IndexedDB, migrates the legacy localStorage result without dropping
+  it before commit, and retains blocked results separately from the pending result. Limits are 32 entries
+  and 2 MiB per device, with 64 KiB reserved before each run. A reservation abandoned for two minutes becomes
+  retained interrupted-run metadata; its capacity remains available for a late completion of that same run.
+  No retention eviction is performed. Oversized legacy evidence is preserved and blocks new reservations.
+- Failed result writes retain their exact payload in memory and retry while the player remains open.
+  Pairing transitions cannot discard unresolved writes. This is not durable storage while the browser's
+  storage is broken: closing the page at that point can still lose the unsaved payload, so recovery messages
+  tell the operator to keep the player open. Normal successfully stored records survive reload.
+- Diagnostic capacity errors are visible without revealing camera/tools or consuming another test run.
+  Commercial queue exhaustion retains its existing scheduling behavior and distinguishes records awaiting
+  upload from records requiring authorized review.
+
+Validation uses the unit/API suite, real Chromium browser integration tests, TypeScript and a production
+build; exact outcomes and commit references are recorded in AI-LOG.md. Browser tests exercise the pinned
+TensorFlow/COCO-SSD model with a synthetic camera, plus deterministic frame/count cases. They do not prove
+venue counting accuracy, physical Android/WebView behavior, or Safari/Brave-specific behavior. Those checks
+remain open. Authorized export remains unavailable until Release B; audio is still unchanged in Release A.

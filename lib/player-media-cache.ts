@@ -96,6 +96,30 @@ export async function reserveLocalPlay(deviceId: string, item: MediaItem, now: n
   };
   await complete; return allowed;
 }
+/** Capture immediately before a fresh authenticated playlist request. This ticket is
+ * local concurrency control, not authentication; only a validated online response may
+ * authorize it. A later revocation or schedule publication invalidates the ticket. */
+export async function beginOnlineAuthorization(deviceId: string): Promise<number> {
+  if (!deviceId.trim()) throw new Error('A device identity is required.');
+  return (await row('schedules', deviceId))?.revision || 0;
+}
+/** Reauthorize the same identity after an explicit online retry. Ordinary cache writes
+ * cannot clear a revocation tombstone. Preserve allowance usage and invalidate old
+ * in-flight downloads before the caller publishes the newly authenticated playlist. */
+export async function authorizeOnlineSchedule(deviceId: string, expectedRevision: number): Promise<boolean> {
+  if (!deviceId.trim() || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0) return false;
+  const db = await open(), tx = db.transaction('schedules', 'readwrite'), complete = done(tx);
+  const store = tx.objectStore('schedules'), request = store.get(deviceId); let authorized = false;
+  request.onsuccess = () => {
+    const old = request.result;
+    if ((old?.revision || 0) !== expectedRevision) return;
+    if (old?.revoked) store.put({ key: deviceId, revoked: false, revision: expectedRevision + 1,
+      sourceTime: old.sourceTime || 0, playlist: null, until: 0, saved: Date.now() });
+    authorized = true;
+  };
+  await complete;
+  return authorized;
+}
 export async function clearReadySchedule(deviceId: string) {
   const db = await open(), tx = db.transaction('schedules', 'readwrite'), complete = done(tx);
   const store = tx.objectStore('schedules'), previous = store.get(deviceId);

@@ -45,6 +45,42 @@ test('offline media is checksum verified, schedule atomic, and allowance shared 
   assert.equal(await page.evaluate(s=>window.cache.saveReadySchedule('revoked',{...s,server_time:new Date(Date.parse(s.server_time)+2000).toISOString()},0),schedule),false,'A delayed successful response cannot resurrect a revoked device identity');
   assert.equal(await page.evaluate(()=>window.cache.readySchedule('revoked')),null);
   assert.equal(await page.evaluate(i=>window.cache.reserveLocalPlay('revoked',i,Date.now()),item),false,'Other tabs cannot start another play after observed device revocation');
+  // A fresh request ticket may lift a tombstone; stale requests may not, even if
+  // their HTTP response later succeeds. Allowance accounting must survive revival.
+  const staleTicket=await page.evaluate(()=>window.cache.beginOnlineAuthorization('revoked'));
+  await other.evaluate(()=>window.cache.clearReadySchedule('revoked'));
+  assert.equal(await page.evaluate(r=>window.cache.authorizeOnlineSchedule('revoked',r),staleTicket),false,'A newer revocation invalidates an earlier authentication request');
+  assert.equal(await page.evaluate(()=>window.cache.readySchedule('revoked')),null);
+  const freshTicket=await page.evaluate(()=>window.cache.beginOnlineAuthorization('revoked'));
+  assert.equal(await page.evaluate(r=>window.cache.authorizeOnlineSchedule('revoked',r),freshTicket),true);
+  assert.equal(await page.evaluate(()=>window.cache.readySchedule('revoked')),null,'Revival does not restore the discarded cached playlist');
+  assert.equal(await page.evaluate(()=>window.cache.beginOnlineAuthorization('revoked')),freshTicket+1,'Revival invalidates preexisting download revisions');
+  assert.equal(await page.evaluate(r=>window.cache.authorizeOnlineSchedule('revoked',r),freshTicket),false,'The revival ticket cannot be replayed');
+  assert.equal(await page.evaluate(s=>window.cache.saveReadySchedule('revoked',{...s,server_time:new Date(Date.parse(s.server_time)+3000).toISOString()},0),schedule),true);
+  let releaseRetryDownload;
+  const retryDownloadStarted=new Promise(resolve=>{releaseRetryDownload=resolve;});
+  await page.route('**/retry-slow',route=>releaseRetryDownload(route));
+  await page.evaluate(s=>{window.preRevocationDownload=window.cache.saveReadySchedule('retry-race',s,0);},{...schedule,items:[{...item,asset_id:'retry-slow-asset',asset_url:url+'/retry-slow'}]});
+  const retryRoute=await retryDownloadStarted;
+  await other.evaluate(()=>window.cache.clearReadySchedule('retry-race'));
+  const retryTicket=await other.evaluate(()=>window.cache.beginOnlineAuthorization('retry-race'));
+  assert.equal(await other.evaluate(r=>window.cache.authorizeOnlineSchedule('retry-race',r),retryTicket),true);
+  await retryRoute.fulfill({status:200,contentType:'video/mp4',body:bytes});
+  assert.equal(await page.evaluate(()=>window.preRevocationDownload),false,'A pre-revocation download cannot publish after later reauthorization');
+  assert.equal(await page.evaluate(()=>window.cache.readySchedule('retry-race')),null);
+  const unchangedTicket=await page.evaluate(()=>window.cache.beginOnlineAuthorization('revoked'));
+  assert.equal(await page.evaluate(r=>window.cache.authorizeOnlineSchedule('revoked',r),unchangedTicket),true,'Already-authorized unchanged state is a no-op success');
+  assert.equal(await page.evaluate(()=>window.cache.beginOnlineAuthorization('revoked')),unchangedTicket);
+  await page.evaluate(()=>window.cache.clearReadySchedule('d1'));
+  const spentTicket=await page.evaluate(()=>window.cache.beginOnlineAuthorization('d1'));
+  assert.equal(await page.evaluate(r=>window.cache.authorizeOnlineSchedule('d1',r),spentTicket),true);
+  assert.equal(await page.evaluate(i=>window.cache.reserveLocalPlay('d1',i,Date.now()),item),false,'Reauthorization does not reset spent allowance counters');
+  assert.equal(await page.evaluate(s=>window.cache.saveReadySchedule('d1',s,0),schedule),true);
+  const concurrentTicket=await page.evaluate(()=>window.cache.beginOnlineAuthorization('d1'));
+  await other.evaluate(s=>window.cache.saveReadySchedule('d1',s,0),schedule);
+  assert.equal(await page.evaluate(r=>window.cache.authorizeOnlineSchedule('d1',r),concurrentTicket),false,'Concurrent schedule publication conservatively invalidates the request ticket');
+  assert.equal(await page.evaluate(()=>window.cache.authorizeOnlineSchedule('',0)),false);
+  assert.equal(await page.evaluate(()=>window.cache.authorizeOnlineSchedule('revoked',NaN)),false);
   await context.setOffline(true);assert.equal(await page.evaluate(async i=>{const url=await window.cache.cachedMediaUrl(i);const result=await fetch(url);return result.ok&&(await result.blob()).size===i.asset_bytes;},item),true);
   await page.evaluate(()=>{const original=Date.now;Date.now=()=>original()+7200e3;});assert.equal(await page.evaluate(()=>window.cache.readySchedule('d1')),null);
  }finally{await browser?.close();await new Promise(r=>server.close(r));}
