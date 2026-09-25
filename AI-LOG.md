@@ -3386,3 +3386,11 @@ Exports include pending/blocked commercial records and pending/retained/unfinish
 **Files:** `app/player/page.tsx`, `app/player/maintenance/page.tsx`, `components/views/screen-maintenance.tsx`, `components/views/screen-detail.tsx`, `lib/maintenance.ts`, `lib/player-maintenance.ts`, `lib/player-evidence-lock.ts`, `lib/player-diagnostics.ts`, `lib/api.ts`, `lib/access.ts`, `lib/firestore-store.ts`, `public/player-sw.js`, `firestore.indexes.json`, `tests/maintenance.test.cjs`, `tests/maintenance-emulator.test.cjs`, `tests/player-maintenance.browser.cjs`, `tests/player-maintenance-ui.browser.cjs`, `tests/screen-maintenance.browser.cjs`, `tests/screen-readiness.browser.cjs`, `tests/player.browser.cjs`, `gridcast-research/23-player-surface-cleanup.md`, `AI-LOG.md`.
 **Commit:** Built from `9aaa9c6` on `codex/gridcast-trust-layer-wp5`; this entry accompanies the local implementation commit. Claude's handoff entries are preserved. Unrelated `CLAUDE.md`, project notes and existing untracked material are untouched. Shared graph and SymDex refresh follows final edits.
 **Outcome/Open:** Release B built, tested and ready for review, not deployed. Remaining separate changes: commercial blocked-evidence capacity/recovery, audio, captions/YouTube controls and physical-device validation.
+
+
+### 2026-09-25 22:12 IST · GPT-6 (Codex desktop) · Release B pushed to review branch
+
+**Asked:** “Push it.”
+**Did/Outcome:** Rechecked the log, branch and working tree. Successfully pushed reviewed Release B application commit `34bf878` to `origin/codex/gridcast-trust-layer-wp5` (remote advanced from `9aaa9c6`). No application edits; prior test/build evidence remains applicable. Unrelated `CLAUDE.md` and untracked material were not staged.
+**Files:** `AI-LOG.md` only for this push record; this documentation entry is committed and pushed separately after the successful application push. Shared indexes refreshed after the log update.
+**Open:** This was a GitHub push, not a Firebase rollout or main merge. Before deployment, create the committed `maintenance_grants` composite index (`screen_id ASC`, `expires_at ASC`) and wait for READY. Last verified live application remains Release A `f566bbb` / `build-2026-09-25-004`; production was not rechecked in this turn.
