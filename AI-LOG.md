@@ -3411,3 +3411,55 @@ Exports include pending/blocked commercial records and pending/retained/unfinish
 **Files/commit:** `AI-LOG.md`, `gridcast-research/23-player-surface-cleanup.md` only for this deployment record, committed/pushed separately on `codex/gridcast-trust-layer-wp5` after application `34bf878`. Shared codebase-memory snapshot and SymDex structural index refreshed after these final documentation edits. Unrelated `CLAUDE.md` and existing untracked material remain untouched.
 
 **Open/limits:** Production authorized grant/redemption/export/replacement was not exercised against real device evidence; local automated coverage is not a physical-device claim. Android/WebView, Safari/Brave, venue counting accuracy and actual OS download durability still need real-device validation. Old player tabs must reload before maintenance coordination. Commercial blocked-evidence capacity/recovery, audio and YouTube/caption/control work remain separate follow-ups; this release does not claim to solve them.
+
+### 2026-09-25 22:28 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Post-deploy review of Release B (34bf878): no blocker, one minor finding
+
+**Asked:** Sanan: check the log. Release B was built, pushed and deployed (`build-2026-09-25-005`) on Sanan's
+instruction before I reviewed it, so this review is after the fact. I read the new server path in full.
+I did not re-run tests this turn.
+
+**Checked and sound. Lines read at `34bf878`.**
+- *Code strength.* 16 characters from a 32-character alphabet (`lib/maintenance.ts:48-49`, `randomInt`), which
+  is 80 bits. Only `sha256` of the code is stored, as the grant ID (`:50`). The session token adds 32 random
+  bytes (`:78`), and only its hash is stored (`:80`). Session comparison uses `timingSafeEqual` (`:85`). An
+  unsalted hash is adequate for an 80-bit random code.
+- *Scope.* Issue needs `can(actor.role,'screens')` and a screen in the actor's organisation, unless platform
+  admin (`:40-41`). The device must belong to that screen and organisation (`:46`). Every redeem and sensitive
+  action re-checks the issuer: status, `must_change`, `auth_version`, role, organisation and capability
+  (`:21-26`). The body's organisation, screen and device must equal the grant's (`:86`). Roles with `screens` are
+  owner, manager and installer (`lib/roles.ts:18,20,24`); installers can already pair screens, so no new power.
+- *One-time and expiry.* Redeem refuses a grant that is redeemed, revoked, closed or expired (`:77`). Nothing
+  extends `expires_at`.
+- *The token grants no server data.* `check`, `export` and `replace` return only `{ok, grant, server_time}`
+  (`:95`). Records are read from the kiosk's own IndexedDB. A stolen code used from another browser exposes
+  nothing, because that browser holds none of the records.
+- *Tenancy guard.* The cross-organisation write exception is limited to `maintenance_limits` rows whose IDs
+  the request itself loaded (`lib/firestore-store.ts`, `limiterWrite`). `allowedOrg` is the actor's
+  organisation on dashboard routes and the grant's organisation on code routes. A denied redeem commits only
+  the counters, never staged grant, audit or domain writes. Doc 21's rule, "do not widen the cross-org write
+  guard", is kept in spirit: the exception is exact-key, not collection-wide.
+- `session_hash` is added to the redaction set (`lib/access.ts`).
+
+**Minor finding: the global limiter lets anyone block maintenance for everyone.** Redeem increments
+`maintenance_global` first, with a limit of 120 a minute (`:75`), before the per-client bucket. Anyone can
+send 120 junk codes a minute from anywhere, and every operator in every organisation then gets 429 on redeem.
+Against brute force the global budget adds little: at 120 guesses a minute and a 10-minute lifetime, the
+chance of hitting one live 80-bit code is about 1,200 / 2^80. So it mostly adds a denial-of-service lever. The
+impact is small, because it only delays maintenance, never playback. Suggested fix for Codex: drop the global
+counter, or raise it a lot and keep the per-client limit. Not urgent.
+
+**Sequencing note.** My 21:51 order put the commercial queue fix first, because it can stop a live screen for
+good. Codex built B first because Sanan's direct request was "Build B". That is Sanan's call. The queue
+defect remains live in `build-2026-09-25-005`.
+**Files:** `AI-LOG.md`. Not committed.
+
+
+### 2026-09-25 22:33 IST · GPT-6 (Codex desktop) · New-chat handover prepared, including Claude collaboration protocol
+
+**Asked:** Create `handover.md` using the handover skill so a new Codex chat has the context needed to continue, including instructions for working with Claude.
+**Did:** Created root `handover.md` with current app/repo/deployment identities, product requirements, hard metric/privacy/tenant/evidence invariants, source/document map, A/B behavior and verified test boundaries, Firebase/index/deployment procedures, local tooling and shared-index instructions, preservation rules and the ordered remaining work. Recorded the 19:56 role reset (Codex builds, Claude reviews/argues), detailed evidence-based disagreement format and shared-log coordination. Included Claude's new 22:28 B review: no blocker, global maintenance redemption limiter availability concern, queue defect still open. Distinguished the proposed limiter change from implemented behavior and preserved the unresolved full-storage/billing tradeoff.
+**Evidence corrections:** Read current `lib/player-queue.ts`: blocked rows still count in both capacity and enqueue checks; the next capacity fix remains necessary. Read current `lib/access.ts:435`: bootstrap emits empty plays/presence arrays, contrary to the older 18:47 assessment. Handover flags that review and the stale undeployed/Vercel-live Standing Context as superseded; no historical log entry was edited. Current production snapshot remains app `34bf878` / `build-2026-09-25-005`, verified in the preceding 22:23 deployment entry; no new cloud verification or mutation was performed for this documentation task.
+**Skill/tool limits:** Searched installed Codex/Agents/Claude/project skills for a chat-handover skill and found none; explained this and wrote the document directly, without claiming skill use. Used the installed SymDex code-search skill for a bounded pack and symbol lookups; the pack reported stale freshness after Claude's log append, so relevant source was read directly. Focused symbol lookups reported approximately 9,600 tokens saved. No secrets, passwords or old OAuth codes copied into the handover.
+**Validation:** All 49 literal repository file/directory references checked exist. Reviewed the document for credential assignments and obsolete workflow claims. Documentation-only; no application tests/build or deployment required. Shared graph snapshot and SymDex refreshed after the final file/log writes, keeping generated artifacts out of Git.
+**Files/commit:** `handover.md`, `AI-LOG.md`, prepared from HEAD `049b9d8`. Commit these documentation paths locally, preserving Claude's previously uncommitted 22:28 append. Unrelated `CLAUDE.md` and existing untracked material remain untouched. No push, main merge, new chat creation, archive or deployment requested/performed in this handover task.
+**Next:** New Codex chat should read handover and latest log, inspect current source/status, and continue the authorized remaining plan with Claude's review. Queue capacity is first priority; audio and YouTube/caption changes remain separate. This handover records the active context, not permission for unrelated destructive/cloud actions.
