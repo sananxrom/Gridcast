@@ -2,9 +2,9 @@
 
 **Updated:** 25 Sep 2026 · **Review base:** `80fef42`
 
-**Last verified deployment:** `13ee21c` / `build-2026-09-25-003`; not rechecked for this document update.
+**Last verified deployment:** `f566bbb` / `build-2026-09-25-004`; Firebase rollout succeeded, build READY, 100% traffic. Verified 2026-09-25 21:45 IST.
 
-**Status:** Release A implemented locally; not deployed. Release B, audio and caption/control changes remain planned.
+**Status:** Release A deployed and smoke-tested on Firebase. Release B, audio and caption/control changes remain planned.
 
 **Decision record:** [AI-LOG.md](../AI-LOG.md), Codex/Claude reviews from 19:06 through 20:49 IST on 25 Sep.
 
@@ -312,10 +312,10 @@ an absolute guarantee, or block the only interaction that can recover playback.
 
 ## 6. Delivery and verification sequence
 
-1. Specification correction complete. Release A now has a local implementation; see the handoff below.
-2. Implement Release A as an independently reviewable change. Run targeted lifecycle, authorization-state,
-   queue/pairing and browser checks above, then typecheck and production build. Document the temporary export
-   regression and review the diff before release through the existing Firebase workflow.
+1. Specification correction and Release A deployment complete; see the handoff below.
+2. Release A verified: lifecycle, authorization-state, queue/pairing and browser checks, TypeScript and
+   production build passed. The reviewed commit was released through the existing Firebase workflow.
+   The temporary export limitation remains documented below.
 3. Implement Release B's scoped maintenance separately; do not make the public-exposure fix wait for it.
 4. Review audio configuration/fallback and then caption/control changes as separate diffs after A. They need
    not wait for B and must not expand A's acceptance scope. Heartbeat-driven refresh remains a follow-up.
@@ -327,10 +327,13 @@ rules continue to apply. This plan changes presentation, maintenance access and 
 redefine delivery acceptance, billing, measurement or browser-storage durability.
 
 
-## 7. Release A local implementation handoff — 25 Sep 2026
+## 7. Release A implementation and deployment handoff — 25 Sep 2026
 
 The implementation is in `app/player/page.tsx` (player version `gridcast-web/0.5.0`),
-`lib/player-diagnostics.ts` and `lib/player-media-cache.ts`. Production has not been updated.
+`lib/player-diagnostics.ts` and `lib/player-media-cache.ts`. Application commit `f566bbb` is live on Firebase
+through `build-2026-09-25-004`. Health confirmed Firestore database `gridcast`; a fresh unpaired browser
+loaded the player and version `gridcast-web/0.5.0` without page errors or HTTP 5xx responses. This was a
+read-only production smoke check, not a paired-device or venue-camera test.
 
 - Preview visibility uses presentation state without replacing the camera element. Capture restarts are
   keyed to camera/model settings, not unrelated configuration-version changes. Public export and diagnostic
