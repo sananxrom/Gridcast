@@ -187,7 +187,10 @@ function DataTable({ rows, firstHeading, period, data }: { rows: { id: string; n
 }
 export function DeliveryReport({ report, screens = [], campaigns = [], creatives = [] }: { report: DeliveryReportState; screens?: { id: string; name: string }[]; campaigns?: { id: string; name: string }[]; creatives?: { id: string; name: string }[] }) {
   const { data, period, loading, error } = report;
-  const [preset, setPreset] = useState('7d');
+  const [preset, setPreset] = useState(() => ['today', '7d', '30d', 'month'].find(value => {
+    const candidate = reportPreset(value);
+    return candidate.from === period.from && candidate.to === period.to;
+  }) || 'custom');
   const [draft, setDraft] = useState(period);
   const [validation, setValidation] = useState<string | null>(null);
   const [dimension, setDimension] = useState<'byScreen' | 'byCampaign' | 'byCreative'>('byScreen');

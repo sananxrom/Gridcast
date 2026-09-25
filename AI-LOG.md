@@ -2233,3 +2233,19 @@ is the design of record.
 **Failures resolved:** One original regression asserted removed capped campaign totals; it now checks the daily metrics API and null legacy totals. A new emulator read initially queried the wrong fixture date; matching its simulated receipt date/time passed. The isolated screen component tests initially lacked a stub for the new report component; actual bundled reporting browser tests were already passing.
 **Release scope:** Docs 17/18 first reporting release, with spec corrections and explicit remaining limits in gridcast-research/22-reporting-release.md. No invented historical backfill, uptime or expected-play denominator. Complete daily-summary CSV is implemented; full raw receipt export remains separate work.
 **Commit/deploy:** Pending; base 6c86627. This entry is included with the implementation commit.
+
+
+### 2026-09-25 16:29 IST · GPT-6 (Codex desktop) · Reporting deployed; live date-label issue found
+
+**Asked:** Check where work was cut off and continue the authorized build/deploy.
+**Did:** Confirmed final TypeScript and production build success; committed and pushed release d67ae8f8f9f66c69db5a46b86263da1808c7a55f on codex/gridcast-trust-layer-wp5. Firebase build-2026-09-25-001 succeeded with 100% traffic. Health returned ok=true, store=firestore, database=gridcast. Refreshed the signed-in Brave dashboard and verified report coverage, metric explanations, Today date selection, and organisation-scoped inventory/report loading. No new production receipts existed yet; unavailable coverage correctly appeared instead of zeros. No synthetic production receipts created. Recent Cloud Run error query returned zero errors.
+**Live finding:** Switching organisation unmounts the report view while its parent retains the date range. The local preset label reset to Last 7 days while actual range remained Today. Fixing initialization from the retained range and adding a browser regression before the final rollout. Existing numbers/queries were scoped correctly; the dropdown label was wrong.
+**Other work:** Shared code graph and SymDex refreshed. Closed our completed authorization tab and stopped the temporary localhost test server. One old browser tab ID was gone; selected the remaining Gridcast tab. A sandbox process inspection was denied; explicit approved inspection succeeded.
+**Files:** components/views/delivery-report.tsx, tests/reporting.browser.cjs, AI-LOG.md. Deployed SHA d67ae8f; date-label patch pending.
+
+
+### 2026-09-25 16:30 IST · GPT-6 (Codex desktop) · Date-label patch verified
+
+**Did:** Initialize the remounted report preset from its retained date range. Added an organisation-switch assertion after selecting Today to the real bundled browser test.
+**Verified:** TypeScript and fresh production build pass. Eight focused reporting tests pass, including both browser cases and six hook/CSV tests. No failures or skips.
+**Files:** components/views/delivery-report.tsx, tests/reporting.browser.cjs. Base d67ae8f; committing this focused patch for Firebase rollout.

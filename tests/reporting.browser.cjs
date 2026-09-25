@@ -35,6 +35,13 @@ test('report renders all pages, weighted presence, keyboard explanation and hone
   const downloadPromise=f.page.waitForEvent('download');await f.report.getByRole('button',{name:'Export CSV',exact:true}).click();const download=await downloadPromise;
   const content=fs.readFileSync(await download.path(),'utf8');assert.match(content,/measured_paid_plays/);assert.match(content,/"120","100"/);assert.match(content,/"50","2.8"/);assert.match(content,/"false"/);
   await f.report.getByLabel('Reporting period · IST').selectOption('today');await f.page.waitForTimeout(150);assert.ok(f.calls.at(-1).searchParams.get('from')===f.date);
+  await f.page.getByText('All organisations',{exact:true}).first().click();
+  await f.page.getByText('Test org',{exact:true}).click();
+  await f.report.getByRole('button',{name:'Export CSV',exact:true}).waitFor();
+  await f.page.waitForFunction(()=>document.querySelector('[aria-label="Delivery report"]')?.getAttribute('aria-busy')==='false');
+  assert.equal(await f.report.getByLabel('Reporting period · IST').inputValue(),'today');
+  assert.ok(f.calls.at(-1).searchParams.get('from')===f.date);
+  assert.equal(f.calls.at(-1).searchParams.get('org'),'org1');
   await f.page.screenshot({path:'/tmp/gridcast-reporting-desktop.png',fullPage:true});
   await f.page.setViewportSize({width:390,height:844});assert.ok(await f.report.getByRole('button',{name:'Export CSV',exact:true}).isVisible());assert.deepEqual(f.errors,[]);
  }finally{await f.browser.close();}
