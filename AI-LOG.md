@@ -3724,3 +3724,38 @@ impressions, face analysis, smiles or CDN downloads.
 **Did:** `app/vision-lab/evaluate/page.tsx` adds independent **Show face details** control, enabled initially, with smaller rounded face boxes, matching temporary body IDs only when confidently associated, and looking/not-looking/unknown labels. `public/vision-lab/worker.js` supplies local-only too-small/unclear diagnostics from its existing quality gates without changing the detector thresholds. `lib/vision/metrics.ts` exposes fresh-only `liveFaces()` display data using the exact same conservative association as aggregation; unmatched/ambiguous faces never display a confident identity or looking value. Failed/stale observations and stopped sessions clear face boxes. No landmark dots or new uploads; face geometry/IDs/reasons remain excluded from aggregate downloads.
 **Verified:** Production build/typecheck passed. Tracker tests **26/26** (three new tests cover stale/error clearing, unknown reasons, competing-face associations, and export exclusion); engine **8/8** and real pinned runtime/cache browser fixtures **3/3** passed. Existing compiled UI regression **1/1** passed. Browser smoke verified independent face/body toggles, 4:3 and 16:9 coordinate alignment, stop cleanup and zero page errors; reviewed `/tmp/gridcast-face-preview.png`. Logs: `/tmp/gridcast-face-metrics-final.log`, `/tmp/gridcast-face-tests.log`, `/tmp/gridcast-face-build.log`, `/tmp/gridcast-face-smoke.log`, `/tmp/gridcast-face-ui-regression.log`. These are synthetic/fixture checks, not a new real-person accuracy study. No failures this turn.
 **Outcome:** Local preview server restarted on the same port 4021; refresh to use. Based on `f70f969`; local commit with this log follows. No push/deploy or commercial changes. Shared graph/SymDex refresh follow; unrelated Claude/project files preserved.
+
+### 2026-09-26 15:30 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Build 1 attention lab reviewed from source; new rule: I rely on Codex's test logs
+
+**Asked:** Sanan: "check log, check demo build", then mid-turn "dont run your own tests, rely on its logs".
+**New working rule (Sanan):** I no longer run test suites. I review source and diffs and cite Codex's logged
+results as Codex's. Before the instruction arrived I had run some. Recording them only so nobody relies on them:
+player suite alone 35/35; mixed runs showed timing failures under load; one attention UI run against the dev
+server on port 4021 failed while Sanan's own lab tab was open, and the lab refuses a second session by design
+(Codex 15:04). None of these are findings. Codex's figures stand: `npm test` 271 total, 266 passed, 5
+emulator skips; five-suite player group 67/67 after the harness CSS fix; compiled attention page 2/2.
+
+**Harness fix (my 14:40 point 1): closed.** Codex loaded the generated Tailwind CSS in
+`tests/player.browser.cjs` rather than changing production styles, and separately checked recovery clicks on
+the compiled `/player` (Codex 15:04). That is better than the inline-style fix I proposed.
+
+**Build 1, read from source this turn:**
+- The lab makes no network calls to Gridcast: `grep` for `fetch(`, `/api/`, auth or token in
+  `app/vision-lab/evaluate/page.tsx` finds nothing. It cannot write receipts or settlement.
+- Unknown is kept distinct from zero. `lib/vision/metrics.ts:217` counts attention only when the body and
+  face stages are both current and there is at least one assessable face or an empty scene
+  (`attentionOk=bodyOk && faceOk && (empty || look.length>0)`). Outputs are `null` when not observed (`:240-244`).
+- Thresholds are explicit and frozen: `EVALUATION_LIMITS` (`:10`) holds `exposure_threshold_s: 1`, track loss
+  2,000 ms, and caps of 40 tracks, 20 bodies and 5 faces.
+**One point for Sanan and Codex: the lab will be public if deployed.** `/vision-lab/evaluate` lives under `app/`,
+has no sign-in, and would ship with the next production build. It only uses the visitor's own camera and uploads
+nothing, so the risk is low. But it would be a public, unbranded experiment on the product domain. Decide
+before the next deploy: gate it behind sign-in, exclude it from production builds, or accept it as public.
+**Files:** `AI-LOG.md`. Not committed.
+
+### 2026-09-26 15:30 IST · GPT-6 (Codex desktop) · Permanently mirror the evaluation camera preview
+
+**Asked:** Flip the camera feed horizontally permanently for easier testing.
+**Did:** `app/vision-lab/evaluate/page.tsx` mirrors only the preview video with `scaleX(-1)` and maps body/face box left edges to `1 - right`. Labels remain normally readable. Original video pixels still feed inference, so model coordinates, calibration and aggregate measurement semantics are unchanged. Restarted the task's local preview on port 4021.
+**Verified:** Production build/typecheck passed (`/tmp/gridcast-mirror-build.log`). Compiled browser smoke passed mirrored-video transform, readable-label transform, mirrored body/face alignment in 4:3 and 16:9, toggles, stop cleanup and zero page errors (`/tmp/gridcast-mirror-smoke.log`). Initial temporary smoke assertion had an accidental .355 expected width from a string replacement; corrected to the original .35 width and reran successfully. No application correction was needed after that fixture typo.
+**Outcome:** Based on `a34dcb9`; local commit with this log follows. No push/deploy. Shared indexes refresh follow; unrelated files preserved.

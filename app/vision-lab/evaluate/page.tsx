@@ -126,13 +126,13 @@ export default function AttentionEvaluation() {
       <p className="mt-2 text-xs text-slate-500">{ready ? `Verified cache · ${number((filesBytes || 0)/1e6)} MB including both WASM variants. Test an offline reload separately.` : 'Initial preparation downloads models and their runtime. Starting asks for camera access; audio is never captured.'}</p>
     </section>
     <div className="grid gap-5 lg:grid-cols-2"><section className="overflow-hidden rounded-xl border bg-slate-950"><div className="flex items-center justify-between p-4 text-sm text-white"><h2>Local camera preview</h2><span>{mode === 'simulation' ? 'Synthetic inputs' : 'Never uploaded'}</span></div><div className="relative w-full overflow-hidden" style={{ aspectRatio: cameraRatio }} data-testid="camera-preview">
-      <video ref={camera} autoPlay muted playsInline className="absolute inset-0 h-full w-full object-contain" onLoadedMetadata={()=>{const v=camera.current;if(v?.videoWidth&&v.videoHeight)setCameraRatio(v.videoWidth/v.videoHeight);}} onResize={()=>{const v=camera.current;if(v?.videoWidth&&v.videoHeight)setCameraRatio(v.videoWidth/v.videoHeight);}}/>
+      <video ref={camera} autoPlay muted playsInline style={{ transform: 'scaleX(-1)' }} className="absolute inset-0 h-full w-full object-contain" onLoadedMetadata={()=>{const v=camera.current;if(v?.videoWidth&&v.videoHeight)setCameraRatio(v.videoWidth/v.videoHeight);}} onResize={()=>{const v=camera.current;if(v?.videoWidth&&v.videoHeight)setCameraRatio(v.videoWidth/v.videoHeight);}}/>
       {mode === 'simulation' && <span className="absolute left-3 top-3 rounded bg-slate-900/90 px-2 py-1 text-xs text-slate-300">Synthetic scene</span>}
       {showOverlay && mode !== 'idle' && <div className="pointer-events-none absolute inset-0" aria-label="Local tracking overlay">
         {tracks.map(track => {
           const color = track.uncertain || track.looking === null ? '#fbbf24' : track.looking ? '#34d399' : '#60a5fa';
           const state = track.uncertain ? 'Uncertain match' : track.looking === null ? 'Looking unknown' : track.looking ? 'Looking' : 'Not looking';
-          return <div key={track.key} data-testid="tracking-box" className="absolute border-2" style={{left:`${track.box[0]*100}%`,top:`${track.box[1]*100}%`,width:`${(track.box[2]-track.box[0])*100}%`,height:`${(track.box[3]-track.box[1])*100}%`,borderColor:color,borderStyle:track.uncertain?'dashed':'solid'}}>
+          return <div key={track.key} data-testid="tracking-box" className="absolute border-2" style={{left:`${(1-track.box[2])*100}%`,top:`${track.box[1]*100}%`,width:`${(track.box[2]-track.box[0])*100}%`,height:`${(track.box[3]-track.box[1])*100}%`,borderColor:color,borderStyle:track.uncertain?'dashed':'solid'}}>
             <span className="absolute left-0 top-0 max-w-full rounded-br bg-slate-950/90 px-1.5 py-1 text-[11px] font-medium leading-tight" style={{color}}>#{track.key} · {state}</span>
           </div>;
         })}
@@ -140,7 +140,7 @@ export default function AttentionEvaluation() {
       {showFaces && mode !== 'idle' && <div className="pointer-events-none absolute inset-0" aria-label="Local face overlay">{faceDetails.map((face,index)=>{
         const color=face.looking===null?'#fbbf24':face.looking?'#34d399':'#60a5fa';
         const description=face.reason==='too_small'?'Face too small':face.reason==='unmatched'?'No confident body match':face.reason==='unclear'?'Face direction unclear':face.looking?'Looking':'Not looking';
-        return <div key={index} data-testid="face-box" className="absolute rounded border-2" style={{left:`${face.box[0]*100}%`,top:`${face.box[1]*100}%`,width:`${(face.box[2]-face.box[0])*100}%`,height:`${(face.box[3]-face.box[1])*100}%`,borderColor:color,borderStyle:face.reason?'dashed':'solid'}}>
+        return <div key={index} data-testid="face-box" className="absolute rounded border-2" style={{left:`${(1-face.box[2])*100}%`,top:`${face.box[1]*100}%`,width:`${(face.box[2]-face.box[0])*100}%`,height:`${(face.box[3]-face.box[1])*100}%`,borderColor:color,borderStyle:face.reason?'dashed':'solid'}}>
           <span className="absolute left-0 top-full mt-1 rounded bg-slate-950/90 px-1.5 py-1 text-[10px] font-medium leading-tight" style={{color,width:140,maxWidth:'40vw'}}>Face{face.track_key===null?'':` #${face.track_key}`} · {description}</span>
         </div>;
       })}</div>}
