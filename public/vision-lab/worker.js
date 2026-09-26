@@ -52,7 +52,7 @@ self.onmessage = async ({ data }) => {
             const gaze = direction * Math.abs(yaw) + .7 * 120 * iris;
             looking = (blinkL + blinkR) / 2 < .55 && Math.abs(gaze - data.calibration.yaw) < 22 && Math.abs(pitch - data.calibration.pitch) < 20;
           }
-          return { box, looking, smiling: valid && Number.isFinite(smileL) && Number.isFinite(smileR) ? (smileL + smileR) / 2 > .45 : null };
+          return { box, looking, unavailable_reason: valid ? undefined : eyePixels < 8 || (box[2] - box[0]) * bitmap.width < 50 ? 'too_small' : 'unclear', smiling: valid && Number.isFinite(smileL) && Number.isFinite(smileR) ? (smileL + smileR) / 2 > .45 : null };
         });
         observation.faces = { ok: true, faces, saturated: faces.length >= 5 };
       } catch { observation.faces = { ok: false, faces: [], saturated: false }; }

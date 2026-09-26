@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { BrandLogo } from '@/components/ui/brand-mark';
-import { EvaluationMetrics, type EvaluationSnapshot, type TrackView } from '@/lib/vision/metrics';
+import { EvaluationMetrics, type EvaluationSnapshot, type TrackView, type FaceView } from '@/lib/vision/metrics';
 import { acquireEvaluationLock, assertIsolated, createEvaluationWorker, EVALUATION_PROFILE, prepareEvaluation, type EngineStatus } from '@/lib/vision/engine';
 
 const number = (value: number | null | undefined, digits = 1) => value == null ? '—' : value.toFixed(digits);
@@ -13,6 +13,8 @@ export default function AttentionEvaluation() {
   const run = useRef(0);
   const runMetadata = useRef<{ mode: 'camera'|'simulation'; delegate: 'CPU'|'GPU'; calibration: {yaw:number;pitch:number}; started_at:string; warnings:string[] } | null>(null);
   const alive = useRef(true), mediaURL = useRef<string | null>(null), prepareAbort = useRef<AbortController | null>(null);
+  const [faceDetails, setFaceDetails] = useState<FaceView[]>([]);
+  const [showFaces, setShowFaces] = useState(true);
   const [tracks, setTracks] = useState<TrackView[]>([]);
   const [showOverlay, setShowOverlay] = useState(true), [cameraRatio, setCameraRatio] = useState(4 / 3);
   const [snapshot, setSnapshot] = useState<EvaluationSnapshot | null>(null);
@@ -32,7 +34,7 @@ export default function AttentionEvaluation() {
     play.current = null;
     creative.current?.pause();
     if (camera.current) camera.current.srcObject = null;
-    if (alive.current) { setSnapshot(metrics.current.snapshot(performance.now())); setMode('idle'); setTracks([]); setBusy(false); setPlaying(false); setStatus(message); }
+    if (alive.current) { setSnapshot(metrics.current.snapshot(performance.now())); setMode('idle'); setTracks([]); setFaceDetails([]); setBusy(false); setPlaying(false); setStatus(message); }
   };
   useEffect(() => {
     alive.current = true; setOnline(navigator.onLine);
@@ -60,7 +62,7 @@ export default function AttentionEvaluation() {
   const begin = async (simulation: boolean) => {
     const generation = ++run.current;
     const current = () => alive.current && generation === run.current;
-    setError(''); setBusy(true); setStats(null); setTracks([]);
+    setError(''); setBusy(true); setStats(null); setTracks([]); setFaceDetails([]);
     if (simulation) setCameraRatio(4 / 3);
     const controller = new AbortController(); let stream: MediaStream | undefined, engine: Awaited<ReturnType<typeof createEvaluationWorker>> | undefined;
     let releaseLock: (() => void) | undefined;
@@ -100,7 +102,7 @@ export default function AttentionEvaluation() {
         } else if (!simulation && camera.current) void engine?.frame(camera.current, calibrationRef.current);
         raf = requestAnimationFrame(tick);
       };
-      tick(); ui = setInterval(() => { const now = performance.now(); setSnapshot(metrics.current.snapshot(now)); setTracks(metrics.current.liveTracks(now)); }, 125);
+      tick(); ui = setInterval(() => { const now = performance.now(); setSnapshot(metrics.current.snapshot(now)); setTracks(metrics.current.liveTracks(now)); setFaceDetails(metrics.current.liveFaces(now)); }, 125);
       if (media && creative.current) void creative.current.play().catch(() => { if(current()) setStatus('Press play on the test video to begin timing.'); });
     } catch (e: any) { const active = current(); end(); if (active) { if (e.name !== 'AbortError') { setError(e.message || 'Could not start the evaluation'); setStatus('No measurements are running.'); } setBusy(false); setMode('idle'); } }
   };
@@ -135,9 +137,17 @@ export default function AttentionEvaluation() {
           </div>;
         })}
       </div>}
+      {showFaces && mode !== 'idle' && <div className="pointer-events-none absolute inset-0" aria-label="Local face overlay">{faceDetails.map((face,index)=>{
+        const color=face.looking===null?'#fbbf24':face.looking?'#34d399':'#60a5fa';
+        const description=face.reason==='too_small'?'Face too small':face.reason==='unmatched'?'No confident body match':face.reason==='unclear'?'Face direction unclear':face.looking?'Looking':'Not looking';
+        return <div key={index} data-testid="face-box" className="absolute rounded border-2" style={{left:`${face.box[0]*100}%`,top:`${face.box[1]*100}%`,width:`${(face.box[2]-face.box[0])*100}%`,height:`${(face.box[3]-face.box[1])*100}%`,borderColor:color,borderStyle:face.reason?'dashed':'solid'}}>
+          <span className="absolute left-0 top-full mt-1 rounded bg-slate-950/90 px-1.5 py-1 text-[10px] font-medium leading-tight" style={{color,width:140,maxWidth:'40vw'}}>Face{face.track_key===null?'':` #${face.track_key}`} · {description}</span>
+        </div>;
+      })}</div>}
     </div>
     <div className="space-y-3 p-4 text-xs text-slate-300">
       <label className="flex items-center gap-2"><input type="checkbox" checked={showOverlay} onChange={e=>setShowOverlay(e.target.checked)}/>Show tracking boxes</label>
+      <label className="flex items-center gap-2"><input type="checkbox" checked={showFaces} onChange={e=>setShowFaces(e.target.checked)}/>Show face details</label>
       <p>Green: looking · Blue: not looking · Amber: unknown or uncertain</p>
       {mode !== 'idle' && !tracks.length && <p>{snapshot?.live.body_status === 'ok' ? 'No people detected in the current frame.' : 'Waiting for fresh person observations…'}</p>}
       {mode !== 'idle' && tracks.length > 0 && <ul aria-label="Live track details" className="grid gap-2 sm:grid-cols-2">{tracks.map(track=><li key={track.key} className="rounded border border-slate-700 bg-slate-900 p-2"><span className="font-semibold text-white">Track #{track.key}</span> · {track.uncertain ? 'Association uncertain' : track.looking === null ? 'Looking unknown' : track.looking ? 'Looking toward screen' : 'Not looking toward screen'}<br/>{track.smiling === null ? 'Smile unknown' : track.smiling ? 'Visible smile' : 'No visible smile'} · This ad: {number(track.dwell_s)} s present / {number(track.looking_s)} s looking</li>)}</ul>}

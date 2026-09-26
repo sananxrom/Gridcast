@@ -1,6 +1,6 @@
 /** Local evaluation only. No recognition, persistence, frame export or billing authority. */
 export type Box = [number, number, number, number];
-export type Face = { box: Box; looking: boolean | null; smiling: boolean | null };
+export type Face = { box: Box; looking: boolean | null; smiling: boolean | null; unavailable_reason?: 'too_small' | 'unclear' };
 export type Observation = {
   at: number;
   bodies?: { ok: boolean; boxes: Box[]; saturated: boolean };
@@ -25,6 +25,7 @@ export type EvaluationSnapshot = {
   limits:typeof EVALUATION_LIMITS;
 };
 /** Deliberately separate from exportable aggregates; identifiers and geometry are local display only. */
+export type FaceView = {box:Box;track_key:number|null;looking:boolean|null;reason:'too_small'|'unclear'|'unmatched'|null};
 export type TrackView = {key:number;box:Box;looking:boolean|null;smiling:boolean|null;uncertain:boolean;dwell_s:number;looking_s:number;smiling_s:number;longest_look_s:number};
 type Track = {key:number;box:Box;seen:number;created:number;vx:number;vy:number;uncertain:boolean};
 type Visit = {dwell:number;looking:number;smiling:number;streak:number;longest:number};
@@ -77,7 +78,7 @@ export class EvaluationMetrics {
       this.bodies={at:obs.at,ok,saturated:input.saturated === true || (Array.isArray(input.boxes) && input.boxes.length>=EVALUATION_LIMITS.max_bodies),values:keys};
     }
     if (obs.faces) {
-      const input=obs.faces, values=Array.isArray(input.faces) ? input.faces.slice(0,EVALUATION_LIMITS.max_faces).map(f=>({box:box(f?.box),looking:typeof f?.looking==='boolean'?f.looking:null,smiling:typeof f?.smiling==='boolean'?f.smiling:null})) : [{box:null,looking:null,smiling:null}];
+      const input=obs.faces, values=Array.isArray(input.faces) ? input.faces.slice(0,EVALUATION_LIMITS.max_faces).map(f=>({unavailable_reason:f?.unavailable_reason === 'too_small' ? 'too_small' as const : f?.unavailable_reason === 'unclear' ? 'unclear' as const : undefined,box:box(f?.box),looking:typeof f?.looking==='boolean'?f.looking:null,smiling:typeof f?.smiling==='boolean'?f.smiling:null})) : [{box:null,looking:null,smiling:null}];
       const ok=input.ok === true && values.every(v=>v.box!==null);
       this.faces={at:obs.at,ok,saturated:input.saturated === true || (Array.isArray(input.faces) && input.faces.length>=EVALUATION_LIMITS.max_faces),values:ok ? values as Face[] : []};
     }
@@ -118,6 +119,18 @@ export class EvaluationMetrics {
   liveTracks(at:number):TrackView[] {
     const now=validTime(at) ? Math.max(at,this.at ?? at) : this.at ?? 0,acc=this.project(now);
     return this.associated(now).map(s=>{const v=acc?.visits.get(s.track.key);return {key:s.track.key,box:[...s.track.box] as Box,looking:s.looking,smiling:s.smiling,uncertain:s.uncertain,dwell_s:v?.dwell || 0,looking_s:v?.looking || 0,smiling_s:v?.smiling || 0,longest_look_s:v?.longest || 0};});
+  }
+
+  /** Display only: fresh face geometry and the same conservative body association used by metrics. */
+  liveFaces(at:number):FaceView[] {
+    const now=validTime(at) ? Math.max(at,this.at ?? at) : this.at ?? 0;
+    if (status(this.faces,now,EVALUATION_LIMITS.face_max_age_ms)!=='ok') return [];
+    const associated=this.associated(now);
+    return (this.faces?.values || []).map(face=>{
+      const match=associated.find(s=>s.face===face && !s.uncertain);
+      return {box:[...face.box] as Box,track_key:match?.track.key ?? null,looking:match?.looking ?? null,
+        reason:!match ? 'unmatched' : face.looking===null ? face.unavailable_reason || 'unclear' : null};
+    });
   }
 
   reset():void { this.bodies=null;this.faces=null;this.tracks.clear();this.nextKey=1;this.at=null;this.playing=false;this.current=null;this.completed=[]; }
@@ -170,7 +183,7 @@ export class EvaluationMetrics {
   }
   private associated(at:number) {
     if (status(this.bodies,at,EVALUATION_LIMITS.body_max_age_ms)!=='ok') return [];
-    const result=(this.bodies?.values || []).flatMap(key=>{const track=this.tracks.get(key);return track ? [{track,looking:null as boolean|null,smiling:null as boolean|null,uncertain:track.uncertain}] : [];});
+    const result=(this.bodies?.values || []).flatMap(key=>{const track=this.tracks.get(key);return track ? [{track,face:null as Face|null,looking:null as boolean|null,smiling:null as boolean|null,uncertain:track.uncertain}] : [];});
     if (status(this.faces,at,EVALUATION_LIMITS.face_max_age_ms)!=='ok') return result;
     const assigned=new Set<number>();
     for (const face of this.faces?.values || []) {
@@ -187,7 +200,7 @@ export class EvaluationMetrics {
       const selected=candidates[0].index;
       if (assigned.has(selected)) { result[selected].looking=null;result[selected].smiling=null;result[selected].uncertain=true;continue; }
       assigned.add(selected);
-      if (!result[selected].uncertain) { result[selected].looking=face.looking;result[selected].smiling=face.smiling; }
+      if (!result[selected].uncertain) { result[selected].face=face;result[selected].looking=face.looking;result[selected].smiling=face.smiling; }
     }
     return result;
   }

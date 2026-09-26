@@ -111,3 +111,19 @@ test('old face samples cannot attach to newly created body tracks',()=>{
  const m=start();observe(m,0,people([]),faces());m.observe({at:200,bodies:people()});assert.equal(m.snapshot(200).live.looking,null);
  m.observe({at:250,faces:faces()});assert.equal(m.snapshot(250).live.looking,1);
 });
+
+test('local face details reuse body association and never enter aggregate exports',()=>{
+ const m=start();observe(m,0);const detail=m.liveFaces(0)[0];assert.deepEqual(detail.box,head);assert.equal(detail.track_key,m.liveTracks(0)[0].key);assert.equal(detail.looking,true);assert.equal(detail.reason,null);
+ assert.equal(/"(?:box|track_key|unavailable_reason)"/.test(JSON.stringify(m.snapshot(0))),false);
+ assert.deepEqual(m.liveFaces(501),[],'Stale faces disappear rather than retain a current label');
+ observe(m,600,people(),faces([],false,false));assert.deepEqual(m.liveFaces(600),[],'Failed face observations clear geometry');
+});
+test('local face details distinguish quality failure from missing body association',()=>{
+ const m=start();observe(m,0,people(),faces([{box:head,looking:null,smiling:null,unavailable_reason:'too_small'}]));assert.equal(m.liveFaces(0)[0].reason,'too_small');
+ observe(m,100,people(),faces([{box:head,looking:null,smiling:null}]));assert.equal(m.liveFaces(100)[0].reason,'unclear');
+ observe(m,200,people([]));const unmatched=m.liveFaces(200)[0];assert.equal(unmatched.reason,'unmatched');assert.equal(unmatched.looking,null);assert.equal(unmatched.track_key,null);
+});
+test('two faces competing for one body do not display a confident face-to-person assignment',()=>{
+ const m=start();observe(m,0,people(),faces([{box:head,looking:true,smiling:true},{box:[.33,.16,.49,.34],looking:false,smiling:false}]));
+ assert.equal(m.liveFaces(0).length,2);for(const face of m.liveFaces(0)){assert.equal(face.track_key,null);assert.equal(face.looking,null);assert.equal(face.reason,'unmatched');}
+});
