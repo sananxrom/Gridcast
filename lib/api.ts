@@ -12,7 +12,8 @@ import * as store from './store';
 import { AccessError, authorize, bootstrap, publicUser, orgView, screenView, advertiserView, capabilities, campaignView, settlementView, redact } from './access';
 import { seed, uid, nowISO, code6 } from './seed';
 import * as cfg from './config';
-import { deviceRoute, deviceIdFromToken, pairingCodeHash, issuePairing, revokeDevices } from './devices';
+import { ATTENTION_PROFILE } from './vision/attention-contracts';
+import { deviceRoute, deviceIdFromToken, pairingCodeHash, issuePairing, revokeDevices, calibrationForDevice } from './devices';
 import { InventoryError, validateScreenInput, reverseCalculate, validateBooking, eligibility, groupMatches, defaultSlotsPerLoop, rotationWeight, authorizationUntil } from './inventory';
 import { can, ROLES, PLATFORM_ADMIN, ADVERTISER, tabFor } from './roles';
 import { hashPassword, verifyPassword, issueToken, readToken, tempPassword, throttled, noteFailure, clearFailures, assertAuthConfigured, type Claims } from './auth';
@@ -57,8 +58,10 @@ function validateInventory() {
     if (candidate.screen_ids.length) validateBooking({...candidate,scheduling_mode:'continuous'},db.campaigns,screens,db.creatives,{previous:c,orgs:db.orgs});
   }
 }
-function playlistFor(screen: any, _device?: any, rotationIndex = 0) {
-  const config = cfg.flatten(resolveFor(screen));
+function playlistFor(screen: any, device?: any, rotationIndex = 0) {
+  const calibration=calibrationForDevice(screen,device);
+  const config:any = { ...cfg.flatten(resolveFor(screen)), attention_enabled: screen.attention_settings?.enabled === true,
+    attention_profile: screen.attention_settings?.profile || ATTENTION_PROFILE.id, attention_calibration: calibration };
   const items: any[] = [], decisions: any[] = [], loopAdvertisers: any[] = [], rotationPool: any[] = [];
   for (const campaign of db.campaigns.filter((c: any) => c.screen_ids?.includes(screen.id))) {
     const advertiser = db.advertisers.find((a: any) => a.id === campaign.advertiser_id);
@@ -132,11 +135,11 @@ export function handle(method: string, seg: string[], q: URLSearchParams, body: 
         maintenanceLimiterIds: seg.join('/') === 'maintenance/redeem' ? maintenanceLimiterIds(clientKey) : undefined,
         loginEmail: seg.join('/') === 'login' ? String(body.email || '').trim().toLowerCase() : undefined,
         pairingCodeHash: seg.join('/') === 'pair' ? pairingCodeHash(String(body.code || '')) : undefined,
-        playUid: typeof body.play_uid === 'string' ? body.play_uid : undefined,
+        playUid: typeof body.play_uid === 'string' ? body.play_uid : undefined, attentionRevision:typeof body.calibration?.revision==='string'?body.calibration.revision:undefined,
         startedAtDevice:body.started_at_device,clockOffset:body.server_clock_offset_ms,seqNo: body.seq_no, assignmentId: body.assignment_id, orgId: q.get('org') || q.get('org_id') || undefined,
         targetOrg: typeof body.org_id === 'string' ? body.org_id : undefined, entity:q.get('entity') || undefined,
         from:q.get('from') || undefined,to:q.get('to') || undefined,reportScreen:q.get('screen') || undefined,reportCampaign:q.get('campaign') || undefined,
-        after:q.get('after') || undefined,limit:Number(q.get('limit')) || 100 }, async () => {
+        after:q.get('after') || undefined,attentionAfter:q.get('attention_after')||undefined,limit:Number(q.get('limit')) || 100 }, async () => {
         db = null; auditContext = null;
         const result = await dispatch(method, seg, q, body, token, clientKey);
         const actor = claims ? db?.users.find((u: any) => u.id === claims.uid) : null;
@@ -343,7 +346,9 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
       .sort((a: any,b: any) => a.id.localeCompare(b.id));
     const items = rows.slice(0,REPORT_PAGE_SIZE);
     const page = db.report_page || {has_more:rows.length > REPORT_PAGE_SIZE,next_cursor:rows.length > REPORT_PAGE_SIZE ? items.at(-1)?.id : null};
-    return {body:{...summarizeReport(items,range,db.reporting_coverage),...page}};
+    const attentionRows=(db.attention_day||[]).filter((r:any)=>reportingVisible(r,actor,q.get('org')||q.get('org_id')||undefined)&&r.id>=range.lower&&r.id<range.upper&&(!q.get('attention_after')||r.id>q.get('attention_after')!)&&(!q.get('screen')||r.screen_id===q.get('screen'))&&(!q.get('campaign')||r.campaign_id===q.get('campaign'))).sort((a:any,b:any)=>a.id.localeCompare(b.id));
+    const attentionItems=attentionRows.slice(0,REPORT_PAGE_SIZE),attentionPage=db.attention_page||{has_more:attentionRows.length>REPORT_PAGE_SIZE,next_cursor:attentionRows.length>REPORT_PAGE_SIZE?attentionItems.at(-1)?.id:null};
+    return {body:{...summarizeReport(items,range,db.reporting_coverage,attentionItems),...page,attention_page:attentionPage}};
   }
 
   if (method === 'GET' && p === 'bootstrap') return { body: redact(bootstrap(db, actor, screenStatus, q.get('org') || q.get('org_id')), actor) };
@@ -489,6 +494,17 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     const screen = db.screens.find((s: any) => s.id === seg[1]);
     const assignment = seg[4] === 'revoke' ? revokeDiagnostic(db,screen,seg[3],actor) : requestDiagnostic(db,screen,actor,{config:cfg.flatten(resolveFor(screen)),config_version:db.settings?.config_revision || 1});
     await save(); return {body:assignment};
+  }
+  if (method === 'POST' && seg[0] === 'screen' && seg[1] && seg[2] === 'attention') {
+    if (!isAdmin) throw new AccessError(403,'Only a platform administrator can enable attention analytics');
+    const s = db.screens.find((x: any) => x.id === seg[1]);
+    if (!s) return { status: 404, body: { error: 'not found' } };
+    if (Object.keys(body).some(k => !['enabled','profile'].includes(k)) || typeof body.enabled !== 'boolean')
+      throw new AccessError(400,'Choose whether Attention V1 is enabled for this screen');
+    if (body.profile !== ATTENTION_PROFILE.id) throw new AccessError(400,'Unsupported attention profile');
+    s.attention_settings = { enabled:body.enabled, profile:ATTENTION_PROFILE.id, updated_at:nowISO(), updated_by:actor.id };
+    bumpConfig(); await save();
+    return { body:{ ok:true, attention_settings:s.attention_settings, config_version:db.settings.config_revision } };
   }
   if (method === 'POST' && seg[0] === 'screen' && seg[1] && seg[2] === 'exclusions') {
     const s = db.screens.find((x: any) => x.id === seg[1]);

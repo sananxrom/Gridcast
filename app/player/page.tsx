@@ -8,16 +8,21 @@ import { BrandLogo } from '@/components/ui/brand-mark';
 import { pendingDiagnostic, saveDiagnostic, flushDiagnostic, reserveDiagnostic, releaseDiagnosticReservation, diagnosticRecordCounts } from '@/lib/player-diagnostics';
 import { cacheMedia, cachedMediaUrl, saveReadySchedule, readySchedule, reserveLocalPlay, clearReadySchedule, beginOnlineAuthorization, authorizeOnlineSchedule } from '@/lib/player-media-cache';
 import { cameraConstraints, cameraError, frameSize } from '@/lib/player-vision';
+import { ATTENTION_PROFILE, validateAttentionCalibration, prepareAttentionAssets, createProductionAttentionWorker, createAttentionMetrics, summaryForReceipt, localCameraRef, localCalibrationKey } from '@/lib/vision/production';
+import { validateAttentionSummary, prepareAttentionEnvelope, attentionQueuedEventBytes, ATTENTION_LIMITS } from '@/lib/vision/attention-contracts';
+import { GazeCalibration } from '@/lib/vision/calibration';
+import type { Observation } from '@/lib/vision/metrics';
 
 declare global { interface Window { YT: any; onYouTubeIframeAPIReady: () => void; cocoSsd: any; tf: any } }
-const APP_VERSION = 'gridcast-web/0.8.0';
+const APP_VERSION = 'gridcast-web/0.9.0';
 const MODEL_VERSION = 'coco-ssd@2.2.3/lite_mobilenet_v2';
 type Credential = { token: string; device_id: string; screen_id: string };
 type Item = { kind?: 'diagnostic' | 'paid' | 'filler'; diagnostic_has_camera?: boolean; assignment_id: string; valid_until: string; campaign_id: string | null; creative_id: string;
+  attention_enabled?:boolean; attention_profile?:string|null; attention_calibration_revision?:string|null;
   max_plays?: number; media_type?: 'video' | 'image'; youtube_id?: string; asset_url?: string; asset_id?: string; asset_sha256?: string; asset_bytes?: number; asset_mime?: string; width?: number; height?: number; duration_s: number };
 type Playlist = { screen: any; config: Record<string, any>; config_version: string | number; server_time: string; items: Item[]; filler_items?: Item[]; scheduling_mode?: string; budget_state?: string; readiness?: {message:string}; diagnostic?: {assignment_id:string;status:string;message:string} | null };
 type Slot = { item: Item; uid: string; started: number; startedPlaying: boolean; accumulated: number; segmentStart: number | null;
-  mediaStart: number; samples: number[]; cameraHealthy: boolean; config: Record<string, any>; version: string | number; offset: number; done: boolean; diagnosticRun?: string; decodedWidth?: number; decodedHeight?: number };
+  mediaStart: number; samples: number[]; cameraHealthy: boolean; config: Record<string, any>; version: string | number; offset: number; done: boolean; attentionValid?:boolean; attentionStarted?:boolean; diagnosticRun?: string; decodedWidth?: number; decodedHeight?: number };
 function script(src: string, ready: () => boolean) {
   return new Promise<void>((resolve, reject) => {
     if (ready()) { resolve(); return; }
@@ -46,11 +51,16 @@ export default function Player() {
   const [restart, setRestart] = useState(0), [overlayEnabled, setOverlayEnabled] = useState(false), [diagnosticActive, setDiagnosticActive] = useState(false);
   const [publicFailure, setPublicFailure] = useState(false), [recoverySummary, setRecoverySummary] = useState('');
   const [storageWarning, setStorageWarning] = useState('');
-  const [soundBlocked, setSoundBlocked] = useState(false);
+const [soundBlocked, setSoundBlocked] = useState(false);
+  const [attentionStatus,setAttentionStatus]=useState(''),[attentionProgress,setAttentionProgress]=useState<{message:string;phase:'checking'|'downloading'|'verifying'|'initializing';downloaded:number;verified:number;total:number;elapsedSeconds:number;etaSeconds:number|null}|null>(null),[attentionCalibrating,setAttentionCalibrating]=useState(false);
+  const [attentionEnabled,setAttentionEnabled]=useState(false),[attentionSetupActive,setAttentionSetupActive]=useState(false);
+  const [attentionModelsReady,setAttentionModelsReady]=useState(false);
   const operationBusy = useRef(false);
   const settlePlayer = useRef<() => Promise<void>>(async () => {});
   const retryCamera = useRef<() => void>(() => {});
   const recoverSound = useRef<() => Promise<void>>(async () => {});
+  const calibrateAttention = useRef<() => Promise<void>>(async () => {});
+  const retryAttention = useRef<() => void>(() => {}), cancelAttention = useRef<() => void>(() => {});
   const camera = useRef<HTMLVideoElement>(null), canvas = useRef<HTMLCanvasElement>(null), media = useRef<HTMLVideoElement>(null), standbyMedia = useRef<HTMLVideoElement>(null), imageSurface = useRef<HTMLImageElement>(null), youtubeMount = useRef<HTMLDivElement>(null);
   useEffect(() => answerEvidenceProtocol(), []);
   useEffect(() => {
@@ -80,6 +90,8 @@ export default function Player() {
       return preparedImages.get(item.assignment_id)!;
     };
     let yt: any = null, ytReady = false, detector: any = null, stream: MediaStream | null = null, cameraOK = false;
+    let attentionWorker:any=null,attentionAbort:AbortController|null=null,attentionMetrics:any=null,attentionCalibration:any=null,attentionCameraRef='',attentionProfile='',attentionRotation:0|90|180|270=0;
+    let activeCalibrator:GazeCalibration|null=null,activeCalibratorToken:string|null=null,calibrationRequested=false,attentionSetupPaused=false;
     let startup = false, pulling = false, flushing = false, heartbeatBusy = false, fatal = true, actualOffset = 0, reservedPlayUid: string | null = null;
     let requestedAudio = true, browserBlockedAudio = false;
     let diagnosticBlockedMessage = '';
@@ -93,6 +105,47 @@ export default function Player() {
     const booted = performance.now(), timers = new Set<ReturnType<typeof setTimeout>>();
     const later = (f: () => void, delay: number) => { const t = setTimeout(() => { timers.delete(t); if (!disposed) f(); }, delay); timers.add(t); };
     const state = (value: string) => { if (!disposed) setStatus(value); };
+    function stopAttention(){attentionAbort?.abort();attentionAbort=null;attentionWorker?.close();attentionWorker=null;activeCalibrator=null;activeCalibratorToken=null;attentionProfile='';setAttentionModelsReady(false);setAttentionCalibrating(false);if(currentSlot)currentSlot.attentionValid=false;}
+    async function ensureAttention(settings:Playlist){
+      const k=settings.config;
+      if(k.attention_enabled!==true||k.attention_profile!==ATTENTION_PROFILE.id){stopAttention();attentionCalibration=null;calibrationRequested=false;attentionSetupPaused=false;setAttentionStatus('Off');setAttentionProgress(null);setAttentionSetupActive(false);return;}
+      if(attentionSetupPaused)return;
+      if(attentionWorker&&attentionProfile===k.attention_profile)return;
+      stopAttention();setAttentionModelsReady(false); attentionProfile=k.attention_profile;attentionAbort=new AbortController();const controller=attentionAbort;
+      setAttentionSetupActive(true);
+      setAttentionStatus('Preparing verified attention models');
+      try{
+        const prepared=await prepareAttentionAssets(progress=>{if(!disposed&&attentionAbort===controller){setAttentionStatus(progress.message);setAttentionProgress({...progress,phase:progress.phase});}},controller.signal);
+        if(disposed||controller.signal.aborted)return;
+        setAttentionStatus('Initializing the local attention models');setAttentionProgress({message:'Initializing the local attention models',phase:'initializing',downloaded:prepared.downloaded,verified:prepared.verified,total:prepared.bytes,elapsedSeconds:prepared.elapsedSeconds,etaSeconds:null});
+        attentionMetrics ||= createAttentionMetrics();
+        attentionWorker=await createProductionAttentionWorker(controller.signal,(observation:Observation,context:any)=>{
+          if(context?.calibration_id&&context.calibration_id===activeCalibratorToken)activeCalibrator?.observe(observation);
+          const s=currentSlot,p=context?.play;
+          if(p&&s&&s.uid===p.uid&&s.segmentStart===p.segment&&s.attentionValid&&s.item.attention_calibration_revision===p.revision)attentionMetrics?.observe(observation);
+        },message=>{if(!disposed){attentionSetupPaused=true;setAttentionModelsReady(false);setAttentionStatus(`Attention unavailable · ${message}`);attentionWorker=null;}});
+        if(disposed||controller.signal.aborted){attentionWorker?.close();attentionWorker=null;return;}
+        const savedCalibration=resolveAttentionCalibration(settings);
+        setAttentionModelsReady(true);
+        if(!savedCalibration) calibrationRequested=true;
+        if(calibrationRequested&&!currentSlot) void calibrateAttention.current().catch(()=>{});
+        setAttentionStatus(savedCalibration?'Models ready · calibration loaded':'Models ready · guided calibration required');setAttentionProgress(null);if(savedCalibration)setAttentionSetupActive(false);
+      }catch(error:any){if(error?.name!=='AbortError'&&!disposed){attentionSetupPaused=true;setAttentionModelsReady(false);setAttentionStatus(`Attention unavailable · ${error.message||'model setup failed'}`);setAttentionProgress(null);} }
+    }
+    function resolveAttentionCalibration(settings:Playlist){
+      if(settings.config.attention_enabled!==true||!stream||!cameraSurface)return null;
+      const track=stream.getVideoTracks()[0],width=cameraSurface.videoWidth,height=cameraSurface.videoHeight;
+      const rawAngle=Number(window.screen.orientation?.angle||0),rotation:0|90|180|270=([0,90,180,270] as number[]).includes(rawAngle)?rawAngle as 0|90|180|270:0;attentionRotation=rotation;
+      attentionCameraRef=localCameraRef(paired.device_id,paired.screen_id,track,width,height,rotation);
+      let local:any=null;try{local=JSON.parse(localStorage.getItem(localCalibrationKey(paired.device_id,paired.screen_id))||'null');}catch{}
+      const candidate=settings.config.attention_calibration||local;
+      const binding={profile:ATTENTION_PROFILE.id,device_id:paired.device_id,screen_id:paired.screen_id,camera_ref:attentionCameraRef,width,height,rotation};
+      if(validateAttentionCalibration(candidate,binding)){attentionCalibration=candidate;setAttentionStatus('Models ready · guided calibration saved');
+        if(currentSlot){currentSlot.attentionValid=currentSlot.item.attention_enabled===true&&currentSlot.item.attention_calibration_revision===candidate.revision;
+          if(currentSlot.attentionValid&&currentSlot.segmentStart!==null&&attentionMetrics){if(!currentSlot.attentionStarted)attentionMetrics.reset();attentionMetrics.boundary(currentSlot.uid,true,performance.now());currentSlot.attentionStarted=true;}}
+        return candidate;}
+      attentionCalibration=null;setAttentionStatus(attentionWorker?'Models ready · guided calibration required':'Preparing attention models');return null;
+    }
     function rejectCredential() {
       if (!isCurrent()) return;
       fatal = true; setRejected(true); setOverlayEnabled(false); setDiagnosticActive(false);
@@ -118,9 +171,13 @@ export default function Player() {
       if (playing && s.segmentStart === null) {
         if (!s.startedPlaying) { s.started = Date.now(); s.mediaStart = mediaTime(); s.startedPlaying = true; }
         s.segmentStart = performance.now(); state(s.diagnosticRun ? 'Running screen diagnostic · no commercial delivery' : 'Playing');
+        s.attentionValid=!!attentionCalibration&&s.config.attention_enabled===true&&s.item.attention_enabled===true&&s.item.attention_calibration_revision===attentionCalibration.revision;
+        if(!s.diagnosticRun&&s.attentionValid&&attentionMetrics){if(!s.attentionStarted)attentionMetrics.reset();attentionMetrics.boundary(s.uid,true,s.segmentStart);s.attentionStarted=true;}
         if (!s.diagnosticRun) void authRequest('/nowplaying', { assignment_id: s.item.assignment_id }).catch(() => {});
       } else if (!playing && s.segmentStart !== null) {
-        s.accumulated += performance.now() - s.segmentStart; s.segmentStart = null; clearDetection();
+        s.accumulated += performance.now() - s.segmentStart; s.segmentStart = null;
+        if(s.attentionValid&&attentionMetrics)attentionMetrics.boundary(s.uid,false,performance.now());
+        clearDetection();
         if (!disposed && cameraHealthyNow() && detector && !detectorBroken && !cameraStarting) setVisionStatus('Ready · counts resume with playback');
       }
     }
@@ -202,8 +259,10 @@ export default function Player() {
       try {
         await flushPlays(paired.device_id, async event => {
           const r = await deviceRequest('/play', event);
-          return { status: r.status >= 200 && r.status < 300 && r.value.ok !== true ? 502 : r.status, error: r.value.error || (r.value.ok !== true ? 'Server did not acknowledge delivery' : undefined) };
-        }, Number(playlist?.config.telemetry_batch) || 25, Number(playlist?.config.telemetry_retry_h) || 72);
+          return { status: r.status >= 200 && r.status < 300 && r.value.ok !== true ? 502 : r.status, error: r.value.error || (r.value.ok !== true ? 'Server did not acknowledge delivery' : undefined), attention_status:r.value.attention_status };
+        }, Number(playlist?.config.telemetry_batch) || 25, Number(playlist?.config.telemetry_retry_h) || 72,(event,reply)=>{
+          if(event.attention&&reply.attention_status&&reply.attention_status!=='accepted'&&reply.attention_status!=='duplicate'&&!disposed)setAttentionStatus(`Optional attention data was not accepted (${reply.attention_status}). Delivery evidence remains recorded.`);
+        });
         if (!disposed) setQueue(await queueStatus(paired.device_id));
       } catch { if (!disposed) { state('Delivery storage is unavailable. New playback is paused.'); setPublicFailure(true); fatal = true; stopMedia(); void finish('interrupted'); } }
       finally { flushing = false; }
@@ -233,12 +292,24 @@ export default function Player() {
         retiring = false; if (!disposed && !fatal) void startNext();
         return;
       }
+      let firstEnqueueEvent:Record<string,any>=event;
+      if(s.attentionStarted&&attentionMetrics&&s.item.attention_calibration_revision){
+        attentionMetrics.boundary(s.uid,false,performance.now());
+        const summary=attentionMetrics.snapshot(performance.now()).current;
+        const candidate=summary?summaryForReceipt(summary,event.playing_duration_ms,s.item.attention_calibration_revision):undefined;
+        const preparedEnvelope=prepareAttentionEnvelope(event,candidate,s.item.attention_calibration_revision);
+        firstEnqueueEvent=preparedEnvelope.event as Record<string,any>;
+        if(preparedEnvelope.outcome==='size_limit')setAttentionStatus('This play was too large for the attention allowance. Legacy delivery evidence was saved without optional analytics.');
+        else if(preparedEnvelope.outcome==='invalid')setAttentionStatus('Attention data was unavailable or invalid. Legacy delivery evidence was saved; unknown was not counted as zero.');
+        else if(preparedEnvelope.outcome==='included')setAttentionStatus('Attention analytics attached to this play.');
+        attentionMetrics.reset();s.attentionStarted=false;
+      }
       try {
-        await enqueuePlay(paired.device_id, event, Number(s.config.offline_buffer_plays) || 5000);
+        await enqueuePlay(paired.device_id, firstEnqueueEvent, Number(s.config.offline_buffer_plays) || 5000);
         if (reservedPlayUid === s.uid) reservedPlayUid = null;
         if (!disposed) { setRecorded(v => v + 1); setAverage(avg === null ? '—' : avg.toFixed(1)); setQueue(await queueStatus(paired.device_id)); }
         void flush();
-      } catch (e: any) { unsaved.set(s.uid, async () => { await enqueuePlay(paired.device_id, event, Number(s.config.offline_buffer_plays) || 5000); if (reservedPlayUid === s.uid) reservedPlayUid = null; }); fatal = true; if (!disposed) { setPublicFailure(true); setStorageWarning('A delivery record could not be saved. Keep this player open while storage is retried.'); } state('Playback stopped to preserve delivery records.'); }
+      } catch (e: any) { unsaved.set(s.uid, async () => { await enqueuePlay(paired.device_id, firstEnqueueEvent, Number(s.config.offline_buffer_plays) || 5000); if (reservedPlayUid === s.uid) reservedPlayUid = null; }); fatal = true; if (!disposed) { setPublicFailure(true); setStorageWarning('A delivery record could not be saved. Keep this player open while storage is retried.'); } state('Playback stopped to preserve delivery records.'); }
       retiring = false; if (!disposed && !fatal) void startNext();
     }
     async function retryUnsaved() {
@@ -256,6 +327,7 @@ export default function Player() {
         const started = Date.now(), d: Playlist = await authRequest('/playlist/' + paired.screen_id + '?protocol=2');
         if (disposed || fatal) return;
         if (!d.config || !Array.isArray(d.items)) throw new Error('Player update required. Reload this page.');
+        setAttentionEnabled(d.config.attention_enabled===true);
         if (!(await authorizeOnlineSchedule(paired.device_id, ticket))) return;
         if (disposed || fatal) return;
         const received = Date.now(); actualOffset = Date.parse(d.server_time) - ((started + received) / 2);
@@ -319,7 +391,7 @@ export default function Player() {
       if (disposed || fatal) return false;
       const item: Item = reply.assignment;
       currentSlot = { item, uid, diagnosticRun: uid, started: Date.now(), startedPlaying: false, accumulated: 0, segmentStart: null,
-        mediaStart: 0, samples: [], cameraHealthy: !!item.diagnostic_has_camera && cameraHealthyNow() && !!detector && reply.config.model === 'coco-ssd', config: reply.config, version: reply.config_version, offset: actualOffset, done: false };
+        mediaStart: 0, samples: [], cameraHealthy: !!item.diagnostic_has_camera && cameraHealthyNow() && !!detector && reply.config.model === 'coco-ssd', config: reply.config, version: reply.config_version, offset: actualOffset, done: false,attentionValid:false };
       setDiagnosticActive(true); setCurrent(item); setDiagnosticStatus('Diagnostic sample · excluded from campaign presence and billing'); state('Loading diagnostic clip');
       activeMedia = media.current; activeSurface = 0; setSurface(0);
       if (!activeMedia) { void finish('error'); return true; }
@@ -364,8 +436,20 @@ export default function Player() {
           playlist = pending; pending = null; cycleItems = playlist.items;
           const at = cycleItems.findIndex(i => i.assignment_id === nextId); cycleIndex = at >= 0 ? at : 0;
           void initCamera();
+          if(playlist.config.attention_enabled===true){resolveAttentionCalibration(playlist);void ensureAttention(playlist);}
+          else void ensureAttention(playlist);
         }
         if (!playlist) { state('Waiting for an authorised playlist'); return; }
+        if(playlist.config.attention_enabled!==true)calibrationRequested=false;
+        if (calibrationRequested) {
+          if (!attentionSetupPaused && !activeCalibratorToken && attentionWorker && cameraHealthyNow()) void calibrateAttention.current().catch(()=>{});
+          return;
+        }
+        if (playlist.config.attention_enabled === true && !attentionCalibration) {
+          calibrationRequested=true; state('Setting up attention calibration before playback');
+          if(!attentionSetupPaused&&!activeCalibratorToken&&attentionWorker&&cameraHealthyNow()) void calibrateAttention.current().catch(()=>{});
+          return;
+        }
         if (!(await queueCapacity(paired.device_id, Number(playlist.config.offline_buffer_plays) || 5000))) {
           const stored = await queueStatus(paired.device_id); setQueue(stored);
           state(stored.blocked ? 'Saved delivery records need authorized review. They remain on this device; new playback cannot start.' : 'Delivery storage is full. Reconnect to retry saved deliveries; new playback remains paused until space is available.');
@@ -403,7 +487,8 @@ export default function Player() {
         if (!item.asset_url) await ensureYouTube();
         if (disposed || fatal) return;
         currentSlot = { item, uid: playUid, started: Date.now(), startedPlaying: false, accumulated: 0, segmentStart: null,
-          mediaStart: 0, samples: [], cameraHealthy: cameraHealthyNow() && !!detector && playlist.config.model === 'coco-ssd', config: { ...playlist.config }, version: playlist.config_version, offset: actualOffset, done: false };
+          mediaStart: 0, samples: [], cameraHealthy: cameraHealthyNow() && !!detector && playlist.config.model === 'coco-ssd', config: { ...playlist.config }, version: playlist.config_version, offset: actualOffset, done: false,
+          attentionValid:!!attentionCalibration&&playlist.config.attention_enabled===true&&item.attention_enabled===true&&item.attention_calibration_revision===attentionCalibration.revision,attentionStarted:false };
         reservedUid = null;
         state('Preparing media');
         if (item.asset_url && item.media_type === 'image') {
@@ -445,13 +530,16 @@ export default function Player() {
       } catch {} finally { heartbeatBusy = false; }
     }
     function stopCamera() {
+      stopAttention(); attentionCalibration=null; attentionCameraRef='';
       stream?.getTracks().forEach(t => { t.removeEventListener('ended', cameraLost); t.removeEventListener('mute', cameraLost); t.removeEventListener('unmute', cameraRecovered); t.stop(); });
       stream = null; cameraOK = false; lastCameraFrame = -1;
       if (cameraSurface) cameraSurface.srcObject = null;
       clearDetection();
     }
     async function initCamera(force = false) {
-      const settings = pending || playlist;
+      // A refreshed camera/profile policy is staged until the active commercial
+      // segment is finalized. Never restart the shared legacy camera mid-play.
+      const settings = currentSlot ? playlist || pending : pending || playlist;
       if (disposed || fatal || cameraStarting || detecting || !settings) return;
       const k = settings.config;
       const key = JSON.stringify([settings.screen.has_camera, k.model, k.camera_source, k.camera_device_id, k.inference_res]);
@@ -485,6 +573,7 @@ export default function Player() {
           if (disposed || fatal) { loaded.dispose(); return; }
           detector = loaded;
         }
+        if(k.attention_enabled===true) { resolveAttentionCalibration(settings); void ensureAttention(settings); }
         cameraRecovered(); setVisionStatus('Ready · counts update during playback');
       } catch (error) {
         stopCamera();
@@ -492,6 +581,40 @@ export default function Player() {
       } finally { cameraStarting = false; }
     }
     retryCamera.current = () => { void initCamera(true); };
+    calibrateAttention.current=async()=>{
+      if(!playlist||playlist.config.attention_enabled!==true||playlist.config.attention_profile!==ATTENTION_PROFILE.id)throw Error('Attention is not enabled for this screen.');
+      if(activeCalibratorToken)return;
+      attentionSetupPaused=false;
+      calibrationRequested=true;
+      if(currentSlot){setAttentionStatus('Recalibration is queued for the next safe play boundary.');return;}
+      if(!attentionWorker||!cameraHealthyNow()||!cameraSurface)throw Error('Wait for the camera and attention models to be ready, then retry.');
+      calibrationRequested=false;
+      setAttentionSetupActive(true);
+      const token=crypto.randomUUID(),started=performance.now(),calibrator=new GazeCalibration(started);activeCalibrator=calibrator;activeCalibratorToken=token;setAttentionCalibrating(true);setAttentionStatus('Look at the centre marker and hold still for three seconds.');
+      try{
+        await new Promise(resolve=>setTimeout(resolve,3000));
+        if(disposed||activeCalibratorToken!==token)throw Error('Calibration stopped because the camera session changed.');
+        const result=calibrator.finishDetailed(),video=cameraSurface,track=stream?.getVideoTracks()[0];
+        if(!video||!track||!cameraHealthyNow())throw Error('Camera changed during calibration. Previous calibration kept.');
+        const calibration={schema:'calibration-v1/1',profile:ATTENTION_PROFILE.id,revision:crypto.randomUUID(),device_id:paired.device_id,screen_id:paired.screen_id,
+          camera_ref:localCameraRef(paired.device_id,paired.screen_id,track,video.videoWidth,video.videoHeight,attentionRotation),width:video.videoWidth,height:video.videoHeight,rotation:attentionRotation,method:'guided-3s',
+          yaw_tenths:Math.round(result.yaw*10),pitch_tenths:Math.round(result.pitch*10),samples:result.samples,span_ms:result.span_ms,
+          yaw_spread_tenths:result.yaw_spread_tenths,pitch_spread_tenths:result.pitch_spread_tenths,completed_at:new Date().toISOString()};
+        const binding={profile:ATTENTION_PROFILE.id,device_id:paired.device_id,screen_id:paired.screen_id,camera_ref:calibration.camera_ref,width:video.videoWidth,height:video.videoHeight,rotation:attentionRotation};
+        if(!validateAttentionCalibration(calibration,binding))throw Error('Calibration geometry changed. Previous calibration kept.');
+        const saved=await authRequest('/attention/calibration',{calibration});
+        localStorage.setItem(localCalibrationKey(paired.device_id,paired.screen_id),JSON.stringify(calibration));
+        attentionCalibration=calibration;
+        setAttentionStatus(`Calibration saved · ${result.samples} stable face readings. Applying it to the next assignment.`);setAttentionCalibrating(false);setAttentionSetupActive(false);await pull();
+        return saved;
+      }catch(error:any){if(activeCalibratorToken!==token)return;calibrationRequested=false;attentionSetupPaused=true;setAttentionSetupActive(!attentionCalibration);setAttentionStatus(`Calibration failed · ${error.message||'Please retry when the camera is ready.'} Previous calibration kept.`);throw error;}
+      finally{if(activeCalibratorToken===token){activeCalibrator=null;activeCalibratorToken=null;}setAttentionCalibrating(false);}
+    };
+    cancelAttention.current=()=>{
+      if(activeCalibratorToken){activeCalibrator=null;activeCalibratorToken=null;calibrationRequested=false;attentionSetupPaused=!attentionCalibration;setAttentionSetupActive(!attentionCalibration);setAttentionCalibrating(false);setAttentionStatus(attentionCalibration?'Calibration cancelled; the saved calibration is still in use.':'Setup paused. Retry attention setup to continue.');return;}
+      if(attentionAbort){attentionSetupPaused=true;calibrationRequested=false;stopAttention();setAttentionProgress(null);setAttentionSetupActive(true);setAttentionStatus('Attention setup cancelled. Saved delivery evidence and any earlier calibration are unchanged.');}
+    };
+    retryAttention.current=()=>{attentionSetupPaused=false;if(attentionModelsReady&&attentionWorker&&playlist?.config.attention_enabled===true){calibrationRequested=false;void calibrateAttention.current().catch(()=>{});return;}if(playlist)void ensureAttention(playlist);};
     async function detect() {
       const v = cameraSurface, c = overlay, target = currentSlot;
       // Never sample an idle, paused or background player. Only one inference may run at once.
@@ -597,7 +720,15 @@ export default function Player() {
       void initCamera();
       if (Date.now() - lastPull > (needsAllowanceRefresh ? 5000 : waitingEmpty ? 10000 : Math.min(300, Math.max(30, (Number(playlist?.config.sync_interval_min) || 5) * 60)) * 1000)) { lastPull = Date.now(); void pull(); }
       if (Date.now() - lastHeartbeat > Math.max(10, Number(playlist?.config.heartbeat_s) || 30) * 1000) { lastHeartbeat = Date.now(); void heartbeat(); }
-      if (Date.now() - lastDetect > Math.max(500, (Number(currentSlot?.config.sample_interval_s ?? playlist?.config.sample_interval_s) || 2) * 1000)) { lastDetect = Date.now(); void detect(); }
+      const interval=Math.max(500,(Number(currentSlot?.config.sample_interval_s ?? playlist?.config.sample_interval_s)||2)*1000);
+      if (Date.now() - lastDetect > interval) { lastDetect = Date.now(); void detect(); }
+      else if(currentSlot&&currentSlot.attentionValid&&currentSlot.segmentStart!==null&&!currentSlot.done&&!currentSlot.diagnosticRun&&attentionWorker&&!attentionWorker.busy&&cameraSurface&&cameraHealthyNow()&&!document.hidden&&Date.now()+750<lastDetect+interval){
+        const s=currentSlot,play=s?.attentionValid?{uid:s.uid,segment:s.segmentStart,revision:s.item.attention_calibration_revision}:null;
+        const calibration=attentionCalibration||{yaw_tenths:0,pitch_tenths:0};
+        void attentionWorker.frame(cameraSurface,{yaw:calibration.yaw_tenths/10,pitch:calibration.pitch_tenths/10},{play,calibration_id:activeCalibratorToken});
+      }
+      if(activeCalibratorToken&&attentionWorker&&!attentionWorker.busy&&cameraSurface&&cameraHealthyNow()&&!document.hidden)
+        void attentionWorker.frame(cameraSurface,{yaw:0,pitch:0},{calibration_id:activeCalibratorToken});
     }, 250);
     const flusher = setInterval(() => { void retryUnsaved(); void flush(); void flushTest(); }, 5000);
     let evidenceStarted = false;
@@ -680,9 +811,11 @@ export default function Player() {
     <Input aria-label="Pairing code" value={code} disabled={busy} onChange={e => setCode(e.target.value)} onKeyDown={e => e.key === 'Enter' && pair()} maxLength={8} placeholder="ABCDEFGH" autoComplete="off" className="h-14 text-center font-mono text-2xl uppercase tracking-widest" />
     <p className="my-2 text-sm text-destructive" role="alert">{err}</p><Button className="w-full" disabled={busy || code.trim().length !== 8} onClick={pair}>{busy ? 'Checking…' : credential ? 'Confirm replacement and keep records' : 'Pair and play'}</Button>
     {credential && <Button className="mt-3" disabled={busy} onClick={() => { setRecoveryOpen(false); setCode(''); setErr(''); }}>Cancel</Button>}
-    <p className="mt-4 text-xs text-muted-foreground">Only presence counts and delivery records are sent. Camera preview is available during commissioning; processing stays on this device.</p>
+    <p className="mt-4 text-xs text-muted-foreground">When Attention V1 is enabled for this screen, aggregate attention summaries are sent. Camera frames, faces, landmarks and temporary person IDs stay on this device.</p>
   </div>;
-  const commissioning = !rejected && (overlayEnabled || diagnosticActive);
+  const commissioning = !rejected && (overlayEnabled || diagnosticActive || attentionSetupActive);
+  const attentionPreparing=!!attentionProgress;
+  const attentionReady=attentionModelsReady;
   if (!credential) return <div className="grid min-h-screen place-items-center bg-slate-950 p-4">{pairingForm}</div>;
   return <div className="fixed inset-0 cursor-none bg-black text-white" style={{ cursor: 'none' }}>
     <div ref={youtubeMount} className={`absolute inset-0 h-full w-full ${!current || current.asset_url ? 'hidden' : ''}`} />
@@ -695,12 +828,15 @@ export default function Player() {
     {(commissioning || !current || publicFailure || rejected || !!storageWarning || soundBlocked && !!current) && <div data-role="player-status" className="fixed left-3 top-3 z-10 rounded bg-black/80 p-3 text-xs" role="status">
       {commissioning && <><b>{screen?.name || 'Gridcast'}</b> · {diagnosticActive ? 'Screen test' : 'Media playback'}<br /></>}
       {soundBlocked && current ? <span>Tap the screen for sound</span> : storageWarning || status}{commissioning && offlineStatus && <p className="mt-1">{offlineStatus}</p>}
+      {commissioning && attentionEnabled && <p className="mt-1">Attention setup · {attentionStatus || 'Preparing on this device'}</p>}
+      {commissioning && attentionEnabled && attentionProgress && attentionProgress.total > 0 && <div className="mt-2 text-xs" aria-live="polite">{attentionProgress.phase==='initializing'?<p>Model files verified · initializing local models · {attentionProgress.elapsedSeconds}s elapsed</p>:<><div className="flex justify-between gap-3"><span>Model files verified · {Math.floor(100*attentionProgress.verified/attentionProgress.total)}%</span><span>{attentionProgress.elapsedSeconds}s elapsed</span></div><progress className="mt-1 h-2 w-full" max={attentionProgress.total} value={attentionProgress.verified} aria-label="Attention model files verified"/><p className="mt-1">{(attentionProgress.verified/1048576).toFixed(1)} / {(attentionProgress.total/1048576).toFixed(1)} MB verified · {(attentionProgress.downloaded/1048576).toFixed(1)} MB downloaded{attentionProgress.etaSeconds===null?'':` · about ${attentionProgress.etaSeconds}s remaining`}</p><p>{attentionProgress.message}</p></>}</div>}
       {rejected && <div className="mt-2 flex gap-3"><Button disabled={busy} onClick={retry}>Retry existing pairing</Button><Button disabled={busy} onClick={openRecovery}>Enter a new pairing code</Button></div>}
       {!recoveryOpen && err && <p role="alert" className="mt-1 text-amber-300">{err}</p>}
     </div>}
     <div data-role="commissioning-preview" aria-hidden={!commissioning} style={{ opacity: commissioning ? 1 : 0, pointerEvents: commissioning ? 'auto' : 'none' }} className="fixed bottom-3 right-3 z-10 w-[170px]">
       <div className="relative"><video data-role="camera" ref={camera} autoPlay muted playsInline tabIndex={-1} className="w-full rounded bg-neutral-900" /><canvas ref={canvas} className="pointer-events-none absolute inset-0 h-full w-full" /></div>
-      {commissioning && <><p className="mt-1 text-[10px] text-white/60">Local camera preview · never uploaded</p><p className="mt-1 text-xs" role="status">{visionStatus}</p>{visionRetry && <button className="mt-2 text-xs underline" onClick={() => retryCamera.current()}>Retry camera</button>}</>}
+      {commissioning && <><p className="mt-1 text-[10px] text-white/60">Local camera preview · never uploaded</p><p className="mt-1 text-xs" role="status">{visionStatus}</p>{visionRetry && <button className="mt-2 text-xs underline" onClick={() => retryCamera.current()}>Retry camera</button>}{attentionEnabled&&<div className="mt-2 flex flex-wrap gap-2">{attentionPreparing||attentionCalibrating?<Button variant="outline" onClick={()=>cancelAttention.current()}>{attentionCalibrating?'Cancel calibration':'Cancel setup'}</Button>:attentionReady?<Button onClick={()=>void calibrateAttention.current().catch(()=>{})}>{attentionSetupActive?'Retry calibration':'Calibrate attention · 3 seconds'}</Button>:<Button onClick={()=>retryAttention.current()}>Retry attention setup</Button>}</div>}</>}
+      {commissioning && attentionCalibrating && <div className="pointer-events-none fixed inset-0 z-[11] grid place-items-center"><div className="h-3 w-3 rounded-full bg-white shadow-[0_0_0_6px_rgba(0,0,0,.55)]"/><span className="absolute mt-12 rounded bg-black/80 px-3 py-2 text-xs">Look at the centre marker and hold still for 3 seconds</span></div>}
     </div>
     {commissioning && <div data-role="commissioning-stats" className="fixed bottom-3 left-3 z-10 rounded bg-black/80 p-3 text-xs">{diagnosticActive ? 'Diagnostic sample' : 'People now'}: {count ?? '—'} · Last play average: {average}<br />Recorded this session: {recorded} · Pending delivery: {queue.pending}
       {diagnosticStatus && <p className="mt-1 text-amber-200">{diagnosticStatus}</p>}

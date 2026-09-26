@@ -6,7 +6,7 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const moduleObject = { exports: {} };
 new Function('require','module','exports', ts.transpileModule(fs.readFileSync(path.join(__dirname, '../lib/devices.ts'), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText)(name=>name.startsWith('.')?require('./load-lib.cjs')(name.slice(2)):require(name),moduleObject,moduleObject.exports);
-const { issuePairing, pairingCodeHash, deviceIdFromToken, deviceRoute, revokeDevices, playRecordId } = moduleObject.exports;
+const { issuePairing, pairingCodeHash, deviceIdFromToken, deviceRoute, revokeDevices, playRecordId, calibrationForDevice } = moduleObject.exports;
 const MODEL = 'coco-ssd@2.2.3/lite_mobilenet_v2';
 function fixture() {
   let now = Date.parse('2026-09-24T00:00:00.000Z');
@@ -21,6 +21,36 @@ function fixture() {
   now+=11000;
   return {db,call,pair,paired,assignment,event,item,advance:n=>{now+=n},config};
 }
+test('calibration revisions are immutable, assignments freeze full provenance, delayed receipt survives recalibration, and re-pair requires local calibration',()=>{
+ const f=fixture();f.config.attention_enabled=true;f.config.attention_profile='attention-v1/mediapipe-1.0.1';
+ const makeCalibration=(revision,deviceId,yaw=12)=>({schema:'calibration-v1/1',profile:f.config.attention_profile,revision,device_id:deviceId,screen_id:'screen1',camera_ref:'opaqueCameraReference123',width:640,height:480,rotation:0,method:'guided-3s',yaw_tenths:yaw,pitch_tenths:-5,samples:10,span_ms:2700,yaw_spread_tenths:2,pitch_spread_tenths:3,completed_at:new Date(f.db.screens[0].pairing_expires_at?Date.parse(f.db.screens[0].pairing_expires_at)-600000:Date.now()).toISOString()});
+ const first=makeCalibration('calibrationA',f.paired.device.id),saved=f.call('POST','attention/calibration',{calibration:first},f.paired.token);
+ assert.equal(saved.status,200);assert.equal(f.db.attention_calibrations.length,1);assert.deepEqual(f.db.attention_calibrations[0].calibration,first);
+ const configRevision=f.db.settings.config_revision;assert.equal(f.call('POST','attention/calibration',{calibration:first},f.paired.token).body.duplicate,true);assert.equal(f.db.settings.config_revision,configRevision);
+ assert.equal(f.call('POST','attention/calibration',{calibration:{...first,yaw_tenths:99}},f.paired.token).status,409);
+ f.config.attention_calibration=first;
+ const firstItem=f.call('GET','playlist/screen1',{},f.paired.token).body.items[0],oldAssignment=f.db.device_assignments.find(a=>a.id===firstItem.assignment_id);
+ assert.deepEqual(oldAssignment.attention_calibration,first);
+ const second=makeCalibration('calibrationB',f.paired.device.id,20);assert.equal(f.call('POST','attention/calibration',{calibration:second},f.paired.token).status,200);
+ f.config.attention_calibration=second;
+ const secondItem=f.call('GET','playlist/screen1',{},f.paired.token).body.items[0],newAssignment=f.db.device_assignments.find(a=>a.id===secondItem.assignment_id);
+ assert.notEqual(newAssignment.id,oldAssignment.id);assert.deepEqual(oldAssignment.attention_calibration,first);assert.deepEqual(newAssignment.attention_calibration,second);
+ const event={play_uid:crypto.randomUUID(),seq_no:1,assignment_id:oldAssignment.id,campaign_id:'campaign1',creative_id:'creative1',config_version:oldAssignment.config_version,started_at_device:oldAssignment.issued_at,ended_at_device:new Date(Date.parse(oldAssignment.issued_at)+10000).toISOString(),playing_duration_ms:10000,media_started_s:0,media_ended_s:10,ended_reason:'ended',server_clock_offset_ms:0,measured:true,avg_persons:2,sample_count:5,model_ver:MODEL,attention:{schema:'attention-v1/1',profile:first.profile,calibration_revision:first.revision,playing_ms:10000,body:[8000,2000,0],face:[8000,2000,0],attention:[6000,4000],expression:[6000,4000],presence_person_ms:10000,looking_person_ms:5000,smile_person_ms:1000,face_assessable_person_ms:7000,expression_assessable_person_ms:6000,estimated_impressions:1,attentive_impressions:1,tracked_visits:1,right_censored_visits:0,longest_look_ms:1000}};
+ f.advance(11000);
+ const delayed=f.call('POST','play',event,f.paired.token);assert.equal(delayed.body.attention_status,'accepted');assert.equal(f.db.plays.at(-1).attention_calibration.yaw_tenths,12);
+ const replacement=f.pair();const newDevice=f.db.devices.find(d=>d.id===replacement.device.id);
+ assert.equal(calibrationForDevice(f.db.screens[0],newDevice,f.config.attention_profile),null,'screen calibration from the revoked device cannot authorize its replacement');
+ assert.deepEqual(f.db.attention_calibrations.map(x=>x.id),['calibrationA','calibrationB']);
+});
+test('attention-enabled playlists do not reserve paid allowance before paired-camera calibration',()=>{
+ const f=fixture();f.config.attention_enabled=true;f.config.attention_profile='attention-v1/mediapipe-1.0.1';
+ f.db.device_assignments=[];delete f.db.devices[0].assignment_set;delete f.db.campaign_budgets;
+ const waiting=f.call('GET','playlist/screen1',{},f.paired.token);assert.equal(waiting.body.budget_state,'attention_calibration_required');assert.deepEqual(waiting.body.items,[]);
+ assert.equal(f.db.device_assignments.length,0);assert.equal(f.db.campaign_budgets,undefined,'Setup cannot reserve campaign funds before commissioning');
+ const calibration={schema:'calibration-v1/1',profile:f.config.attention_profile,revision:'commissionedA',device_id:f.paired.device.id,screen_id:'screen1',camera_ref:'opaqueCameraReference123',width:640,height:480,rotation:0,method:'guided-3s',yaw_tenths:12,pitch_tenths:-5,samples:10,span_ms:2700,yaw_spread_tenths:2,pitch_spread_tenths:3,completed_at:new Date(f.db.devices[0].created_at).toISOString()};
+ assert.equal(f.call('POST','attention/calibration',{calibration},f.paired.token).status,200);f.config.attention_calibration=calibration;
+ const ready=f.call('GET','playlist/screen1',{},f.paired.token);assert.equal(ready.body.items.length,1);assert.equal(f.db.device_assignments[0].attention_calibration_revision,'commissionedA');assert.equal(f.db.device_assignments[0].attention_calibration.camera_ref,calibration.camera_ref);
+});
 test('one-time pairing uses only stored hash, rotates credential, rejects re-use and legacy code',()=>{
  const f=fixture(),s=f.db.screens[0],old=f.paired.token;
  const code=issuePairing(f.db,s);assert.equal(s.pairing_code_hash,pairingCodeHash(code.code));assert.equal(s.code,undefined);
@@ -102,7 +132,7 @@ test('fresh and cached device playlists expose only playback fields while rates 
  assert.notEqual(fresh.assignment_id,f.assignment.assignment_id,'rate changes must invalidate the prior assignment');
  const cached=f.call('GET','playlist/screen1',{},f.paired.token).body.items[0];
  assert.equal(cached.assignment_id,fresh.assignment_id,'second response exercises cached assignments');
- const allowed=['campaign_id','creative_id','youtube_id','duration_s','asset_id','asset_url','width','height','letterbox','assignment_id','valid_until','accept_until','max_plays','media_type','kind','asset_sha256','asset_bytes','asset_mime'].sort();
+ const allowed=['campaign_id','creative_id','youtube_id','duration_s','asset_id','asset_url','width','height','letterbox','assignment_id','valid_until','accept_until','max_plays','media_type','kind','asset_sha256','asset_bytes','asset_mime','attention_enabled','attention_profile','attention_calibration_revision','attention_manifest_sha256','attention_pipeline_sha256'].sort();
  for(const served of [fresh,cached]){
   assert.deepEqual(Object.keys(served).sort(),allowed);
   assert.equal(served.asset_url,f.item.asset_url);assert.equal(served.youtube_id,'example');

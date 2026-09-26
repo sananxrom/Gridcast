@@ -37,7 +37,8 @@ test('A2 legacy sample clears pixels after a detector error',async()=>{
 
 test('A2 legacy opportunities match the production 250ms ticker strict wall-clock predicate',()=>{
  const production=fs.readFileSync(path.join(__dirname,'../app/player/page.tsx'),'utf8');
- assert.match(production,/Date\.now\(\)\s*-\s*lastDetect\s*>\s*Math\.max\(500,/,'keep parity anchored to the unchanged player predicate');
+ assert.match(production,/const interval=Math\.max\(500,/,'the production ticker clamps its sampling interval');
+ assert.match(production,/if \(Date\.now\(\) - lastDetect > interval\) \{ lastDetect = Date\.now\(\); void detect\(\); \}/,'keep strict wall-clock predicate parity anchored to the production ticker');
  const playerDue=(now,lastDetect,interval)=>now-lastDetect>Math.max(500,interval);
  const s=new LegacyPriorityScheduler(2000,10000,300);
  assert.equal(s.pollLegacy(12000,true,false).legacy,playerDue(12000,10000,2000));

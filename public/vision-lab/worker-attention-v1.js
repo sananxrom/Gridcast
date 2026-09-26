@@ -3,11 +3,14 @@ let face, person, initialized = false;
 self.onmessage = async ({ data }) => {
   if (data.type === 'INIT') {
     try {
-      const { FaceLandmarker, ObjectDetector, FilesetResolver } = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/vision_bundle.mjs');
-      const files = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm');
-      const faceBytes = new Uint8Array(await (await fetch('https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task')).arrayBuffer());
+      const { FaceLandmarker, ObjectDetector, FilesetResolver } = await import(data.asset_urls['vision_bundle.mjs']);
+      const files = await FilesetResolver.forVisionTasks('');
+      const loaderName = String(files.wasmLoaderPath).split('/').pop(), binaryName = String(files.wasmBinaryPath).split('/').pop();
+      files.wasmLoaderPath = data.asset_urls['wasm/' + loaderName]; files.wasmBinaryPath = data.asset_urls['wasm/' + binaryName];
+      if (!files.wasmLoaderPath || !files.wasmBinaryPath) throw Error('Verified WASM files are incomplete');
+      const faceBytes = new Uint8Array(await (await fetch(data.asset_urls['face.task'])).arrayBuffer());
       face = await FaceLandmarker.createFromOptions(files, { baseOptions: { modelAssetBuffer: faceBytes, delegate: data.delegate }, runningMode: 'VIDEO', numFaces: 5, outputFaceBlendshapes: true, outputFacialTransformationMatrixes: true });
-      const personBytes = new Uint8Array(await (await fetch('https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/int8/1/efficientdet_lite0.tflite')).arrayBuffer());
+      const personBytes = new Uint8Array(await (await fetch(data.asset_urls['person.tflite'])).arrayBuffer());
       person = await ObjectDetector.createFromOptions(files, { baseOptions: { modelAssetBuffer: personBytes, delegate: 'CPU' }, runningMode: 'VIDEO', categoryAllowlist: ['person'], scoreThreshold: .4, maxResults: 20 });
       initialized = true;
       postMessage({ type: 'READY', delegate: data.delegate, personDelegate: 'CPU' });

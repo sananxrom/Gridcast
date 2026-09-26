@@ -73,3 +73,23 @@ Coordinator assigned the existing builder a read-only source/timing diagnosis an
 facts from hypotheses, without changing thresholds, production cadence, settings or code. Next supervised run
 should confirm guided calibration succeeded and record actual number of people/placement. Select targets before
 formal scoring. Retain unknown values and privacy boundaries; do not smooth missing time into measured time.
+
+## Calibrated follow-up and revised user direction — 2026-09-26 19:11 IST
+
+Sanan supplied `gridcast-a2-local-evaluation (2).json` (SHA-256 `57c98f6748573adea8a0fa987dfa6bedcd75b510427b6765c01acb37d55f149a`) and explicitly requested:
+“calibration works too … lets build and merge to firebase, use the other chat like before”. This authorizes
+advancing implementation and reviewed Firebase deployment after the exploratory checks; it is not evidence
+that every previously proposed A2 accuracy/performance gate passed.
+
+The new combined run lasted 10.11 s on a test card, with no baseline or video workload.
+Guided three-second calibration succeeded (yaw 2.5°, pitch -8.1°). Legacy recorded five successful samples,
+zero errors/skips and mean one person. New body coverage was 79.57%; attention
+coverage 67.57%, with the remainder unknown. One temporary visit and
+one estimated/attentive exposure were reported. These limited observations confirm calibration function and
+usable attention evidence, not calibrated accuracy, cross-person robustness or long-run/video performance.
+
+Proceed with production V1 B–E on explicit user direction, retaining analytics-only semantics, truthful
+coverage/unknowns, unchanged legacy billing inputs, bounded telemetry and per-screen controlled enablement
+(default off). No fleetwide automatic activation, attention billing, relaxed freshness or fabricated A2 pass.
+The existing builder owns implementation; coordinator reviews, commits/pushes and verifies the exact Firebase
+release. Controlled accuracy/soak remain recorded limitations and prerequisites to broader hardware claims.

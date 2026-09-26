@@ -52,6 +52,7 @@ export const ROUTES: { method: string; path: RegExp; caps: Cap[] }[] = [
   { method: 'GET', path: /^screen\/[^/]+$/, caps: ['screens', 'sales'] },
   { method: 'POST', path: /^screens(?:\/[^/]+\/(pairing|revoke-device))?$/, caps: ['screens'] },
   { method: 'POST', path: /^group(?:\/(?!resolve$)[^/]+)?$/, caps: ['screens'] },
+  { method: 'POST', path: /^screen\/[^/]+\/attention$/, caps: ['platform'] },
   { method: 'POST', path: /^screen\/[^/]+(?:\/(exclusions|config|reprice))?$/, caps: ['screens'] },
   { method: 'POST', path: /^group\/resolve$/, caps: ['screens', 'sales'] },
   { method: 'POST', path: /^(org|settings|reset)$/, caps: ['platform'] },
@@ -372,6 +373,7 @@ export function screenView(s: any, actor: any) {
   if (!can(actor.role, 'screens')) { delete out.code; delete out._status; delete out.exclusions; delete out.priced_against; }
   if (!can(actor.role, 'money')) delete out.owner_share_pct;
   if (!can(actor.role, 'sales') && !can(actor.role, 'money')) for (const k of SCREEN_MONEY) delete out[k];
+  if (actor.role !== PLATFORM_ADMIN) { delete out.attention_settings; delete out.attention_calibration; }
   return out;
 }
 export function settlementView(db: any, actor: any, campaignId?: string, orgId?: string | null) {

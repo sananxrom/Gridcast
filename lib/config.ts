@@ -152,6 +152,11 @@ export const SETTINGS: Setting[] = [
   T('presence_metric', 'Metric', 'measurement', 'derived', 'avg_persons', { locked: true,
     lockReason: 'Phase 1 metric',
     info: 'Mean of per-sample counts across one play. Not reach, not impressions, not unique people.' }),
+  T('attention_enabled', 'Attention analytics', 'measurement', 'toggle', false, { locked: true,
+    lockReason: 'Enabled per screen by a platform administrator; never changes presence or billing',
+    info: 'Optional local face-direction analytics with a screen-and-camera-specific calibration.' }),
+  T('attention_profile', 'Attention profile', 'measurement', 'select', 'attention-v1/mediapipe-1.0.1', { locked: true,
+    lockReason: 'Versioned profile assigned by the platform', options: ['attention-v1/mediapipe-1.0.1'] }),
 
   // ----------------------------------------------------------------- privacy
   T('upload_frames', 'Frames leave the device', 'privacy', 'derived', 'never', { common: true, locked: true,
@@ -162,7 +167,7 @@ export const SETTINGS: Setting[] = [
     info: 'Frames are discarded after inference. They exist in memory only.' }),
   T('face_recognition', 'Face recognition', 'privacy', 'derived', false, { common: true, locked: true,
     lockReason: 'Not implemented',
-    info: 'The model detects person-shaped objects. It has no concept of identity.' }),
+    info: 'Attention V1 estimates face direction locally. It does not recognize or identify faces.' }),
   T('reidentify', 'Re-identification across plays', 'privacy', 'derived', false, { common: true, locked: true,
     lockReason: 'Not implemented',
     info: 'A person seen twice is counted twice. That is a deliberate honesty choice, not a limitation.' }),

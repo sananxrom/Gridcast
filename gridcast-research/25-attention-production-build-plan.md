@@ -1,6 +1,6 @@
 # Attention production build plan
 
-**Status:** A1 draft contracts built locally; A2 pending; production B–G not implemented or deployed. See [26 — contracts and validation](26-attention-contracts-and-validation.md). **Planning base:** `7d5f085`.
+**Status (2026-09-27):** Sanan explicitly directed production implementation and Firebase rollout before the originally planned A2 human gate. B–E are implemented locally; final build, repository/browser suites, production worker offline inference, production lab 404s, and Enterprise emulator transactions passed. Coordinator review and release remain pending; there has been no commit, push, or production deployment. The Attention profile is still opt-in. No A2 human accuracy, representative-performance, or soak result is claimed; those checks remain required before pilot promotion. See [26 — contracts and validation](26-attention-contracts-and-validation.md). **Planning base:** `7d5f085`.
 **Requested by Sanan:** Plan ahead for pairing → model-loading progress/time → quick calibration → ready,
 automatic integration with current Gridcast reporting, and selected visuals from the supplied demo.
 **Relationship to document 24:** §9 is the existing local lab; §10 records the product direction. This
@@ -62,23 +62,32 @@ reserved capacity. These are compatibility checks, not new attention-dependent b
 |---|---|---|---|
 | A1 — Draft contracts | Profile/event/calibration schemas, byte budget and legacy-source invariants | Existing lab | Drafts and maximum-size fixtures reviewed; runtime options identified. |
 | A2 — Human and runtime check | Controlled looking/counting session, agreed thresholds, proposed runtime under representative load | A1 and existing lab | Results recorded against thresholds set beforehand; chosen pipeline/calibration/runtime judged viable before B–D. |
-| B — Server and storage support | Disabled-by-default acceptance, assignment capabilities, calibration revisions, attention rollups and scoped reads | A1 + passed A2 | Old clients/receipts still pass; new validation, deduplication, tenancy and transactional aggregation tested. |
-| C — Player preparation and onboarding | Honest loader, cache verification, persisted calibration, retry/restart/recalibration | A1 + passed A2; B for persistence/assignment acknowledgement | Cold/warm/offline setup and all failure paths preserve device identity and evidence. |
+| B — Server and storage support | Disabled-by-default acceptance, assignment capabilities, calibration revisions, attention rollups and scoped reads | A1 | Old clients/receipts still pass; new validation, deduplication, tenancy and transactional aggregation tested. |
+| C — Player preparation and onboarding | Honest loader, cache verification, persisted calibration, retry/restart/recalibration | B | Cold/warm/offline setup and all failure paths preserve device identity and evidence. |
 | D — Production measurement adapter | Exact play attribution, body/face stages, offline summaries, heartbeat and diagnostics | B + C | Real player integration tests pass; no uncoordinated inference, altered legacy inputs, invented measurements or financial regression. |
 | E — First reporting release | Creative comparison, hourly screen trends, day/hour heatmap, same-data CSV | D | Numerators, denominators, unknowns, tenant scopes and profile separation verified end-to-end. |
 | F — Creative analysis | Bounded ad-position curves, observed-look histograms, later brand moments/printable report | A budget design; D + E | Position alignment/censoring/size tests pass; historical missing dimensions shown unavailable. |
 | G — Pilot and hardware rollout | One-screen acceptance followed by explicit expansion | B–E; F optional | Human accuracy/coverage and playback/performance gates pass on selected equipment; rollback demonstrated. |
 
-B's server work and C's local UI/cache work may proceed independently only after A2 passes, with one shared
-contract. Draft schemas and size fixtures in A1 can proceed while the human session is scheduled. B–D wait
-for the human/runtime result; failure triggers local pipeline/calibration revision and re-evaluation first.
-Codex should implement bounded slices; Claude should review source and the reported test evidence. Do not
-run competing resource-heavy camera/browser suites while Sanan is manually evaluating the player.
+The original A2 gate was superseded for implementation by Sanan's explicit 2026-09-26 direction to build
+and roll out Attention V1. B–E may therefore proceed with one shared contract; this sequencing change does
+not convert the exploratory browser calibration into a human accuracy/performance result. The controlled
+human/runtime check and pre-agreed thresholds remain required before pilot promotion in G. Codex implements
+bounded slices; the coordinator reviews source and recorded evidence. Do not run competing resource-heavy
+camera/browser suites while Sanan is manually evaluating the player.
 
 **Mapping to document 24:** A includes Build 2 validation; B–F make Build 3 concrete; G includes Build 4.
-The human gate applies before production implementation B–D, not merely before pilot promotion. It is
-not safe to assume a failed looking test would change only thresholds: camera geometry, model choice,
-observable states or runtime design may also change.
+The human gate applies before pilot promotion, not before the already-authorized implementation. It is not
+safe to assume a failed looking test would change only thresholds: camera geometry, model choice, observable
+states or runtime design may also change. Keep production opt-in disabled until an explicitly selected screen
+is configured, and do not present the exploratory result as accuracy clearance.
+
+**Assignment-budget limitation:** Screen Attention settings and calibration revisions participate in the
+immutable player assignment signature. Existing paid-play reservations remain valid for offline receipts, so
+changing those settings while budget headroom is exhausted can leave the player waiting for a refreshed paid
+allowance until prior reservations expire or more budget is available. Do not refund or rewrite outstanding
+reservations to make a configuration change appear immediate. Commission and calibrate before issuing the
+paid schedule where possible; broader reservation/configuration lifecycle changes are a separate follow-up.
 
 ## 4. Commissioning state machine
 
@@ -232,8 +241,8 @@ not a smoothed curve that implies observations between samples.
 | Finance regression | Same playback/budget/camera-policy fixtures retain established billing outcomes. Changing attention, smiles or calibration success cannot create a new price, settlement entry or billing criterion. |
 
 Human accuracy/performance thresholds are not invented in this document. Record agreed thresholds before
-the session and observed results before B–D; only draft contracts/size fixtures and local evaluation work
-can proceed before that gate.
+the session and observed results before pilot promotion. Local browser fixtures, emulator checks and a
+production build do not substitute for that controlled human/runtime evidence.
 
 Rollout order: disabled server support and indexes → backward-compatible player capability → one explicitly
 selected pilot screen → review its human/performance/offline results → small cohort → broader opt-in. A
@@ -254,12 +263,13 @@ test suites. Both use append-only AI-LOG entries, distinguish observed evidence 
 unrelated changes alone. Do not send external messages on the user's behalf; the shared document/log is the
 review handoff.
 
-**Next engineering step is slice A:** create the candidate event/profile/calibration schemas and maximum-
-size fixtures, make legacy/billing compatibility explicit, and write the one-screen human protocol. Review
-those concrete artifacts before wiring the player or designing charts around fields we do not collect.
-The existing local lab remains available for that validation.
+**Current engineering checkpoint:** B–E are implemented locally under the revised user direction. Source
+verification must cover transactional Firestore behavior, cold and warm/offline worker startup, player receipt
+and legacy-finance invariants, scoped report pagination, build output and production lab-route guards. The
+production evaluation lab is disabled by default; its standalone route must remain local/development-only.
 
-**User-dependent inputs before A2 and production implementation B–D:** which real screen/computer/camera is the pilot, and availability
-for the short controlled human session. Use Sanan's chosen computer browser first; confirm the camera/placement and schedule the short session.
-A physical-screen/Android claim needs its own hardware check later. A1 drafts can proceed meanwhile. No additional decisions are required to
-finish this planning task. No application work or deployment is authorized by the plan document itself.
+**User-dependent inputs before pilot promotion:** which real screen/computer/camera is the pilot, and
+availability for the short controlled human session. Use Sanan's chosen computer browser first; confirm the
+camera/placement and schedule the short session. A physical-screen/Android claim needs its own hardware
+check later. The implementation/deployment authorization came separately from Sanan; this plan records it
+without changing what A2 evidence does or does not establish.

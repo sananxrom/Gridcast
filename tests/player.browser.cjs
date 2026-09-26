@@ -20,12 +20,22 @@ function currentPlayerStyles() {
  return stylesheet;
 }
 const compile = file=>ts.transpileModule(fs.readFileSync(path.join(root,file),'utf8'),{fileName:file,compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,jsx:ts.JsxEmit.React,esModuleInterop:true}}).outputText;
+const calibrationSource=compile('lib/vision/calibration.ts');
+const attentionSource=compile('lib/vision/attention-contracts.ts'),metricsSource=compile('lib/vision/metrics.ts'),productionSource=compile('lib/vision/production.ts');
 const deviceModule={exports:{}};new Function('require','module','exports',compile('lib/devices.ts'))(name=>name.startsWith('.')?require('./load-lib.cjs')(name.slice(2)):require(name),deviceModule,deviceModule.exports);
 const {issuePairing,deviceRoute}=deviceModule.exports;
 const bundle=()=>`const q={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-queue.ts'))})(q,q.exports);
 const cache={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-media-cache.ts'))})(cache,cache.exports);
 const diagnostic={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-diagnostics.ts'))})(diagnostic,diagnostic.exports);
 const vision={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-vision.ts'))})(vision,vision.exports);
+const calibration={exports:{}};new Function('require','module','exports',${JSON.stringify(calibrationSource)})(()=>({}),calibration,calibration.exports);
+const cryptoStub={createHash:()=>({update(){return this;},digest(){return '0'.repeat(64);}})};
+const attention={exports:{}};new Function('require','module','exports',${JSON.stringify(attentionSource)})(name=>name==='node:crypto'?cryptoStub:{},attention,attention.exports);
+const metrics={exports:{}};new Function('require','module','exports',${JSON.stringify(metricsSource)})(()=>({}),metrics,metrics.exports);
+const engine={exports:{createEvaluationWorker:async(_delegate,signal,observe)=>{let busy=false,closed=false;signal.addEventListener('abort',()=>{closed=true;});return{close(){closed=true;},get busy(){return busy;},async frame(video,_pose,context){if(busy||closed||video.paused||video.readyState<2)return;busy=true;await new Promise(resolve=>setTimeout(resolve,15));window.fixtureAttentionFrames=(window.fixtureAttentionFrames||0)+1;const empty=window.fixtureNoFace===true;observe({at:performance.now(),bodies:{ok:true,boxes:empty?[]:[[.35,.05,.65,.9]],saturated:false},faces:{ok:true,faces:empty?[]:[{box:[.4,.1,.6,.4],looking:true,smiling:false}],saturated:false},calibration:{yaw:1,pitch:0}},{delegate:'CPU',latencyMs:15,faceFps:4,personFps:4,dropped:0},context);busy=false;}};}}};
+const production={exports:{}};new Function('require','module','exports',${JSON.stringify(productionSource)})(name=>name==='./attention-contracts'?attention.exports:name==='./engine'?engine.exports:name==='./metrics'?metrics.exports:{},production,production.exports);
+production.exports.prepareAttentionAssets=async(progress,signal)=>{signal.throwIfAborted();progress({message:'Verified fixture attention assets',phase:'verifying',downloaded:1048576,verified:1048576,total:1048576,elapsedSeconds:0,etaSeconds:null});return{version:'fixture',bytes:1048576,downloaded:1048576,verified:1048576,elapsedSeconds:0};};
+production.exports.createProductionAttentionWorker=async(signal,observe,fail)=>{const handle=await engine.exports.createEvaluationWorker('CPU',signal,(value,_stats,context)=>observe(value,context),fail);return{close:()=>handle.close(),get busy(){return handle.busy;},frame:(video,pose,context)=>handle.frame(video,pose,context)};};
 const evidence={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-evidence-lock.ts'))})(evidence,evidence.exports);
 const player={exports:{}};const fixtureRequire=name=>{
  if(name==='react')return React;
@@ -34,6 +44,9 @@ const player={exports:{}};const fixtureRequire=name=>{
  if(name==='@/lib/player-media-cache')return cache.exports;
  if(name==='@/lib/player-diagnostics')return diagnostic.exports;
  if(name==='@/lib/player-vision')return vision.exports;
+ if(name==='@/lib/vision/calibration')return calibration.exports;
+ if(name==='@/lib/vision/attention-contracts')return attention.exports;
+ if(name==='@/lib/vision/production')return production.exports;
  if(name==='@/components/ui/brand-mark')return {BrandLogo:()=>React.createElement('span',null,'Gridcast')};
  if(name==='@/components/ui/button')return {Button:props=>React.createElement('button',props)};
  if(name==='@/components/ui/input')return {Input:props=>React.createElement('input',props)};
@@ -63,17 +76,20 @@ async function harness(options={}) {
  execFileSync(ffmpeg,['-v','error','-i',path.join(temp,'fixture.webm'),'-frames:v','1','-y',path.join(temp,'fixture.png')]);
  const picture=fs.readFileSync(path.join(temp,'fixture.png'));
  const db={orgs:[{id:'org1',status:'active'}],screens:[{id:'screen1',org_id:'org1',status:'active',has_camera:true}],devices:[],device_assignments:[],plays:[],presence:[],campaigns:[{id:'campaign1',org_id:'org1',advertiser_id:'advertiser1',rate_type:'per_play',rate_value:2,accrued_spend:0,committed_budget:10000}]};
+ if(options.attentionEnabled)db.screens[0].attention_settings={enabled:true,profile:'attention-v1/mediapipe-1.0.1'};
  if(options.partialAllowance){db.campaigns[0].committed_budget=2;db.campaigns.push({...db.campaigns[0],id:'campaign2',advertiser_id:'advertiser2',committed_budget:10000});}
  const overrides=new Map();let configVersion=7;
- const requests=[],bodies=[],replies=[];let failedAck=false,base='',stopItems=false,playlistFailed=false;
- const config={diagnostics_overlay:true,audio_enabled:true,model:'coco-ssd',sample_interval_s:options.modelWorking?.5:2,loop_length_s:4,slot_duration_s:2,count_ceiling:50,camera_fail_mode:'continue',heartbeat_s:10,sync_interval_min:1,offline_buffer_plays:5000,telemetry_batch:25,telemetry_retry_h:72,...options.config};
- const callback=()=>{const p={config,config_version:configVersion,items:[],[options.filler?'filler_items':'items']:(stopItems||options.empty)?[]:[{campaign_id:'campaign1',creative_id:'creative1',creative_name:'Browser fixture',duration_s:2,rate_value:2,rate_type:'per_play',asset_url:options.youtube?undefined:base+(options.image?'/fixture.png':'/fixture.webm'),youtube_id:options.youtube?'abcdefghijk':undefined,media_type:options.image?'image':'video',asset_id:'fixture',asset_mime:options.image?'image/png':'video/webm',width:128,height:72,...(options.offline?{asset_bytes:(options.image?picture:video).length,asset_sha256:crypto.createHash('sha256').update(options.image?picture:video).digest('hex')}:{})}]};if(options.twoFillers&&p.filler_items?.length)p.filler_items.push({...p.filler_items[0],creative_id:'creative2'});if(options.partialAllowance&&p.items.length)p.items.push({...p.items[0],campaign_id:'campaign2',creative_id:'creative2'});return p;};
+ const requests=[],bodies=[],replies=[],playlistObservations=[];let failedAck=false,base='',stopItems=false,playlistFailed=false;
+ const config={diagnostics_overlay:true,audio_enabled:true,model:'coco-ssd',sample_interval_s:options.modelWorking?.5:2,loop_length_s:4,slot_duration_s:2,count_ceiling:50,camera_fail_mode:'continue',heartbeat_s:10,sync_interval_min:1,offline_buffer_plays:5000,telemetry_batch:25,telemetry_retry_h:72,...(options.attentionEnabled?{attention_enabled:true,attention_profile:'attention-v1/mediapipe-1.0.1',attention_calibration:null}:{}),...options.config};
+ const callback=()=>{if(options.attentionEnabled){config.attention_calibration=db.screens[0].attention_calibration||null;if(db.settings?.config_revision)configVersion=db.settings.config_revision;playlistObservations.push({configVersion,attentionEnabled:config.attention_enabled,calibration:config.attention_calibration?.revision||null,screenCalibration:db.screens[0].attention_calibration?.revision||null});}const p={config,config_version:configVersion,items:[],[options.filler?'filler_items':'items']:(stopItems||options.empty)?[]:[{campaign_id:'campaign1',creative_id:'creative1',creative_name:'Browser fixture',duration_s:2,rate_value:2,rate_type:'per_play',asset_url:options.youtube?undefined:base+(options.image?'/fixture.png':'/fixture.webm'),youtube_id:options.youtube?'abcdefghijk':undefined,media_type:options.image?'image':'video',asset_id:'fixture',asset_mime:options.image?'image/png':'video/webm',width:128,height:72,...(options.offline?{asset_bytes:(options.image?picture:video).length,asset_sha256:crypto.createHash('sha256').update(options.image?picture:video).digest('hex')}:{})}]};if(options.twoFillers&&p.filler_items?.length)p.filler_items.push({...p.filler_items[0],creative_id:'creative2'});if(options.partialAllowance&&p.items.length)p.items.push({...p.items[0],campaign_id:'campaign2',creative_id:'creative2'});return p;};
  const code=issuePairing(db,db.screens[0]);const paired=deviceRoute(db,'POST',['pair'],{code:code.code},null,{playlist:callback,playerProtocol:2}).body;
  if(options.diagnostic){db.campaigns=[];require('./load-lib.cjs')('diagnostics').requestDiagnostic(db,db.screens[0],{id:'admin'},{config,config_version:7});}
  const server=http.createServer(async(req,res)=>{
   const u=new URL(req.url,'http://localhost');if(u.pathname.startsWith('/_next/static/'))u.pathname=u.pathname.replace('/_next/static/','/');requests.push({method:req.method,path:u.pathname});
   if(u.pathname==='/player-fixture.css'){res.writeHead(200,{'Content-Type':'text/css','Cache-Control':'no-store'});res.end(css);return;}
   if(u.pathname==='/player-sw.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(root,'public/player-sw.js')));return;}
+  if(u.pathname==='/vision-lab/worker-attention-v1.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(root,'public/vision-lab/worker-attention-v1.js')));return;}
+  if(u.pathname==='/vision-lab/attention-v1-assets.json'){res.setHeader('Content-Type','application/json');res.end(fs.readFileSync(path.join(root,'public/vision-lab/attention-v1-assets.json')));return;}
   if(u.pathname.startsWith('/api/playlist/')&&options.failFirstPlaylist&&!playlistFailed){playlistFailed=true;res.writeHead(503,{'Content-Type':'application/json'});res.end('{"error":"Fixture connection failed"}');return;}
   if(u.pathname.startsWith('/models/coco-ssd/')){res.setHeader('Content-Type',u.pathname.endsWith('.json')?'application/json':'application/octet-stream');res.end(fs.readFileSync(path.join(root,'public',u.pathname)));return;}
   if(u.pathname==='/tf.js'||u.pathname==='/coco.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(root,u.pathname==='/tf.js'?'node_modules/@tensorflow/tfjs/dist/tf.min.js':'node_modules/@tensorflow-models/coco-ssd/dist/coco-ssd.min.js')));return;}
@@ -105,7 +121,7 @@ async function harness(options={}) {
   let failStartup;const pageFailure=new Promise((_,reject)=>{failStartup=reject;});
   page.on('pageerror',error=>{pageErrors.push(error.message);failStartup(new Error('Player fixture browser error: '+error.message));});
   await page.addInitScript(({credential,options})=>{
-    if(!options.unpaired&&!localStorage.getItem('gc_device'))localStorage.setItem('gc_device',JSON.stringify(credential));window.fixtureModelWorking=!!options.modelWorking;window.fixtureRealModel=!!options.realModel;
+    if(!options.unpaired&&!localStorage.getItem('gc_device'))localStorage.setItem('gc_device',JSON.stringify(credential));window.fixtureModelWorking=!!options.modelWorking;window.fixtureRealModel=!!options.realModel;window.fixtureNoFace=!!options.noFaceInitially;
     window.fixtureLoadWait=!!options.loadWait;
     if(options.blockUnmutedAudio){const original=HTMLMediaElement.prototype.play;HTMLMediaElement.prototype.play=function(){if(this.matches?.('video[data-role="creative"]')&&!this.muted&&!window.fixtureUnmutedBlocked){window.fixtureUnmutedBlocked=true;return Promise.reject(new DOMException('Audio autoplay blocked','NotAllowedError'));}return original.call(this);};}
     if(options.youtube){window.YT={Player:function(_host,playerOptions){let videoId='',startedAt=0,endTimer;const player={muted:true,startedAt:0,mute(){this.muted=true;},unMute(){this.muted=false;},setVolume(v){this.volume=v;},loadVideoById({videoId:id}){videoId=id;},getVideoData(){return {video_id:videoId};},getCurrentTime(){return startedAt?Math.max(0,(Date.now()-startedAt)/1000):0;},playVideo(){if(options.blockYouTubeAudio&&!this.muted&&!window.fixtureYouTubeBlocked){window.fixtureYouTubeBlocked=true;playerOptions.events.onAutoplayBlocked();return;}startedAt=Date.now();this.startedAt=startedAt;playerOptions.events.onStateChange({data:1});clearTimeout(endTimer);endTimer=setTimeout(()=>playerOptions.events.onStateChange({data:0}),2000);},stopVideo(){clearTimeout(endTimer);startedAt=0;this.startedAt=0;},destroy(){clearTimeout(endTimer);}};window.fixtureYT=player;setTimeout(()=>playerOptions.events.onReady({target:player}),0);return player;}};}
@@ -117,8 +133,8 @@ async function harness(options={}) {
       const result=await original({audio:false,video:{width:640,height:480}});window.fixtureStream=result;return result;
     };
   },{credential:{token:paired.token,device_id:paired.device.id,screen_id:'screen1'},options});
-  await Promise.race([pageFailure,(async()=>{await page.goto(base+'/player');if(options.image)await page.waitForFunction(()=>document.querySelector('img')?.naturalWidth>0);else if(options.youtube)await page.waitForFunction(()=>window.fixtureYT?.startedAt>0,{},{timeout:15000});else if(!options.empty&&!options.unpaired)await page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.1;},{},{timeout:15000});})()]);
-  return {page,db,requests,bodies,replies,paired,pageErrors,setConfig:values=>{Object.assign(config,values);configVersion++;},setReply:(path,reply)=>reply?overrides.set(path,reply):overrides.delete(path),cleanup:async()=>{await browser.close();await new Promise(r=>server.close(r));fs.rmSync(temp,{recursive:true,force:true});assert.deepEqual(pageErrors,[],'Player fixture must not have uncaught browser errors');}};
+  await Promise.race([pageFailure,(async()=>{await page.goto(base+'/player');if(options.image)await page.waitForFunction(()=>document.querySelector('img')?.naturalWidth>0);else if(options.youtube)await page.waitForFunction(()=>window.fixtureYT?.startedAt>0,{},{timeout:15000});else if(!options.empty&&!options.unpaired&&!options.attentionEnabled)await page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.1;},{},{timeout:15000});})()]);
+ return {page,db,requests,bodies,replies,paired,pageErrors,playlistObservations,setConfig:values=>{Object.assign(config,values);configVersion++;if(Object.hasOwn(values,'attention_enabled')||Object.hasOwn(values,'attention_profile')){db.settings||={};db.settings.config_revision=(db.settings.config_revision||0)+1;}},setReply:(path,reply)=>reply?overrides.set(path,reply):overrides.delete(path),cleanup:async()=>{await browser.close();await new Promise(r=>server.close(r));fs.rmSync(temp,{recursive:true,force:true});assert.deepEqual(pageErrors,[],'Player fixture must not have uncaught browser errors');}};
  }catch(e){await browser?.close();await new Promise(r=>server.close(r));fs.rmSync(temp,{recursive:true,force:true});throw e;}
 }
 const waitFor=async(fn,ms=15000)=>{const until=Date.now()+ms;while(!fn()){if(Date.now()>until)throw new Error('Timed out waiting for playback report');await new Promise(r=>setTimeout(r,25));}};
@@ -161,6 +177,75 @@ test('fake camera and deterministic detector carry the actual model version and 
   const calls=await h.page.evaluate(()=>window.fixtureDetectCalls);assert.ok(calls.length);assert.ok(calls.every(c=>c.maxBoxes===50&&c.minScore===.45));
   const at=h.bodies.indexOf(body);assert.equal(h.replies[at].status,undefined);assert.equal(h.replies[at].body.billable,true);
   assert.ok(!h.requests.some(r=>r.path.endsWith('/frame')));
+ }finally{await h.cleanup();}
+});
+
+test('opted-in empty schedule completes camera calibration before reporting readiness without a play', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({attentionEnabled:true,modelWorking:true,empty:true,config:{sample_interval_s:2}});try{
+  await waitFor(()=>!!h.db.screens[0].attention_calibration,12000).catch(async error=>{throw new Error(JSON.stringify({message:error.message,body:(await h.page.locator('body').innerText()).slice(0,1000),requests:h.requests.map(x=>x.path),errors:h.pageErrors,device:h.db.devices,assignment:h.db.device_assignments},null,2));});
+  assert.ok(await h.page.evaluate(()=>window.fixtureAttentionFrames>=5),'Calibration must get independent off-slot camera frames');
+  assert.equal(h.bodies.length,0);assert.equal(h.db.plays.length,0);
+  assert.ok(h.requests.some(r=>r.method==='POST'&&r.path==='/api/attention/calibration'));
+  assert.equal(await h.page.getByRole('button',{name:'Calibrate attention · 3 seconds'}).count(),1);
+ }finally{await h.cleanup();}
+});
+
+test('failed or cancelled initial calibration can be retried with the verified worker', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({attentionEnabled:true,modelWorking:true,empty:true,noFaceInitially:true,config:{sample_interval_s:2}});try{
+  await h.page.getByRole('button',{name:'Cancel calibration'}).waitFor({timeout:12000});
+  await h.page.getByRole('button',{name:'Cancel calibration'}).click();
+  await h.page.getByRole('button',{name:'Retry calibration'}).waitFor();
+  await h.page.getByRole('button',{name:'Retry calibration'}).click();
+  await h.page.getByText(/Calibration failed ·.*Not enough clear face readings/).waitFor({timeout:6000});
+  await h.page.evaluate(()=>{window.fixtureNoFace=false;});
+  await h.page.getByRole('button',{name:'Retry calibration'}).click();
+  await waitFor(()=>!!h.db.screens[0].attention_calibration,7000);
+  assert.equal(h.db.plays.length,0);assert.equal(h.requests.filter(r=>r.method==='POST'&&r.path==='/api/attention/calibration').length,1);
+ }finally{await h.cleanup();}
+});
+
+test('Attention toggles apply at boundaries without restarting the legacy camera or losing billable samples', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({attentionEnabled:true,modelWorking:true,continuous:true,config:{sample_interval_s:2}});try{
+  await waitFor(()=>!!h.db.screens[0].attention_calibration,12000);
+  await h.page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.25;});
+  h.db.campaigns[0].committed_budget=100000; // Cover the old immutable reservation while the new config revision is assigned.
+  const cameraStarts=await h.page.evaluate(()=>window.fixtureCameraStarts);
+  h.setConfig({attention_enabled:false});await h.page.evaluate(()=>window.dispatchEvent(new Event('online')));
+  await waitFor(()=>h.db.plays.length>=2,12000).catch(async error=>{throw new Error(JSON.stringify({message:error.message,body:(await h.page.locator('body').innerText()).slice(0,900),requests:h.requests.map(x=>x.path),plays:h.db.plays,assignments:h.db.device_assignments.map(a=>({attention:a.attention_enabled,rev:a.attention_calibration_revision,uses:a.max_plays})),config:h.playlistObservations,starts:await h.page.evaluate(()=>window.fixtureCameraStarts)},null,2));});
+  assert.equal(h.db.plays[0].attention_status,'accepted','Disabling during an active play preserves its frozen Attention receipt');
+  assert.equal(h.db.plays[0].billable,true);assert.equal(h.db.plays[1].billable,true);assert.equal(h.db.campaigns[0].accrued_spend,4);
+  h.setConfig({attention_enabled:true,attention_profile:'attention-v1/mediapipe-1.0.1'});await h.page.evaluate(()=>window.dispatchEvent(new Event('online')));
+  await waitFor(()=>h.db.plays.length>=4,12000);
+  assert.equal(h.db.plays[2].billable,true,'The creative already in progress when re-enabling remains billable');
+  assert.equal(h.db.plays[3].attention_status,'accepted','Re-enabling takes effect at the next safe boundary');
+  assert.ok(h.db.plays[3].attention.playing_ms>0);assert.equal(h.db.plays[3].billable,true);
+  assert.equal(await h.page.evaluate(()=>window.fixtureCameraStarts),cameraStarts,'Attention-only changes reuse the unchanged legacy camera stream');
+ }finally{await h.cleanup();}
+});
+
+test('small-budget Attention config revisions wait for the outstanding immutable allowance without double charging', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({attentionEnabled:true,modelWorking:true,continuous:true,config:{sample_interval_s:2}});try{
+  await waitFor(()=>!!h.db.screens[0].attention_calibration,12000);
+  await h.page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.25;});
+  h.setConfig({attention_enabled:false});await h.page.evaluate(()=>window.dispatchEvent(new Event('online')));
+  await waitFor(()=>h.db.plays.length===1,10000);
+  await h.page.getByText(/Waiting for paid playback allowance/).waitFor({timeout:10000});
+  assert.equal(h.db.device_assignments.length,1,'The old assignment remains immutable and no unfunded replacement is issued');
+  assert.equal(h.db.plays[0].billable,true);assert.equal(h.db.campaigns[0].accrued_spend,2);
+  assert.ok(h.db.campaign_budgets[0].reservations.some(row=>row.remaining_plays>0));
+ }finally{await h.cleanup();}
+});
+
+test('recalibration requested during a creative begins only after its delivery is finalized', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({attentionEnabled:true,modelWorking:true,config:{sample_interval_s:2}});try{
+  await waitFor(()=>!!h.db.screens[0].attention_calibration,12000);const firstRevision=h.db.screens[0].attention_calibration.revision;
+  await h.page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.1;},{timeout:10000}).catch(async error=>{throw new Error(JSON.stringify({message:error.message,body:(await h.page.locator('body').innerText()).slice(0,1000),requests:h.requests.map(x=>x.path),plays:h.db.plays,assignments:h.db.device_assignments.map(a=>({attention:a.attention_enabled,rev:a.attention_calibration_revision})),assignmentSet:h.db.devices[0].assignment_set,campaign:h.db.campaigns[0],playlistObservations:h.playlistObservations,calibration:h.db.screens[0].attention_calibration},null,2));});
+  await h.page.getByRole('button',{name:'Calibrate attention · 3 seconds'}).click();
+  assert.match(await h.page.locator('[data-role="player-status"]').innerText(),/safe play boundary/);
+  await waitFor(()=>h.bodies.length>=1,10000);await waitFor(()=>h.db.screens[0].attention_calibration?.revision!==firstRevision,12000);
+  const playAt=h.requests.findIndex(r=>r.method==='POST'&&r.path==='/api/play'),calibrations=h.requests.map((r,i)=>r.method==='POST'&&r.path==='/api/attention/calibration'?i:-1).filter(i=>i>=0);
+  assert.equal(calibrations.length,2);assert.ok(playAt>calibrations[0]&&calibrations[1]>playAt,JSON.stringify({playAt,calibrations}));
+  assert.equal(h.db.plays.length,1,'Recalibration must pause between paid plays');assert.equal(h.db.plays[0].attention_status,'accepted','The real receipt path accepts the optional summary');assert.ok(h.db.plays[0].attention.playing_ms>0);assert.equal(h.db.plays[0].billable,true);assert.equal(h.db.campaigns[0].accrued_spend,2,'Attention evidence cannot change commercial billing');
  }finally{await h.cleanup();}
 });
 
@@ -307,7 +392,7 @@ test('uploaded image waits for decode and reports visible duration with no video
 test('uploaded media and player shell restart offline with saved allowances and buffered receipts', {skip:!executablePath||!ffmpeg}, async()=>{
  const h=await harness({offline:true,continuous:true});try{
   await waitForBrowser(h.page,async()=>!!navigator.serviceWorker.controller && !!(await window.fixtureCache.readySchedule(JSON.parse(localStorage.getItem('gc_device')).device_id)));
-  await waitForBrowser(h.page,async()=>{const c=await caches.open('gridcast-player-shell-v1');return !!(await c.match('/_next/static/player.js'))&&!!(await c.match('/_next/static/react.js'))&&!!(await c.match('/_next/static/react-dom.js'))});
+  await waitForBrowser(h.page,async()=>{const c=await caches.open('gridcast-player-shell-v2');return !!(await c.match('/_next/static/player.js'))&&!!(await c.match('/_next/static/react.js'))&&!!(await c.match('/_next/static/react-dom.js'))});
   await h.page.context().setOffline(true);await h.page.reload();
   await h.page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.1;});
   await waitForBrowser(h.page,async id=>(await window.fixtureQueue.queueStatus(id)).pending>=1,h.paired.device.id);

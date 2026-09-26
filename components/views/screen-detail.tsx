@@ -18,6 +18,19 @@ import { reasonLabel } from '@/lib/readiness';
 import { ScreenDiagnostics } from './screen-diagnostics';
 import { ScreenMaintenance } from './screen-maintenance';
 
+function AttentionV1Setting({ screen, onChanged }: { screen:any; onChanged:()=>Promise<unknown> }) {
+  const [busy,setBusy]=useState(false),[error,setError]=useState('');
+  const enabled=screen.attention_settings?.enabled===true;
+  const save=async(value:boolean)=>{setBusy(true);setError('');try{await api(`/screen/${screen.id}/attention`,{enabled:value,profile:'attention-v1/mediapipe-1.0.1'});await onChanged();}catch(e){setError((e as Error).message);}finally{setBusy(false);}};
+  return <Card className="mb-4 space-y-3 p-4" aria-label="Attention analytics settings">
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold">Attention V1 · platform control</h3>
+      <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">Optional analytics estimate face direction, temporary anonymous visits and visible smiling. Analysis stays on the player; frames are discarded and never uploaded. Reports keep unknown time separate. Attention does not change presence, billing or campaign settlement. Model files download on first setup and are cached for offline restarts. New Attention settings and calibration use immutable paid-play allowances; with limited budget headroom, assignment updates may wait for outstanding allowances to expire.</p></div>
+      <Button disabled={busy} variant={enabled?'outline':'default'} onClick={()=>void save(!enabled)}>{busy?'Saving…':enabled?'Disable on this screen':'Enable on this screen'}</Button></div>
+    <p className="text-xs text-muted-foreground">Status: {enabled?'Opted in for this screen. The player will request setup and guided calibration.':'Off. No attention models or measurements run.'}{enabled&&screen.attention_calibration?.completed_at?` · Calibration last saved ${new Date(screen.attention_calibration.completed_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})} IST.`:enabled?' · Calibration is still required.':''}</p>
+    {error&&<p role="alert" className="text-sm text-destructive">{error}</p>}
+  </Card>;
+}
+
 export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: string) => void; onChanged: () => void }) {
   const [d, setD] = useState<any>(null);
   const currentId = useRef(id); currentId.current = id;
@@ -99,7 +112,7 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
         ))}
       </div>
 
-      {tab === 'config' && mayEdit && <ScreenConfig screenId={id} d={d} onChanged={load} />}
+      {tab === 'config' && mayEdit && <>{caps.includes('platform')&&<AttentionV1Setting screen={s} onChanged={load}/>}<ScreenConfig screenId={id} d={d} onChanged={load} /></>}
       {tab === 'live' && (<>
 
       {edit && mayEdit && (

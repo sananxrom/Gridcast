@@ -13,7 +13,8 @@ export class GazeCalibration {
     if (this.samples.length && observation.at<=this.samples[this.samples.length-1].at) return;
     if (this.samples.length<64) this.samples.push({at:observation.at,yaw:pose.yaw,pitch:pose.pitch});
   }
-  finish():{yaw:number;pitch:number} {
+  finish():{yaw:number;pitch:number} { const result=this.finishDetailed(); return {yaw:result.yaw,pitch:result.pitch}; }
+  finishDetailed(){
     if (this.multiple) throw Error('More than one face was visible. Calibrate with one person in view. Previous calibration kept.');
     const s=this.samples;
     if (s.length<5 || s[s.length-1].at-s[0].at<1000) throw Error('Not enough clear face readings. Face the centre dot with your eyes open and try again. Previous calibration kept.');
@@ -21,6 +22,6 @@ export class GazeCalibration {
     const spread=(key:'yaw'|'pitch')=>{const a=s.map(v=>v[key]).sort((a,b)=>a-b);return a[Math.floor((a.length-1)*.9)]-a[Math.floor((a.length-1)*.1)];};
     if (spread('yaw')>12 || spread('pitch')>10) throw Error('Face direction moved too much. Hold still, look at the centre dot and retry. Previous calibration kept.');
     if (Math.abs(yaw)>45 || Math.abs(pitch)>45) throw Error('Camera angle is too far off-centre. Reposition it and retry. Previous calibration kept.');
-    return {yaw:Math.round(yaw*10)/10,pitch:Math.round(pitch*10)/10};
+    return {yaw:Math.round(yaw*10)/10,pitch:Math.round(pitch*10)/10,samples:s.length,span_ms:Math.round(s[s.length-1].at-s[0].at),yaw_spread_tenths:Math.round(spread('yaw')*10),pitch_spread_tenths:Math.round(spread('pitch')*10)};
   }
 }

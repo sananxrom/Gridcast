@@ -6,8 +6,10 @@ const ts = require('typescript');
 const root = path.resolve(__dirname, '..');
 const zero = () => ({ plays_rendered: 0, plays_billable: 0, plays_not_rendered: 0, plays_filler: 0, presence_sum: 0, presence_n: 0, airtime_ms: 0 });
 function page(overrides = {}) {
-  return { totals: zero(), byScreen: {}, byCampaign: {}, byCreative: {}, daily: {}, hourly: {}, coverage: { started_at: '2026-01-01T00:00:00Z', complete: true }, last_at: null, rows: 1, has_more: false, next_cursor: null, ...overrides };
+  return { totals: zero(), byScreen: {}, byCampaign: {}, byCreative: {}, daily: {}, hourly: {},attentionProfiles:{},attention_page:{has_more:false,next_cursor:null}, coverage: { started_at: '2026-01-01T00:00:00Z', complete: true }, last_at: null, rows: 1, has_more: false, next_cursor: null, ...overrides };
 }
+const attentionCounters=n=>({plays:n,playing_ms:n*10000,body_observed_ms:n*8000,body_unknown_ms:n*2000,face_observed_ms:n*7000,face_unknown_ms:n*3000,attention_observed_ms:n*5000,attention_unknown_ms:n*5000,expression_observed_ms:n*4000,expression_unknown_ms:n*6000,presence_person_ms:n*3000,looking_person_ms:n*2000,face_assessable_person_ms:n*2500,smile_person_ms:n*1000,expression_assessable_person_ms:n*1500,estimated_impressions:n,attentive_impressions:n,tracked_visits:n});
+function profilePage(n){const c=attentionCounters(n),series={profile:'v1',manifest_sha256:'m',pipeline_sha256:'p',calibration_revision:'c',asset_id:'asset',asset_sha256:'sha',config_version:1,totals:c,byScreen:{screen:c},byCampaign:{campaign:c},byCreative:{creative:c},daily:{'2026-01-02':c},hourly:{'12':c},dayHours:{'2026-01-02T12':c}};return {attentionProfiles:{series},};}
 // Exercise the hook state machine without a DOM. Requests are controlled promises;
 // effects run after render and clean up exactly when their dependency key changes.
 function fixture() {
@@ -40,6 +42,10 @@ function fixture() {
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
+test('attention person-hours remain unavailable without coverage while measured zero stays zero',()=>{
+ const {lib}=fixture();assert.equal(lib.attentionHours(0,0),'Unavailable');assert.equal(lib.attentionHours(0,1234),'Unavailable');assert.equal(lib.attentionHours(1000,0),'0.00 h');assert.equal(lib.attentionHours(1000,3600000),'1.00 h');assert.equal(lib.attentionPeopleRate(1000,0),null);assert.equal(lib.attentionPeopleRate(2000,1000),2);
+});
+
 test('report periods use IST and reject reversed, invalid, overlong and future ranges', () => {
   const { lib } = fixture();
   assert.deepEqual(lib.reportPreset('today', Date.parse('2026-01-01T18:45:00Z')), { from: '2026-01-02', to: '2026-01-02' });
@@ -64,6 +70,18 @@ test('the report publishes only after every page and combines measured numerator
   assert.equal(result.loading, false);
   assert.equal(result.data.totals.plays_rendered, 102);
   assert.equal(result.data.totals.presence_sum / result.data.totals.presence_n, 910 / 102);
+});
+
+test('multi-page profile totals and dimensions do not double the first page with unequal attention cursors',async()=>{
+ const f=fixture();f.render();
+ f.requests[0].resolve(page({...profilePage(2),has_more:true,next_cursor:'screen-2',attention_page:{has_more:true,next_cursor:'attention-2'}}));await settle();
+ assert.match(f.requests[1].url,/after=screen-2/);assert.match(f.requests[1].url,/attention_after=attention-2/);
+ f.requests[1].resolve(page({...profilePage(3),totals:{...zero(),plays_rendered:1},attention_page:{has_more:true,next_cursor:'attention-3'}}));await settle();
+ assert.match(f.requests[2].url,/after=%7E/);assert.match(f.requests[2].url,/attention_after=attention-3/);
+ f.requests[2].resolve(page(profilePage(5)));await settle();
+ const result=f.render().data,p=result.attentionProfiles.series;
+ assert.equal(p.totals.plays,10);assert.equal(p.totals.playing_ms,100000);assert.equal(p.byCreative.creative.plays,10);assert.equal(p.daily['2026-01-02'].attention_observed_ms,50000);
+ assert.equal(result.totals.plays_rendered,1);
 });
 
 test('scope changes hide previous results before effects and discard late prior requests', async () => {
@@ -106,6 +124,20 @@ test('CSV distinguishes unknown days, known zero delivery and measured zero peop
   assert.equal(rows[3][12], '', 'no measurement is not zero people');
   assert.equal(rows[2][4], 'false');
   assert.equal(lib.csvCell('=HYPERLINK("bad")'), '"\'=HYPERLINK(""bad"")"');
+});
+
+test('attention pagination does not double first-page totals and keeps unavailable metrics blank in export',async()=>{
+ const {lib}=fixture(),p={profile:'v1',manifest_sha256:'m',pipeline_sha256:'p',calibration_revision:'c',asset_id:'asset',asset_sha256:'sha',config_version:2};
+ const c=n=>({plays:n,playing_ms:n*10000,body_observed_ms:0,body_unknown_ms:n*10000,face_observed_ms:0,face_unknown_ms:n*10000,attention_observed_ms:0,attention_unknown_ms:n*10000,expression_observed_ms:0,expression_unknown_ms:n*10000,presence_person_ms:0,looking_person_ms:0,face_assessable_person_ms:0,smile_person_ms:0,expression_assessable_person_ms:0,estimated_impressions:0,attentive_impressions:0,tracked_visits:0});
+ const group=n=>({ ...p,totals:c(n),byCreative:{creative:c(n)},byScreen:{screen:c(n)},byCampaign:{campaign:c(n)},daily:{'2026-01-02':c(n)},hourly:{},dayHours:{}});
+ const f=fixture();f.render();
+ f.requests[0].resolve(page({attentionProfiles:{series:group(2)},has_more:true,next_cursor:'screen-2',attention_page:{has_more:true,next_cursor:'attention-2'}}));await settle();
+ f.requests[1].resolve(page({attentionProfiles:{series:group(3)},attention_page:{has_more:true,next_cursor:'attention-3'}}));await settle();
+ f.requests[2].resolve(page({attentionProfiles:{series:group(5)}}));await settle();
+ const result=f.render().data;assert.equal(result.attentionProfiles.series.totals.plays,10);assert.equal(result.attentionProfiles.series.byCreative.creative.plays,10);
+ const csv=lib.dailyReportCsv({...result,daily:[],hourly:[],coverage:{started_at:'2026-01-01T00:00:00Z',complete:true}},{from:'2026-01-02',to:'2026-01-02'}).split('\r\n');
+ const header=csv[0].split(',').map(x=>x.slice(1,-1)),row=csv.at(-1).split(',').map(x=>x.slice(1,-1));assert.equal(row[header.indexOf('asset_id')],'asset');assert.equal(row[header.indexOf('asset_sha256')],'sha');
+ assert.equal(row[header.indexOf('looking_person_ms')],'');assert.equal(row[header.indexOf('estimated_impressions')],'');assert.equal(row[header.indexOf('attentive_impressions')],'');
 });
 
 

@@ -56,8 +56,8 @@ export async function assertIsolated() {
   if (open) throw Error('A Gridcast player is open in this browser. Finish or pause that session safely and close its player tab before benchmarking. Do not clear its saved records.');
 }
 export type EngineStatus = { delegate: 'CPU' | 'GPU'; latencyMs: number; faceFps: number; personFps: number; dropped: number };
-export async function createEvaluationWorker(delegate: 'CPU' | 'GPU', signal: AbortSignal, observe: (value: Observation, stats: EngineStatus) => void, fail: (message: string) => void) {
-  const worker = new Worker('/vision-lab/worker.js'); // classic, deliberately: module-worker WASM loading failed the real probe.
+export async function createEvaluationWorker(delegate: 'CPU' | 'GPU', signal: AbortSignal, observe: (value: Observation, stats: EngineStatus, context?:any) => void, fail: (message: string) => void, workerUrl = '/vision-lab/worker.js', initData:Record<string,unknown>={}) {
+  const worker = new Worker(workerUrl); // classic, deliberately: module-worker WASM loading failed the real probe.
   let lastVideoTime = -1;
   let busy = false, closed = false, sentAt = 0, lastFace = -Infinity, lastPerson = -Infinity, dropped = 0;
   const faceTimes: number[] = [], personTimes: number[] = [];
@@ -72,7 +72,7 @@ export async function createEvaluationWorker(delegate: 'CPU' | 'GPU', signal: Ab
       signal.addEventListener('abort', abort, { once: true });
       worker.onerror = e => { cleanup(); reject(Error(e.message || 'Worker initialization failed')); };
       worker.onmessage = ({ data }) => { if (data.type === 'READY') { cleanup(); resolve(); } else if (data.type === 'ERROR') { cleanup(); reject(Error(data.error)); } };
-      worker.postMessage({ type: 'INIT', delegate });
+      worker.postMessage({ type: 'INIT', delegate, ...initData });
     });
     signal.throwIfAborted();
     worker.onerror = e => { close(); fail(e.message || 'Vision worker stopped'); };
@@ -92,12 +92,13 @@ export async function createEvaluationWorker(delegate: 'CPU' | 'GPU', signal: Ab
       if (value.bodies) personTimes.push(now);
       while (faceTimes.length && faceTimes[0] < now - 5000) faceTimes.shift();
       while (personTimes.length && personTimes[0] < now - 5000) personTimes.shift();
-      observe(value, { delegate, latencyMs: data.durationMs, faceFps: faceTimes.length / 5, personFps: personTimes.length / 5, dropped });
+      observe(value, { delegate, latencyMs: data.durationMs, faceFps: faceTimes.length / 5, personFps: personTimes.length / 5, dropped },data.context);
     };
     watch = setInterval(() => { if (busy && performance.now() - sentAt > 10000) { close(); fail('Inference stalled. Stopped the camera; try the CPU backend.'); } }, 1000);
     return {
       close,
-      async frame(video: HTMLVideoElement, calibration: { yaw: number; pitch: number }) {
+      get busy() { return busy; },
+      async frame(video: HTMLVideoElement, calibration: { yaw: number; pitch: number }, context?:any) {
         if (closed || signal.aborted || video.readyState < 2 || video.paused || video.ended || video.currentTime === lastVideoTime || (video.srcObject instanceof MediaStream && !video.srcObject.getVideoTracks().some(t => t.readyState === 'live' && !t.muted && t.enabled))) return;
         const at = performance.now(), face = at - lastFace >= 125, person = at - lastPerson >= 1000 / 3;
         if (!face && !person) return;
@@ -107,7 +108,7 @@ export async function createEvaluationWorker(delegate: 'CPU' | 'GPU', signal: Ab
           const frame = await createImageBitmap(video, { resizeWidth: 640, resizeHeight: Math.max(1, Math.round(640 * video.videoHeight / video.videoWidth)), resizeQuality: 'low' });
           if (closed || signal.aborted) { frame.close(); busy = false; return; }
           if (face) lastFace = at; if (person) lastPerson = at;
-          worker.postMessage({ type: 'FRAME', frame, at, face, person, calibration }, [frame]);
+          worker.postMessage({ type: 'FRAME', frame, at, face, person, calibration, context }, [frame]);
         } catch (error: any) { busy = false; close(); fail(error.message || 'Camera frame could not be read'); }
       },
     };

@@ -156,7 +156,8 @@ export async function strandedPlays(deviceId: string): Promise<QueuedPlay[]> {
   return (await queuedPlays()).filter(p => p.device_id !== deviceId);
 }
 const flushing = new Set<string>();
-export async function flushPlays(deviceId: string, send: (event: any) => Promise<{ status: number; error?: string }>, batch = 25, retryHours = 72): Promise<void> {
+export async function flushPlays(deviceId: string, send: (event: any) => Promise<{ status: number; error?: string; attention_status?:string }>, batch = 25, retryHours = 72,
+  onAck?: (event:any,reply:{status:number;error?:string;attention_status?:string})=>void): Promise<void> {
   if (flushing.has(deviceId)) return;
   flushing.add(deviceId);
   try {
@@ -167,7 +168,7 @@ export async function flushPlays(deviceId: string, send: (event: any) => Promise
       }
       try {
         const reply = await send(row.event);
-        if (reply.status >= 200 && reply.status < 300) { await save(row, true); continue; }
+        if (reply.status >= 200 && reply.status < 300) { try{onAck?.(row.event,reply);}catch{} await save(row, true); continue; }
         if (reply.status === 401) throw new Error('Device authorization expired. Re-pair required.');
         if (reply.status >= 400 && reply.status < 500 && reply.status !== 429) {
           await save({ ...row, blocked: true, error: reply.error || `Server rejected this record (${reply.status}).` }); continue;

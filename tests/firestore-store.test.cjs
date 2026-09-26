@@ -316,6 +316,16 @@ test('daily rollup and first coverage marker commit atomically across duplicate 
  assert.ok(!f.database.reads.some(q=>typeof q==='object'&&['plays','presence','screen_day'].includes(q.collection)),'device path reads only exact receipt and rollup keys');
 });
 
+test('accepted attention series persist in separate provenance buckets atomically and deduplicate',async()=>{
+ const f=reportingDeviceFixture(),a=f.assignment;a.attention_enabled=true;a.attention_profile='attention-v1/mediapipe-1.0.1';a.attention_calibration_revision='calibrationA';a.attention_manifest_sha256='43e32807c30b4ad5e6d11148e8284ef2f9e9889832e2dc38f6899628e97fd8a5';a.attention_pipeline_sha256='00709932bbd13ed9a015f0e3dd6516a5f0b684f48a7e4640d86f8e51b96d75ac';a.attention_calibration={schema:'calibration-v1/1',profile:a.attention_profile,revision:'calibrationA',device_id:a.device_id,screen_id:a.screen_id,camera_ref:'opaqueCameraReference123',width:640,height:480,rotation:0,method:'guided-3s',yaw_tenths:12,pitch_tenths:-5,samples:10,span_ms:2700,yaw_spread_tenths:2,pitch_spread_tenths:3,completed_at:new Date(f.now-60000).toISOString()};a.asset_id='assetA';a.asset_sha256='assetHashA';
+ f.database.rows['device_assignments/'+a.id]=JSON.parse(JSON.stringify(a));
+ const e=f.event(10);e.attention={schema:'attention-v1/1',profile:a.attention_profile,calibration_revision:a.attention_calibration_revision,playing_ms:10000,body:[8000,2000,0],face:[8000,2000,0],attention:[6000,4000],expression:[6000,4000],presence_person_ms:10000,looking_person_ms:5000,smile_person_ms:1000,face_assessable_person_ms:7000,expression_assessable_person_ms:6000,estimated_impressions:1,attentive_impressions:1,tracked_visits:1,right_censored_visits:0,longest_look_ms:1000};
+ const replies=await Promise.all([f.send(e),f.send(e)]);assert.equal(replies.filter(r=>r.body.duplicate).length,1);assert.equal(replies.find(r=>!r.body.duplicate).body.attention_status,'accepted');
+ const docs=Object.entries(f.database.rows).filter(([k])=>k.startsWith('attention_day/'));assert.equal(docs.length,1);const [path,row]=docs[0];assert.ok(path.includes('attention_day/'));assert.equal(row.asset_sha256,'assetHashA');assert.equal(row.calibration_revision,'calibrationA');assert.equal(row.totals.plays,1);assert.equal(row.totals.attention_unknown_ms,4000);
+ const commit=f.database.commits.find(w=>w.some(x=>x[1]===path));assert.ok(commit.some(x=>x[1].startsWith('plays/')));assert.ok(commit.some(x=>x[1].startsWith('screen_day/')));
+ const report=await f.store.transact({method:'GET',path:['metrics'],uid:'a_owner',from:row.date,to:row.date,reportScreen:'sa'},()=>f.store.read());assert.equal(report.attention_day.length,1);assert.equal(report.attention_day[0].asset_id,'assetA');assert.ok(f.database.reads.some(q=>typeof q==='object'&&q.collection==='attention_day'&&q.filters.some(x=>x[0]==='org_id'&&x[2]==='a')));
+});
+
 test('invalid-clock receipts prefetch the receive-day bucket and update it without making delivered plays',async()=>{
  const f=reportingDeviceFixture(),old=Date.parse('2000-01-01T00:00:00Z');
  for(const seq of [1,2]){const result=await f.send(f.event(seq,old));assert.equal(result.body.ok,true,JSON.stringify(result));assert.equal(result.body.billable,false);}
@@ -352,7 +362,7 @@ async function allReportPages(f,context){
 test('metrics paginate beyond 2000 rollup rows without receipt or domain scans',async()=>{
  const f=reportingReadFixture(),rows=await allReportPages(f,f.context);
  assert.equal(rows.length,2105);assert.equal(new Set(rows.map(r=>r.id)).size,2105);assert.ok(rows.every(r=>r.org_id==='a'));
- assert.ok(!f.database.reads.some(q=>typeof q==='object'&&q.collection!=='screen_day'));
+ assert.ok(!f.database.reads.some(q=>typeof q==='object'&&!['screen_day','attention_day'].includes(q.collection)));
  const absent=await f.store.transact({...f.context,from:'2026-09-22',to:'2026-09-22'},()=>f.store.read());assert.deepEqual(absent.screen_day,[]);
 });
 test('metrics scope operator, advertiser, admin organisation, campaign and screen at the database query',async()=>{

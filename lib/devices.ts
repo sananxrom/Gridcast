@@ -4,10 +4,15 @@ import { accrueSettlement, appliedOffset, economics } from './settlement';
 import crypto from 'crypto';
 import { playerReadiness } from './readiness';
 import { deviceDiagnosticRoute, diagnosticOffer, DiagnosticError } from './diagnostics';
+import { ATTENTION_PROFILE, validateAttentionCalibration, validateAttentionSummary, attentionQueuedEventBytes, ATTENTION_LIMITS, type AttentionCalibration, type CalibrationBinding } from './vision/attention-contracts';
 const PAIR_TTL = 10 * 60e3, BACKLOG_TTL = 72 * 3600e3, ASSIGNMENT_TTL = 3600e3;
 const hash = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 const iso = (n: number) => new Date(n).toISOString();
 const safeScreen = (s: any) => ({ id: s.id, name: s.name, has_camera: !!s.has_camera, loop_length_s: s.loop_length_s });
+export function calibrationForDevice(screen:any,device:any,profile=ATTENTION_PROFILE.id){
+  const c=screen?.attention_calibration;
+  return c&&device&&c.device_id===device.id&&c.screen_id===screen.id&&c.profile===profile?c:null;
+}
 // Only playback inputs cross the device boundary. Pricing, client labels and future internal
 // item fields stay server-side; assignment signatures and frozen billing rows use the original item.
 function playbackItem(item: any, assignment: any) {
@@ -16,6 +21,9 @@ function playbackItem(item: any, assignment: any) {
     width: item.width, height: item.height, letterbox: item.letterbox,
     kind: item.kind === 'filler' ? 'filler' : 'paid', media_type: item.media_type || 'video',
     asset_sha256: item.asset_sha256, asset_bytes: item.asset_bytes, asset_mime: item.asset_mime,
+    attention_enabled: assignment.attention_enabled === true, attention_profile: assignment.attention_profile || null,
+    attention_calibration_revision: assignment.attention_calibration_revision || null,
+    attention_manifest_sha256: assignment.attention_manifest_sha256 || null, attention_pipeline_sha256: assignment.attention_pipeline_sha256 || null,
     assignment_id: assignment.id, valid_until: assignment.valid_until, accept_until: assignment.accept_until, max_plays: assignment.max_plays };
 }
 export const pairingCodeHash = (code: string) => hash(code.trim().toUpperCase());
@@ -57,7 +65,7 @@ const attempts = new Map<string, { at: number; count: number }>();
 /** All reads and changes run inside the caller's persistence transaction. */
 export function deviceRoute(db: any, method: string, seg: string[], body: any, token: string | null | undefined, options: Options): Result | null {
   const path = seg.join('/'), now = options.now ?? Date.now();
-  if (!((method === 'POST' && ['pair','heartbeat','play','nowplaying','diagnostic/start','diagnostic/result'].includes(path)) || (method === 'GET' && /^playlist\/[^/]+$/.test(path)))) return null;
+  if (!((method === 'POST' && ['pair','heartbeat','play','nowplaying','diagnostic/start','diagnostic/result','attention/calibration'].includes(path)) || (method === 'GET' && /^playlist\/[^/]+$/.test(path)))) return null;
   if (path === 'pair') {
     const k = options.clientKey || 'pair', attempt = attempts.get(k);
     if (!attempt || now - attempt.at > 60e3) attempts.set(k, { at: now, count: 1 });
@@ -80,6 +88,25 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
   if (path.startsWith('diagnostic/')) {
     try { return deviceDiagnosticRoute(db, path, body, screen, device, now, path === 'diagnostic/start' ? options.playlist(screen, device).config_version : undefined); }
     catch (e) { if (e instanceof DiagnosticError) return fail(e.status, e.message); throw e; }
+  }
+  if (path === 'attention/calibration') {
+    const config=options.playlist(screen,device).config, calibration=body.calibration as AttentionCalibration;
+    if (config.attention_enabled !== true || config.attention_profile !== ATTENTION_PROFILE.id) return fail(403,'Attention is not enabled for this screen');
+    if (!screen.has_camera || config.camera_source === 'ip') return fail(400,'This player has no supported local camera');
+    const binding: CalibrationBinding = { profile:ATTENTION_PROFILE.id,device_id:device.id,screen_id:screen.id,
+      camera_ref:calibration?.camera_ref,width:calibration?.width,height:calibration?.height,rotation:calibration?.rotation };
+    if (!validateAttentionCalibration(calibration,binding)) return fail(400,'Calibration does not match this player, screen, camera or profile');
+    db.attention_calibrations ||= [];
+    const registered=db.attention_calibrations.find((x:any)=>x.id===calibration.revision);
+    if(registered){
+      if(registered.device_id!==device.id||registered.screen_id!==screen.id||canonical(registered.calibration)!==canonical(calibration))return fail(409,'This calibration revision is already bound to different evidence');
+      return {changed:false,body:{ok:true,calibration_revision:calibration.revision,config_version:db.settings?.config_revision||1,duplicate:true}};
+    }
+    const record={id:calibration.revision,org_id:screen.org_id,screen_id:screen.id,device_id:device.id,profile:ATTENTION_PROFILE.id,calibration:structuredClone(calibration),created_at:iso(now)};
+    db.attention_calibrations.push(record);
+    screen.attention_calibration=structuredClone(calibration);
+    db.settings ||= {}; db.settings.config_revision=(db.settings.config_revision || 0)+1;
+    return {changed:true,body:{ok:true,calibration_revision:calibration.revision,config_version:db.settings.config_revision}};
   }
   if (path === 'heartbeat') {
     if (!((typeof body.config_version === 'string' && body.config_version.length <= 128) || (Number.isSafeInteger(body.config_version) && body.config_version >= 0))) return fail(400, 'Invalid configuration version');
@@ -114,6 +141,13 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
     const assignmentUntil = () => Math.min(now + (p.items.every((i: any) => i.asset_id) ? 24 * 3600e3 : ASSIGNMENT_TTL),
       ...p.items.map((i: any) => Number.isFinite(Date.parse(i.authorization_until)) ? Date.parse(i.authorization_until) : Infinity));
     let until = assignmentUntil();
+    // Do not reserve paid-play allowances before an opted-in player has a calibration
+    // bound to this exact paired device. Calibration changes the playlist signature;
+    // minting here first can strand the old budget reservation while the player is
+    // correctly waiting for setup. Keep the empty response retryable until calibration.
+    if (p.config.attention_enabled === true && !p.config.attention_calibration) {
+      return { changed: false, body: { screen: safeScreen(screen), scheduling_mode: 'continuous', budget_state: 'attention_calibration_required', items: [], filler_items: [], config: p.config, config_version: p.config_version, server_time: iso(now), readiness: playerReadiness(p.readiness), diagnostic: diagnosticOffer(db, screen, device, now), valid_until: iso(now + 60e3) } };
+    }
     db.device_assignments ||= [];
     // Re-issuing identical assignments on every poll is what made the usage ledger unbounded, and an
     // unbounded ledger is one that has to evict — which hands back allowances that were already spent.
@@ -128,7 +162,9 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
       return [item.campaign_id, c?.advertiser_id || null, item.creative_id, item.youtube_id || null, item.asset_id || null,
         economics(item), item.duration_s, item.media_type || 'video', item.width || null, item.height || null, item.kind || 'paid', item.asset_sha256 || null, item.rate_type ?? c?.rate_type ?? 'flat', Number(item.rate_value ?? c?.rate_value) || 0, c?.committed_budget ?? null,
         p.config_version, p.config.camera_fail_mode || 'continue', p.config.model || null,
-        Number(p.config.sample_interval_s) || 2, Number(p.config.count_ceiling) || 50];
+        Number(p.config.sample_interval_s) || 2, Number(p.config.count_ceiling) || 50,
+        p.config.attention_enabled === true, p.config.attention_profile || null, p.config.attention_calibration?.revision || null,p.config.attention_calibration||null,
+        p.config.attention_enabled === true ? ATTENTION_PROFILE.manifest_sha256 : null,p.config.attention_enabled === true ? ATTENTION_PROFILE.pipeline_sha256 : null];
     });
       return hash(JSON.stringify({ frozen, config_version: p.config_version, rotation_version: p.rotation_version ?? null }));
     };
@@ -136,10 +172,15 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
       const c = db.campaigns.find((c: any) => c.id === item.campaign_id);
       const a = { ...economics(item), id: 'assignment_' + crypto.randomUUID(), device_id: device.id, org_id: screen.org_id, screen_id: screen.id,
         kind: item.kind === 'filler' ? 'filler' : 'paid', media_type: item.media_type || 'video', width:item.width ?? null, height:item.height ?? null, max_plays: 0,
-        campaign_id: item.campaign_id, advertiser_id: c?.advertiser_id || null, creative_id: item.creative_id, youtube_id: item.youtube_id || null, asset_id: item.asset_id || null,
+        campaign_id: item.campaign_id, advertiser_id: c?.advertiser_id || null, creative_id: item.creative_id, youtube_id: item.youtube_id || null, asset_id: item.asset_id || null, asset_sha256:item.asset_sha256||null,
         duration_s: item.duration_s, rate_type: item.rate_type ?? c?.rate_type ?? 'flat', rate_value: Number(item.rate_value ?? c?.rate_value) || 0,
         issued_at: iso(now), valid_until: iso(validUntil), accept_until: iso(now + BACKLOG_TTL), config_version: p.config_version,
-        camera_fail_mode: p.config.camera_fail_mode || 'continue', model_configured: p.config.model || null, sample_interval_s: Number(p.config.sample_interval_s) || 2, count_ceiling: Number(p.config.count_ceiling) || 50 };
+        camera_fail_mode: p.config.camera_fail_mode || 'continue', model_configured: p.config.model || null, sample_interval_s: Number(p.config.sample_interval_s) || 2, count_ceiling: Number(p.config.count_ceiling) || 50,
+        attention_enabled:p.config.attention_enabled === true, attention_profile:p.config.attention_enabled === true ? p.config.attention_profile : null,
+        attention_calibration_revision:p.config.attention_enabled === true ? p.config.attention_calibration?.revision || null : null,
+        attention_calibration:p.config.attention_enabled === true&&p.config.attention_calibration?.device_id===device.id&&p.config.attention_calibration?.screen_id===screen.id?structuredClone(p.config.attention_calibration):null,
+        attention_manifest_sha256:p.config.attention_enabled === true ? ATTENTION_PROFILE.manifest_sha256 : null,
+        attention_pipeline_sha256:p.config.attention_enabled === true ? ATTENTION_PROFILE.pipeline_sha256 : null };
       const max = a.kind === 'filler' ? physicalPlays(a) : c ? reserveBudget(db,c,a,physicalPlays(a),now) : 0;
       if (!max) return []; a.max_plays = max;
       db.device_assignments.push(a); return [playbackItem(item, a)];
@@ -183,7 +224,7 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
   if (typeof body.play_uid !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(body.play_uid) || !Number.isSafeInteger(body.seq_no) || body.seq_no < 1) return fail(400, 'Invalid play identity');
   const id = playRecordId(device.id, body.play_uid), payloadHash = hash(canonical(body));
   const existing = (db.plays || []).find((p: any) => p.id === id);
-  if (existing) return existing.payload_hash === payloadHash ? { changed: false, body: { ok: true, duplicate: true, play_id: id, billable: existing.billable } } : fail(409, 'Play UID already has a different payload');
+  if (existing) return existing.payload_hash === payloadHash ? { changed: false, body: { ok: true, duplicate: true, play_id: id, billable: existing.billable, attention_status: existing.attention_status || 'absent' } } : fail(409, 'Play UID already has a different payload');
   if ((db.plays || []).some((p: any) => p.device_id === device.id && p.seq_no === body.seq_no)) return fail(409, 'Sequence number already used');
   if (!assignment || Date.parse(assignment.accept_until) < now) return fail(409, 'Unknown or expired playlist assignment');
   if (body.campaign_id !== assignment.campaign_id || body.creative_id !== assignment.creative_id || body.config_version !== assignment.config_version) return fail(409, 'Play does not match its playlist assignment');
@@ -252,6 +293,15 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
   const campaign = db.campaigns.find((c: any) => c.id === assignment.campaign_id);
   const budgetAllowed = paid ? budgetReceipt(db,campaign,assignment,true,candidateBillable,now) : true;
   const billable = candidateBillable && budgetAllowed;
+  let attentionStatus='absent', attention:any=undefined;
+  if (body.attention !== undefined) {
+    if (!assignment.attention_enabled) attentionStatus='not_enabled';
+    else if (assignment.attention_profile !== ATTENTION_PROFILE.id) attentionStatus='profile_mismatch';
+    else if (!assignment.attention_calibration_revision||!assignment.attention_calibration||!validateAttentionCalibration(assignment.attention_calibration,{profile:assignment.attention_profile,device_id:assignment.device_id,screen_id:assignment.screen_id,camera_ref:assignment.attention_calibration.camera_ref,width:assignment.attention_calibration.width,height:assignment.attention_calibration.height,rotation:assignment.attention_calibration.rotation})) attentionStatus='not_calibrated';
+    else if (attentionQueuedEventBytes(body) > ATTENTION_LIMITS.target_bytes) attentionStatus='size_limit';
+    else if (!validateAttentionSummary(body.attention,played,assignment.attention_calibration_revision)) attentionStatus='invalid';
+    else { attention=structuredClone(body.attention); attentionStatus='accepted'; }
+  }
   const reasons = [!paid && 'filler', !budgetAllowed && 'budget_allowance_exhausted', !timestampValid && 'clock_or_assignment_window', !durationValid && 'incomplete_playing_duration', !mediaValid && 'incomplete_media_progress', !completed && body.ended_reason, !cameraAllowed && 'camera_required', !withinAssignment && 'assignment_replay_cap', !withinThroughput && 'device_throughput_exceeded'].filter(Boolean);
   const play = { ...economics(assignment), id, play_uid: body.play_uid, seq_no: body.seq_no, device_id: device.id, org_id: screen.org_id, screen_id: screen.id,
     assignment_id: assignment.id, campaign_id: assignment.campaign_id, advertiser_id: assignment.advertiser_id, creative_id: assignment.creative_id, config_version: assignment.config_version,
@@ -261,7 +311,11 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
     media_evidence: image ? 'image_decode' : 'media_timeline', decoded_width: image ? body.decoded_width ?? null : null,
     decoded_height: image ? body.decoded_height ?? null : null, visible_duration_ms: image ? body.visible_duration_ms ?? null : null, ended_reason: body.ended_reason,
     server_received_at: iso(now), delivery_lag_ms: now - (end + offset), server_clock_offset_ms: claimedOffset, applied_clock_offset_ms: offset,
-    timestamp_valid: timestampValid, rendered, clock_offset_difference_ms: Number.isFinite(device.clock_offset_estimate_ms) ? claimedOffset - device.clock_offset_estimate_ms : null, billable, nonbillable_reasons: reasons, payload_hash: payloadHash, source: 'device_report', rate_type: assignment.rate_type, rate_value: assignment.rate_value };
+    timestamp_valid: timestampValid, rendered, clock_offset_difference_ms: Number.isFinite(device.clock_offset_estimate_ms) ? claimedOffset - device.clock_offset_estimate_ms : null, billable, nonbillable_reasons: reasons, payload_hash: payloadHash, source: 'device_report', rate_type: assignment.rate_type, rate_value: assignment.rate_value,
+    ...(assignment.attention_enabled === true ? {attention_profile:assignment.attention_profile,attention_manifest_sha256:assignment.attention_manifest_sha256,
+      attention_pipeline_sha256:assignment.attention_pipeline_sha256,attention_calibration_revision:assignment.attention_calibration_revision || null,attention_calibration:assignment.attention_calibration||null,
+      asset_id:assignment.asset_id||null,asset_sha256:assignment.asset_sha256||null} : {}),
+    ...(attention ? {attention,attention_status:attentionStatus} : body.attention !== undefined ? {attention_status:attentionStatus} : {}) };
   db.plays ||= []; db.presence ||= []; db.plays.push(play);
   db.presence.push({ id, play_id: id, advertiser_id: assignment.advertiser_id, device_id: device.id, org_id: screen.org_id, screen_id: screen.id,
     measured: body.measured, avg_persons: body.measured ? body.avg_persons : null, sample_count: body.sample_count,
@@ -282,5 +336,5 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
     const c = db.campaigns.find((c: any) => c.id === assignment.campaign_id);
     if (c && c.org_id === screen.org_id && c.campaign_type !== 'network') c.accrued_spend = Math.round(((c.accrued_spend || 0) + assignment.rate_value) * 100) / 100;
   }
-  return { changed: true, body: { ok: true, play_id: id, billable, nonbillable_reasons: reasons } };
+  return { changed: true, body: { ok: true, play_id: id, billable, nonbillable_reasons: reasons, attention_status:attentionStatus } };
 }
