@@ -20,10 +20,11 @@ function currentPlayerStyles() {
  return stylesheet;
 }
 const compile = file=>ts.transpileModule(fs.readFileSync(path.join(root,file),'utf8'),{fileName:file,compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,jsx:ts.JsxEmit.React,esModuleInterop:true}}).outputText;
-const calibrationSource=compile('lib/vision/calibration.ts');
+const calibrationSource=compile('lib/vision/calibration.ts'),localDiagnosticsSource=compile('lib/vision/local-diagnostics-v2.ts'),attentionV2Source=compile('lib/vision/attention-v2-contracts.ts');
 const attentionSource=compile('lib/vision/attention-contracts.ts'),metricsSource=compile('lib/vision/metrics.ts'),productionSource=compile('lib/vision/production.ts');
 const deviceModule={exports:{}};new Function('require','module','exports',compile('lib/devices.ts'))(name=>name.startsWith('.')?require('./load-lib.cjs')(name.slice(2)):require(name),deviceModule,deviceModule.exports);
 const {issuePairing,deviceRoute}=deviceModule.exports;
+const presenceV2Profile=require('./load-lib.cjs')('vision/presence-v2-profile').PRESENCE_V2_PROFILE;
 const bundle=(options={})=>`window.fixtureAttentionModelFailure=${JSON.stringify(!!options.attentionModelFailure)};window.fixtureAttentionModelDelay=${JSON.stringify(Number(options.attentionModelDelayMs)||0)};const q={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-queue.ts'))})(q,q.exports);
 const cache={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-media-cache.ts'))})(cache,cache.exports);
 const diagnostic={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-diagnostics.ts'))})(diagnostic,diagnostic.exports);
@@ -32,10 +33,14 @@ const calibration={exports:{}};new Function('require','module','exports',${JSON.
 const cryptoStub={createHash:()=>({update(){return this;},digest(){return '0'.repeat(64);}})};
 const attention={exports:{}};new Function('require','module','exports',${JSON.stringify(attentionSource)})(name=>name==='node:crypto'?cryptoStub:{},attention,attention.exports);
 const metrics={exports:{}};new Function('require','module','exports',${JSON.stringify(metricsSource)})(()=>({}),metrics,metrics.exports);
+const presenceProfile={exports:{PRESENCE_V2_PROFILE:{id:'presence-v2/efficientdet-lite0-mediapipe-face/1',body_model:'efficientdet-lite0-int8/1',face_model:'face-landmarker-float16/1',confidence_default:.4,metric_schema:'attention-v2/1'}}};
+const presenceRuntime={exports:{PRESENCE_V2_PROFILE:presenceProfile.exports.PRESENCE_V2_PROFILE,preparePresenceV2Assets:async()=>{window.fixtureV2AssetPreparations=(window.fixtureV2AssetPreparations||0)+1;await new Promise(resolve=>setTimeout(resolve,180));return{};},createPresenceV2Runtime:async(_assets,_signal,observe,onState)=>{window.fixtureV2RuntimeStarts=(window.fixtureV2RuntimeStarts||0)+1;const state={body:{state:'ready',model:'efficientdet-lite0-int8/1'},face:{state:'ready',model:'face-landmarker-float16/1'}};onState(state);let closed=false;return{close(){closed=true;},busy:false,frame(video,_calibration,context){if(closed||video.paused||video.readyState<2)return;window.fixtureV2Frames=(window.fixtureV2Frames||0)+1;observe({at:performance.now(),bodies:{ok:true,boxes:[[.3,.05,.7,.95]],saturated:false}},{...context,stage:'body'});observe({at:performance.now()+.01,faces:{ok:true,faces:[{box:[.4,.15,.6,.38],looking:true,smiling:true,distance_cm:450}],saturated:false}},{...context,stage:'face'});}};}}};
+const localDiagnostics={exports:{}};new Function('require','module','exports',${JSON.stringify(localDiagnosticsSource)})(()=>({}),localDiagnostics,localDiagnostics.exports);
 const engine={exports:{createEvaluationWorker:async(_delegate,signal,observe)=>{let busy=false,closed=false;signal.addEventListener('abort',()=>{closed=true;});return{close(){closed=true;},get busy(){return busy;},async frame(video,_pose,context){window.fixtureAttentionPoses??=[];window.fixtureAttentionPoses.push({..._pose});if(busy||closed||video.paused||video.readyState<2)return;busy=true;await new Promise(resolve=>setTimeout(resolve,15));window.fixtureAttentionFrames=(window.fixtureAttentionFrames||0)+1;const empty=window.fixtureNoFace===true;observe({at:performance.now(),bodies:{ok:true,boxes:empty?[]:[[.35,.05,.65,.9]],saturated:false},faces:{ok:true,faces:empty?[]:[{box:[.4,.1,.6,.4],looking:true,smiling:false}],saturated:false},calibration:{yaw:1,pitch:0}},{delegate:'CPU',latencyMs:15,faceFps:4,personFps:4,dropped:0},context);busy=false;}};}}};
 const production={exports:{}};new Function('require','module','exports',${JSON.stringify(productionSource)})(name=>name==='./attention-contracts'?attention.exports:name==='./engine'?engine.exports:name==='./metrics'?metrics.exports:{},production,production.exports);
 production.exports.prepareAttentionAssets=async(progress,signal)=>{signal.throwIfAborted();if(window.fixtureAttentionModelFailure)throw new Error('Fixture attention model unavailable');if(window.fixtureAttentionModelDelay)await new Promise(resolve=>setTimeout(resolve,window.fixtureAttentionModelDelay));progress({message:'Verified fixture attention assets',phase:'verifying',downloaded:1048576,verified:1048576,total:1048576,elapsedSeconds:0,etaSeconds:null});return{version:'fixture',bytes:1048576,downloaded:1048576,verified:1048576,elapsedSeconds:0};};
 const attentionSummary={exports:{}};new Function('require','module','exports',${JSON.stringify(compile('lib/vision/attention-summary.ts'))})(name=>name==='./production'?production.exports:{},attentionSummary,attentionSummary.exports);
+const attentionV2={exports:{}};new Function('require','module','exports',${JSON.stringify(attentionV2Source)})(name=>name==='./attention-contracts'?attention.exports:name==='./presence-v2-profile'?presenceProfile.exports:name==='./attention-summary'?attentionSummary.exports:{},attentionV2,attentionV2.exports);
 production.exports.createProductionAttentionWorker=async(signal,observe,fail)=>{const handle=await engine.exports.createEvaluationWorker('CPU',signal,(value,_stats,context)=>observe(value,context),fail);return{close:()=>handle.close(),get busy(){return handle.busy;},frame:(video,pose,context)=>handle.frame(video,pose,context)};};
 const evidence={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-evidence-lock.ts'))})(evidence,evidence.exports);
 const player={exports:{}};const fixtureRequire=name=>{
@@ -49,6 +54,10 @@ const player={exports:{}};const fixtureRequire=name=>{
  if(name==='@/lib/vision/attention-contracts')return attention.exports;
  if(name==='@/lib/vision/production')return production.exports;
  if(name==='@/lib/vision/attention-summary')return attentionSummary.exports;
+ if(name==='@/lib/vision/presence-v2-profile')return presenceProfile.exports;
+ if(name==='@/lib/vision/production-v2')return presenceRuntime.exports;
+ if(name==='@/lib/vision/attention-v2-contracts')return attentionV2.exports;
+ if(name==='@/lib/vision/local-diagnostics-v2')return localDiagnostics.exports;
  if(name==='@/components/ui/brand-mark')return {BrandLogo:()=>React.createElement('span',null,'Gridcast')};
  if(name==='@/components/ui/button')return {Button:props=>React.createElement('button',props)};
  if(name==='@/components/ui/input')return {Input:props=>React.createElement('input',props)};
@@ -82,9 +91,9 @@ async function harness(options={}) {
  if(options.partialAllowance){db.campaigns[0].committed_budget=2;db.campaigns.push({...db.campaigns[0],id:'campaign2',advertiser_id:'advertiser2',committed_budget:10000});}
  const overrides=new Map();let configVersion=7;
  const requests=[],bodies=[],replies=[],playlistObservations=[];let failedAck=false,base='',stopItems=false,forceItems=false,playlistFailed=false,releaseCalibrationSave=()=>{};
- const config={diagnostics_overlay:true,audio_enabled:true,model:'coco-ssd',sample_interval_s:options.modelWorking?.5:2,loop_length_s:4,slot_duration_s:2,count_ceiling:50,camera_fail_mode:'continue',heartbeat_s:10,sync_interval_min:1,offline_buffer_plays:5000,telemetry_batch:25,telemetry_retry_h:72,...(options.attentionEnabled?{attention_enabled:true,attention_profile:'attention-v1/mediapipe-1.0.1',attention_calibration:null}:{}),...options.config};
+ const v2=!!options.presenceV2,config={diagnostics_overlay:true,audio_enabled:true,model:'coco-ssd',sample_interval_s:options.modelWorking?.5:2,loop_length_s:4,slot_duration_s:2,count_ceiling:50,camera_fail_mode:'continue',heartbeat_s:10,sync_interval_min:1,offline_buffer_plays:5000,telemetry_batch:25,telemetry_retry_h:72,...(v2?{presence_profile_id:presenceV2Profile.id}:{}),...(options.attentionEnabled?{attention_enabled:true,attention_profile:'attention-v1/mediapipe-1.0.1',attention_calibration:null}:{}),...options.config};
  const callback=()=>{if(options.attentionEnabled){config.attention_calibration=db.screens[0].attention_calibration||null;if(db.settings?.config_revision)configVersion=db.settings.config_revision;playlistObservations.push({configVersion,attentionEnabled:config.attention_enabled,calibration:config.attention_calibration?.revision||null,screenCalibration:db.screens[0].attention_calibration?.revision||null});}const p={config,config_version:configVersion,items:[],[options.filler?'filler_items':'items']:(stopItems||options.empty&&!forceItems)?[]:[{campaign_id:'campaign1',creative_id:'creative1',creative_name:'Browser fixture',duration_s:2,rate_value:2,rate_type:'per_play',asset_url:options.youtube?undefined:base+(options.image?'/fixture.png':'/fixture.webm'),youtube_id:options.youtube?'abcdefghijk':undefined,media_type:options.image?'image':'video',asset_id:'fixture',asset_mime:options.image?'image/png':'video/webm',width:128,height:72,...(options.offline?{asset_bytes:(options.image?picture:video).length,asset_sha256:crypto.createHash('sha256').update(options.image?picture:video).digest('hex')}:{})}]};if(options.twoFillers&&p.filler_items?.length)p.filler_items.push({...p.filler_items[0],creative_id:'creative2'});if(options.partialAllowance&&p.items.length)p.items.push({...p.items[0],campaign_id:'campaign2',creative_id:'creative2'});return p;};
- const code=issuePairing(db,db.screens[0]);const paired=deviceRoute(db,'POST',['pair'],{code:code.code},null,{playlist:callback,playerProtocol:2}).body;
+ const code=issuePairing(db,db.screens[0]);const paired=deviceRoute(db,'POST',['pair'],{code:code.code},null,{playlist:callback,playerProtocol:options.playerProtocol||2}).body;
  if(options.diagnostic){db.campaigns=[];require('./load-lib.cjs')('diagnostics').requestDiagnostic(db,db.screens[0],{id:'admin'},{config,config_version:7});}
  const server=http.createServer(async(req,res)=>{
   const u=new URL(req.url,'http://localhost');if(u.pathname.startsWith('/_next/static/'))u.pathname=u.pathname.replace('/_next/static/','/');requests.push({method:req.method,path:u.pathname});
@@ -100,7 +109,7 @@ async function harness(options={}) {
    let data='';for await(const part of req)data+=part;
    const body=data?JSON.parse(data):{},token=req.headers.authorization?.replace(/^Bearer /,'');
    if(options.holdCalibrationSave&&u.pathname==='/api/attention/calibration')await new Promise(resolve=>{releaseCalibrationSave=resolve;});
-   const result=deviceRoute(db,req.method,u.pathname.slice(5).split('/'),body,token,{playlist:callback,playerProtocol:2});
+   const result=deviceRoute(db,req.method,u.pathname.slice(5).split('/'),body,token,{playlist:callback,playerProtocol:options.playerProtocol||2});
    if(u.pathname==='/api/diagnostic/result'&&options.loseFirstDiagnosticAck&&!failedAck){failedAck=true;res.writeHead(503,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'Diagnostic accepted; acknowledgement lost'}));return;}
    if(u.pathname==='/api/play'){
     bodies.push(body);replies.push(result);if(options.partialAllowance&&body.campaign_id==='campaign1')db.campaigns[0].committed_budget=100;stopItems=!options.continuous;
@@ -126,6 +135,7 @@ async function harness(options={}) {
   await page.addInitScript(({credential,options})=>{
     if(!options.unpaired&&!localStorage.getItem('gc_device'))localStorage.setItem('gc_device',JSON.stringify(credential));window.fixtureModelWorking=!!options.modelWorking;window.fixtureRealModel=!!options.realModel;window.fixtureNoFace=!!options.noFaceInitially;
     window.fixtureLoadWait=!!options.loadWait;
+    if(options.watchCommissioning){window.fixtureUnexpectedCommissioning=false;const inspect=()=>{const panel=document.querySelector('[data-role="commissioning-preview"]');if(panel?.getAttribute('aria-hidden')==='false')window.fixtureUnexpectedCommissioning=true;};new MutationObserver(inspect).observe(document,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-hidden']});}
     if(options.blockUnmutedAudio){const original=HTMLMediaElement.prototype.play;HTMLMediaElement.prototype.play=function(){if(this.matches?.('video[data-role="creative"]')&&!this.muted&&!window.fixtureUnmutedBlocked){window.fixtureUnmutedBlocked=true;return Promise.reject(new DOMException('Audio autoplay blocked','NotAllowedError'));}return original.call(this);};}
     if(options.youtube){window.YT={Player:function(_host,playerOptions){let videoId='',startedAt=0,endTimer;const player={muted:true,startedAt:0,mute(){this.muted=true;},unMute(){this.muted=false;},setVolume(v){this.volume=v;},loadVideoById({videoId:id}){videoId=id;},getVideoData(){return {video_id:videoId};},getCurrentTime(){return startedAt?Math.max(0,(Date.now()-startedAt)/1000):0;},playVideo(){if(options.blockYouTubeAudio&&!this.muted&&!window.fixtureYouTubeBlocked){window.fixtureYouTubeBlocked=true;playerOptions.events.onAutoplayBlocked();return;}startedAt=Date.now();this.startedAt=startedAt;playerOptions.events.onStateChange({data:1});clearTimeout(endTimer);endTimer=setTimeout(()=>playerOptions.events.onStateChange({data:0}),2000);},stopVideo(){clearTimeout(endTimer);startedAt=0;this.startedAt=0;},destroy(){clearTimeout(endTimer);}};window.fixtureYT=player;setTimeout(()=>playerOptions.events.onReady({target:player}),0);return player;}};}
     const original=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
@@ -526,6 +536,63 @@ test('Release A hides commissioning without interrupting real frames or detector
   assert.equal(await h.page.evaluate(()=>window.fixtureCameraStarts),starts,'Visibility/config-version alone does not restart capture');
   assert.equal(await h.page.evaluate(()=>window.fixtureLoads),1);
   assert.equal(await h.page.locator('[data-role="commissioning-preview"] button').count(),0);
+ }finally{await h.cleanup();}
+});
+
+test('Release B restores compact V1 live diagnostics, local overlays, controls and read-only pause behavior', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({attentionEnabled:true,modelWorking:true,continuous:true,config:{sample_interval_s:.5}});try{
+  await h.page.getByRole('button',{name:'Details'}).click();
+  await h.page.getByRole('button',{name:'Calibrate attention · 3 seconds'}).waitFor({timeout:15000}).catch(async error=>{throw Error(JSON.stringify({message:error.message,body:(await h.page.locator('body').innerText()).slice(0,1400),requests:h.requests.map(x=>x.path),errors:h.pageErrors,status:await h.page.locator('[data-role=player-status]').innerText(),screen:h.db.screens[0]},null,2));});
+  await h.page.waitForFunction(()=>{const e=document.querySelector('[data-role="commissioning-stats"]'),m=document.querySelector('[aria-label="Current creative measurements"]');return e&&/People now[\s\S]*?1[\s\S]*?Faces assessable[\s\S]*?1[\s\S]*?Looking now[\s\S]*?1/.test(e.innerText)&&!!m&&m.innerText.includes('Est. / attentive impressions');},{},{timeout:12000});
+  await h.page.getByText(/Track #1 · Looking/).waitFor();
+  await h.page.waitForFunction(()=>{const c=document.querySelector('[data-role="commissioning-preview"] canvas');if(!c?.width||!c?.height)return false;const d=c.getContext('2d').getImageData(0,0,c.width,c.height).data;for(let i=3;i<d.length;i+=4)if(d[i])return true;return false;});
+  await h.page.screenshot({path:'/tmp/gridcast-v1-attention-expanded.png'});
+  const overlayPixels=()=>h.page.evaluate(()=>{const c=document.querySelector('[data-role="commissioning-preview"] canvas'),d=c.getContext('2d').getImageData(0,0,c.width,c.height).data;let alpha=0,green=0,blue=0,amber=0;for(let i=0;i<d.length;i+=4){if(d[i+3])alpha++;if(d[i]===16&&d[i+1]===185&&d[i+2]===129)green++;if(d[i]===59&&d[i+1]===130&&d[i+2]===246)blue++;if(d[i]===245&&d[i+1]===158&&d[i+2]===11)amber++;}return{alpha,green,blue,amber};});
+  const initial=await overlayPixels();assert.ok(initial.green>0,'looking boxes use green');
+  await h.page.getByRole('checkbox',{name:'Show tracking boxes'}).uncheck();const faceOnly=await overlayPixels();assert.ok(faceOnly.alpha>0&&faceOnly.alpha<initial.alpha,'turning off track boxes leaves face detail overlays');
+  await h.page.getByRole('checkbox',{name:'Show face details'}).uncheck();assert.equal((await overlayPixels()).alpha,0,'both overlay toggles clear local geometry');
+  await h.page.getByRole('checkbox',{name:'Show tracking boxes'}).check();await h.page.getByRole('checkbox',{name:'Show face details'}).check();
+  await h.page.getByRole('button',{name:'Compact'}).click();await h.page.screenshot({path:'/tmp/gridcast-v1-attention-compact.png'});
+  const response=await h.page.evaluate(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');v.pause();v.dispatchEvent(new Event('waiting'));return true;});assert.ok(response);
+  await h.page.waitForFunction(()=>{const e=document.querySelector('[data-role="commissioning-stats"]');return e&&e.querySelector('.grid strong')?.textContent==='—';});
+  assert.equal((await overlayPixels()).alpha,0,'pause clears fresh live geometry');
+  await h.page.evaluate(()=>document.querySelector('video[data-role="creative"][data-active="true"]').play());
+  await h.page.waitForFunction(()=>document.querySelector('[data-role="commissioning-stats"] .grid strong')?.textContent==='1',{},{timeout:10000});
+  h.setConfig({diagnostics_overlay:false});await h.page.evaluate(()=>window.dispatchEvent(new Event('online')));
+  await h.page.waitForFunction(()=>document.querySelector('[data-role="commissioning-preview"]').getAttribute('aria-hidden')==='true');
+  assert.equal((await overlayPixels()).alpha,0,'commissioning off clears overlay geometry');
+  assert.equal(await h.page.locator('[data-role="commissioning-preview"] button').count(),0,'hidden diagnostics do not expose controls');
+  const receiptsBeforeHidden=h.bodies.length;
+  await waitFor(()=>h.bodies.length>receiptsBeforeHidden&&h.bodies.slice(receiptsBeforeHidden).some(body=>body.attention),10000);
+  assert.ok(h.bodies.slice(receiptsBeforeHidden).some(body=>body.attention),'Hidden local diagnostics do not disable current-play attention summaries');
+  for(const body of h.bodies)assert.doesNotMatch(JSON.stringify(body),/"(?:box|track_key|landmark|temporary_id)"\s*:/,'raw local geometry and temporary IDs never enter receipts');
+ }finally{await h.cleanup();}
+});
+
+test('presence V2 plays paid media once, measures body and face, reports live aggregates and avoids COCO', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({presenceV2:true,playerProtocol:3,continuous:true,config:{sample_interval_s:2}});try{
+  await waitFor(()=>h.bodies.length>0&&h.db.plays[0]?.attention_status==='accepted',15000).catch(async error=>{throw Error(JSON.stringify({message:error.message,body:(await h.page.locator('body').innerText()).slice(0,1600),plays:h.db.plays,assignments:h.db.device_assignments.map(a=>({id:a.id,profile:a.measurement_profile,binding:a.measurement_binding_id,uses:a.max_plays})),bindings:h.db.measurement_bindings,requests:h.requests.map(x=>x.path),pageErrors:h.pageErrors,setup:await h.page.evaluate(()=>({assets:window.fixtureV2AssetPreparations,runtimes:window.fixtureV2RuntimeStarts,frames:window.fixtureV2Frames,legacy:window.fixtureLoads}))},null,2));});
+  const receipt=h.bodies[0],stored=h.db.plays[0];
+  assert.equal(stored.billable,true);assert.equal(receipt.presence_profile_id,'presence-v2/efficientdet-lite0-mediapipe-face/1');
+  assert.ok(receipt.measurement_binding_id);assert.ok(receipt.attention.body[0]>0,'V2 body observations are retained inside their profile-specific analytics summary');
+  if(receipt.measured){assert.equal(receipt.model_ver,'efficientdet-lite0-int8/1');assert.ok(receipt.sample_count>0);}else{assert.equal(receipt.model_ver,null);assert.equal(receipt.sample_count,0);}
+  assert.equal(receipt.attention.schema,'attention-v2/1');assert.ok(receipt.attention.presence_person_ms>0);assert.ok(receipt.attention.looking_person_ms>0);assert.ok(receipt.attention.estimated_impressions>0);
+  await waitFor(()=>h.db.devices[0]?.live_attention?.profile_id==='presence-v2/efficientdet-lite0-mediapipe-face/1',7000);
+  const live=h.db.devices[0].live_attention;assert.equal(live.people,1);assert.equal(live.face_assessable,1);assert.equal(live.looking,1);assert.equal(live.smiling,1);
+  const setup=await h.page.evaluate(()=>({assets:window.fixtureV2AssetPreparations||0,runtimes:window.fixtureV2RuntimeStarts||0,frames:window.fixtureV2Frames||0,legacyLoads:window.fixtureLoads||0}));
+  assert.equal(setup.assets,1,'Concurrent playlist/camera preparation shares one in-flight V2 setup');assert.equal(setup.runtimes,1);assert.ok(setup.frames>0);assert.equal(setup.legacyLoads,0,'V2 playback never loads the COCO detector');
+  assert.ok(!h.requests.some(r=>r.path==='/tf.js'||r.path==='/coco.js'||r.path.startsWith('/models/coco-ssd/')));
+ }finally{await h.cleanup();}
+});
+
+test('attention model setup never reveals the local camera panel when commissioning is disabled', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({attentionEnabled:true,modelWorking:true,attentionModelDelayMs:1200,watchCommissioning:true,config:{diagnostics_overlay:false}});try{
+  await h.page.waitForFunction(()=>window.fixtureAttentionFrames>0,{},{timeout:15000});
+  assert.equal(await h.page.locator('[data-role="commissioning-preview"]').getAttribute('aria-hidden'),'true');
+  assert.equal(await h.page.locator('[data-role="commissioning-stats"]').count(),0);
+  assert.equal(await h.page.locator('[data-role="commissioning-preview"] button').count(),0);
+  assert.equal(await h.page.evaluate(()=>window.fixtureUnexpectedCommissioning),false,'Model preparation and live inference never reveal diagnostics on a disabled display');
+  await waitFor(()=>h.bodies.length>0,8000);assert.ok(h.bodies[0].attention,'The hidden local CV continues to contribute the active play summary');
  }finally{await h.cleanup();}
 });
 

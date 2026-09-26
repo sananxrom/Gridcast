@@ -112,6 +112,15 @@ test('attention rollups combine compatible calibration modes while retaining bou
  assert.equal(Object.keys(report.provenance).length,3);assert.equal(report.provenance['["default",null]'].totals.plays,1);assert.equal(report.provenance['["guided","calA"]'].totals.plays,2);
 });
 
+test('V2 presence stays out of the legacy aggregate and longest look is a maximum across plays',()=>{
+ const f=fixture();
+ const sample=(longest)=>({profile:'presence-v2/efficientdet-lite0-mediapipe-face/1',playing_ms:10000,body:[9000,1000,0],face:[8000,2000,0],attention:[6000,4000],expression:[5000,5000],presence_person_ms:12000,looking_person_ms:6000,longest_look_ms:longest,face_assessable_person_ms:7000,smile_person_ms:1000,expression_assessable_person_ms:5000,estimated_impressions:2,attentive_impressions:1,tracked_visits:2});
+ for(const longest of [1800,900]){const play={...f.play,measurement_binding_id:'binding-v2',presence_profile_id:'presence-v2/efficientdet-lite0-mediapipe-face/1',attention_status:'accepted',attention_profile:'presence-v2/efficientdet-lite0-mediapipe-face/1',attention_manifest_sha256:'manifest-v2',attention_pipeline_sha256:'pipeline-v2',attention:sample(longest)};accrueScreenDay(f.db,play,f.assignment,at,f.presence);}
+ assert.equal(f.db.screen_day[0].presence_n,0,'V2 presence uses its own profile-specific denominator');
+ const profiles=summarizeReport(f.db.screen_day,{from:'2026-09-23',to:'2026-09-24'},f.db.reporting_coverage,f.db.attention_day).attentionProfiles;
+ const profile=Object.values(profiles)[0];assert.equal(profile.totals.plays,2);assert.equal(profile.totals.presence_person_ms,24000);assert.equal(profile.totals.longest_look_ms,1800,'longest look is a max, never the sum of plays');
+});
+
 test('metrics authorization rejects foreign organisation, foreign campaign, foreign screen, and forced-password users',()=>{
  const {authorize}=load('access');const actor={id:'owner',role:'owner',org_id:'a'},db={orgs:[{id:'a'},{id:'b'}],screens:[{id:'sa',org_id:'a'},{id:'sb',org_id:'b'}],campaigns:[{id:'ca',org_id:'a',advertiser_id:'ad'},{id:'cb',org_id:'b',advertiser_id:'other'}]};
  for(const query of ['org=b','screen=sb','campaign=cb'])assert.throws(()=>authorize(db,actor,'GET',['metrics'],{},new URLSearchParams(query)),e=>e.status===404);

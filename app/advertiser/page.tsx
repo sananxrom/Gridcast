@@ -55,7 +55,7 @@ export default function Advertiser() {
         <PageHead title={user.name} sub="Campaign delivery · read-only" />
         <Stat metric="recorded_campaign_accrual" period={{from:'',to:'',label:'Campaign lifetime · visible records'}} label="Lifetime spend" value={mine.some((c:any)=>typeof c.accrued_spend!=='number')?'—':inr(mine.reduce((sum: number, c: any) => sum + c.accrued_spend, 0))} hint="Recorded campaign accrual · independent of report dates" />
         <Card className="mt-4 border-primary/25 bg-primary/[0.04] p-4 text-[13px] text-primary">
-          <b>How we count.</b> A camera samples the scene while your ad plays. Presence is the average number of people present during a measured play, not impressions or unique reach. Missing measurements stay unknown, never zero or estimated.
+          <b>How we count.</b> Camera measurements use the profile assigned to each player, and reports keep incompatible model profiles separate. Missing readings stay unknown, never zero. Impressions and attention are analytics estimates, not unique reach or billing evidence.
         </Card>
         <DeliveryReport report={report} screens={d.screens} campaigns={mine} creatives={d.creatives} />
         <SectionHead>Campaigns</SectionHead>

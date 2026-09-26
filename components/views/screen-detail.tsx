@@ -23,10 +23,10 @@ function AttentionV1Setting({ screen, onChanged }: { screen:any; onChanged:()=>P
   const enabled=screen.attention_settings?.enabled===true;
   const save=async(value:boolean)=>{setBusy(true);setError('');try{await api(`/screen/${screen.id}/attention`,{enabled:value,profile:'attention-v1/mediapipe-1.0.1'});await onChanged();}catch(e){setError((e as Error).message);}finally{setBusy(false);}};
   return <Card className="mb-4 space-y-3 p-4" aria-label="Attention analytics settings">
-    <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold">Attention V1 · platform control</h3>
-      <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">Optional analytics estimate face direction, temporary anonymous visits and visible smiling. Analysis stays on the player; frames are discarded and never uploaded. Reports keep unknown time separate. Attention does not change presence, billing or campaign settlement. Model files download on first setup and are cached for offline restarts. New Attention settings and calibration use immutable paid-play allowances; with limited budget headroom, assignment updates may wait for outstanding allowances to expire.</p></div>
-      <Button disabled={busy} variant={enabled?'outline':'default'} onClick={()=>void save(!enabled)}>{busy?'Saving…':enabled?'Disable on this screen':'Enable on this screen'}</Button></div>
-    <p className="text-xs text-muted-foreground">Status: {enabled?'Opted in for this screen. Attention runs with default settings while optional model setup continues. Guided calibration can be requested later at a safe play boundary.':'Off. No attention models or measurements run.'}{enabled&&screen.attention_calibration?.completed_at?` · Calibration last saved ${new Date(screen.attention_calibration.completed_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})} IST.`:enabled?' · Using default settings; guided calibration is optional.':''}</p>
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold">Legacy Attention V1 compatibility</h3>
+      <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">Updated camera-enabled players use the pinned combined body and face profile automatically. This opt-in preserves the historical Attention V1 behavior on older players. Analysis stays on the player; frames are discarded and never uploaded. Reports keep model profiles separate, and analytics never change billing or settlement. Model files download on first setup and are cached for offline restarts.</p></div>
+      <Button disabled={busy} variant={enabled?'outline':'default'} onClick={()=>void save(!enabled)}>{busy?'Saving…':enabled?'Disable legacy profile':'Enable for older players'}</Button></div>
+    <p className="text-xs text-muted-foreground">Status: {enabled?'Legacy V1 analytics are enabled for compatible older players. Updated camera players use the combined V2 profile.':'Legacy V1 is off. Updated camera players still use the combined V2 profile.'}{enabled&&screen.attention_calibration?.completed_at?` · Calibration last saved ${new Date(screen.attention_calibration.completed_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})} IST.`:enabled?' · Using default settings; guided calibration is optional.':''}</p>
     {error&&<p role="alert" className="text-sm text-destructive">{error}</p>}
   </Card>;
 }
@@ -62,6 +62,7 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
     </div>
   );
   const s = d.screen, st = d.status, n = d.nowPlaying;
+  const liveAttention=d.device?.live_attention,liveAge=liveAttention?Date.now()-Date.parse(liveAttention.reported_at||liveAttention.sampled_at):Infinity,liveFresh=st.state==='live'&&Number.isFinite(liveAge)&&liveAge>=0&&liveAge<=10000;
   const caps: string[] = d.caps ?? [];
   const mayEdit = caps.includes('screens'), mayPrice = caps.includes('sales'), mayMoney = caps.includes('money');
   const preview = Math.round(Number(f.venue_base) * Number(f.size_factor) * Number(f.location_factor) * Number(f.exposure_factor));
@@ -197,6 +198,8 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
       </Card>
       </div>
 
+      {mayEdit&&s.has_camera&&<Card className="mb-4 p-4" aria-label="Live camera measurement"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">Live camera measurement</h3><span className={liveFresh?'text-xs text-emerald-700':'text-xs text-muted-foreground'}>{liveFresh?'Fresh · updates about every 3 seconds':liveAttention?'Stale · waiting for a current reading':'Waiting for a V2 player reading'}</span></div>{liveAttention?.profile_id==='presence-v2/efficientdet-lite0-mediapipe-face/1'?<><div className="mt-1 text-[11px] text-muted-foreground">{liveAttention.sampled_at?`Sampled ${fmtDate(liveAttention.sampled_at,{hour:'2-digit',minute:'2-digit',second:'2-digit'})}`:'No sample time'} · People {liveAttention.body_status||'unavailable'} · Face analysis {liveAttention.face_status||'unavailable'}</div><div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">{[['People',liveAttention.people],['Face-assessable',liveAttention.face_assessable],['Looking',liveAttention.looking],['Visible smiles',liveAttention.smiling]].map(([label,value]:any)=><div key={label} className="rounded-lg bg-muted/40 p-3"><div className="text-xs text-muted-foreground">{label}</div><div className="mt-1 text-xl font-semibold tnum">{liveFresh&&Number.isSafeInteger(value)?value:'Unavailable'}</div></div>)}</div><p className="mt-2 text-[11px] text-muted-foreground">Anonymous aggregate counts from the player. Frames, face geometry and temporary track IDs are not sent.</p></>:<p className="mt-2 text-sm text-muted-foreground">No live V2 aggregate has been reported by this player yet.</p>}</Card>}
+
       <Card className="mb-4 p-4" aria-label="Screen readiness">
         <h3 className="font-semibold">Screen readiness</h3>
         <p className="mt-2 text-sm">{d.readiness?.message || (d.campaigns?.length ? 'Checking delivery eligibility…' : 'No campaign is assigned to this screen.')}</p>
@@ -230,7 +233,7 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
           { label: 'Dates', render: (c: any) => <span className="font-mono text-[12px] text-muted-foreground">{c.starts_at}<br />→ {c.ends_at}</span> },
           { label: 'Status', render: (c: any) => c.live ? <Badge variant="onair" blip>live</Badge> : <Badge variant="muted">{c.status}</Badge> },
           { label: 'Paid plays · selected dates', num: true, render: (c: any) => report.data?.byCampaign[c.id]?.plays_rendered ?? (report.data?.coverage.complete ? 0 : '—') },
-          { label: 'People / measured paid play', num: true, render: (c: any) => { const r = report.data?.byCampaign[c.id]; return r?.presence_n ? (r.presence_sum / r.presence_n).toFixed(1) : '—'; } },
+          { label: 'Legacy people / measured paid play', num: true, render: (c: any) => { const r = report.data?.byCampaign[c.id]; return r?.presence_n ? (r.presence_sum / r.presence_n).toFixed(1) : '—'; } },
           ...(mayPrice ? [{ label: 'Lifetime budget used', num: true, render: (c: any) => { const p = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
             return <div className="flex flex-col items-end gap-1"><span className="whitespace-nowrap">{inr(c.accrued_spend)} / {inr(c.committed_budget)}</span><Progress value={p} hot={p >= 80} className="w-20" /></div>; } }] : []),
         ]}

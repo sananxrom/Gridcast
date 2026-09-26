@@ -19,6 +19,16 @@ test('production model manifest and executed worker are immutable and pipeline p
  assert.equal(digest(pipeline),profile.pipeline_sha256);
 });
 
+test('V2 person and face workers, asset manifest, and runtime pipeline match the independent pin',()=>{
+ const v2=require('./load-lib.cjs')('vision/presence-v2-profile').PRESENCE_V2_PROFILE;
+ const manifest=fs.readFileSync(path.join(root,'public/vision-lab/presence-v2-assets.json'));
+ assert.equal(digest(manifest),v2.manifest_sha256);
+ assert.equal(digest(fs.readFileSync(path.join(root,'public/vision-lab/worker-presence-body-v2.js'))),v2.body_worker_sha256);
+ assert.equal(digest(fs.readFileSync(path.join(root,'public/vision-lab/worker-presence-face-v2.js'))),v2.face_worker_sha256);
+ const pipeline=Buffer.concat(['public/vision-lab/worker-presence-body-v2.js','public/vision-lab/worker-presence-face-v2.js','lib/vision/production-v2.ts','lib/vision/metrics.ts','lib/vision/calibration.ts','lib/vision/attention-v2-contracts.ts','lib/vision/local-diagnostics-v2.ts'].map(p=>fs.readFileSync(path.join(root,p))));
+ assert.equal(digest(pipeline),v2.pipeline_sha256);
+});
+
 test('player upgrade ignores stale lab shell entries and serves only its dedicated production cache',async()=>{
  const listeners={},cacheHits=[],globalHits=[];let networkCalls=0;
  const currentWorker=fs.readFileSync(path.join(root,`public${profile.worker_url}`),'utf8'),currentManifest=fs.readFileSync(path.join(root,'public/vision-lab/attention-v1-assets.json'),'utf8');

@@ -95,6 +95,30 @@ export const METRICS = {
     unit: 'mean people per measured play',
   },
 
+  attention_avg_people: {
+    title: 'Average people looking',
+    counts: 'Looking person-time divided by attention-assessable time for the selected compatible attention profile.',
+    excludes: 'Time with unknown or stale face observations is excluded, not counted as not looking. This is an aggregate analytics measure, not a billing input.',
+    source: 'Accepted on-device aggregate attention summaries for the selected model and pipeline profile.',
+    unit: 'mean people per attention-assessable time',
+  },
+
+  estimated_impressions: {
+    title: 'Estimated impressions',
+    counts: 'Estimated qualifying exposure events from completed on-device attention summaries for the selected compatible profile.',
+    excludes: 'This is not unique reach, a causal measure, audited delivery or billing evidence; missing body coverage is unavailable, not zero.',
+    source: 'Accepted aggregate attention summaries from the screen player.',
+    unit: 'estimated exposure events',
+  },
+
+  attentive_impressions: {
+    title: 'Attentive impressions',
+    counts: 'Estimated exposure events meeting the attention threshold in the selected compatible profile.',
+    excludes: 'This is not unique reach, causal attribution or billing evidence; missing assessable attention is unavailable, not zero.',
+    source: 'Accepted aggregate attention summaries from the screen player.',
+    unit: 'estimated attentive exposure events',
+  },
+
   measured_ratio: {
     title: 'Measured plays',
     counts: 'Rendered paid plays with valid presence samples. Some samples do not prove uninterrupted camera coverage.',

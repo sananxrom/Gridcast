@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { PRESENCE_V2_PROFILE, makePresenceBinding, presenceBindingConfig, sameBinding, validatePresenceBinding } from './vision/measurement-binding-v2';
 
 const iso = (n: number) => new Date(n).toISOString();
 const MODEL = 'coco-ssd@2.2.3/lite_mobilenet_v2';
@@ -42,7 +43,7 @@ export function diagnosticOffer(db: any, screen: any, device: any, now = Date.no
   return { assignment_id: a.id, status, expires_at: a.expires_at, message: status === 'pending' ? diagnosticWaitReason(db, screen, now) || 'Screen test is ready; waiting for a free playback boundary.' : `Screen test ${status}.` };
 }
 const canonical = (v: any): string => v && typeof v === 'object' ? Array.isArray(v) ? '[' + v.map(canonical).join(',') + ']' : '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + canonical(v[k])).join(',') + '}' : JSON.stringify(v);
-export function deviceDiagnosticRoute(db: any, path: string, body: any, screen: any, device: any, now = Date.now(), currentConfigVersion?: string | number) {
+export function deviceDiagnosticRoute(db: any, path: string, body: any, screen: any, device: any, now = Date.now(), currentConfigVersion?: string | number, playerProtocol = 0) {
   const a = (db.diagnostic_assignments || []).find((a: any) => a.id === body.assignment_id && a.device_id === device.id && a.screen_id === screen.id);
   if (!a) fail('Unknown screen test', 404);
   if (a.status === 'revoked') fail('Screen test was revoked');
@@ -55,8 +56,18 @@ export function deviceDiagnosticRoute(db: any, path: string, body: any, screen: 
     if (device.now_playing && Date.parse(device.now_playing.started_at) + Number(device.now_playing.duration_s) * 1000 > now) return { changed: false, body: { ok: false, waiting: true, message: 'Waiting for current playback to finish.' } };
     a.status = 'running'; a.run_uid = body.run_uid; a.started_at = iso(now); a.run_until = iso(now + 20e3); a.accept_until = iso(now + 864e5);
     screen.diagnostic_hold_until = a.run_until;
+    if(playerProtocol>=3&&a.has_camera&&a.config.camera_source!=='ip'){
+      const measurementConfig=presenceBindingConfig(a.config_version,a.config.count_ceiling,a.config.confidence_min,a.config.attention_calibration);
+      const measurement=makePresenceBinding(a,device,screen,measurementConfig,iso(now));db.measurement_bindings ||= [];
+      const previous=db.measurement_bindings.find((b:any)=>b.id===measurement.id);
+      if(previous&&!sameBinding(previous,measurement))fail('Diagnostic measurement binding collision',409);
+      if(!previous)db.measurement_bindings.push(measurement);
+      a.measurement_profile=PRESENCE_V2_PROFILE.id;a.measurement_binding_id=measurement.id;a.measurement_config=measurement.config;
+      a.measurement_model_versions=measurement.model_versions;a.measurement_manifest_sha256=measurement.manifest_sha256;a.measurement_pipeline_sha256=measurement.pipeline_sha256;
+    }
     return { changed: true, body: { ok: true, assignment: { assignment_id: a.id, kind: 'diagnostic', diagnostic_has_camera: a.has_camera, valid_until: a.run_until, duration_s: a.duration_s,
-      asset_url: a.asset_url, width: a.width, height: a.height, creative_name: 'Screen diagnostic', campaign_id: '', creative_id: '', advertiser: '', rate_value: 0 }, config: a.config, config_version: a.config_version } };
+      asset_url: a.asset_url, width: a.width, height: a.height, creative_name: 'Screen diagnostic', campaign_id: '', creative_id: '', advertiser: '', rate_value: 0,
+      measurement_profile:a.measurement_profile||null,measurement_binding_id:a.measurement_binding_id||null,measurement_config:a.measurement_config||null }, config: a.config, config_version: a.config_version } };
   }
   if (a.run_uid !== body.run_uid) fail('Diagnostic run does not match its claim');
   const hash = crypto.createHash('sha256').update(canonical(body)).digest('hex');
@@ -67,14 +78,19 @@ export function deviceDiagnosticRoute(db: any, path: string, body: any, screen: 
   if (!Number.isFinite(start) || !Number.isFinite(end) || end < start || end - start > 20e3 || !Number.isFinite(played) || played < 0 || played > 20e3 || played > end - start + 1000) fail('Invalid diagnostic playback times', 400);
   if (!['ended','duration_observed','interrupted','error','timeout'].includes(body.ended_reason)) fail('Invalid diagnostic end reason', 400);
   if (typeof body.measured !== 'boolean' || !Number.isSafeInteger(body.sample_count) || body.sample_count < 0) fail('Invalid diagnostic sample', 400);
-  if (body.measured && (!a.has_camera || body.camera_state !== 'ready' || body.model_state !== 'ready' || !Number.isFinite(body.avg_persons) || body.avg_persons < 0 || body.avg_persons > (Number(a.config.count_ceiling) || 50) || body.sample_count < 1 || body.sample_count > Math.ceil(played / (Math.max(.5, Number(a.config.sample_interval_s) || 2) * 1000)) + 1 || body.model_ver !== MODEL || a.config.model !== 'coco-ssd')) fail('Invalid diagnostic measurement provenance', 400);
+  if (a.measurement_profile===PRESENCE_V2_PROFILE.id) {
+    const measurement=(db.measurement_bindings||[]).find((b:any)=>b.id===body.measurement_binding_id);
+    if(body.presence_profile_id!==PRESENCE_V2_PROFILE.id||!validatePresenceBinding(measurement,a,device,screen,body.measurement_binding_id)
+      ||body.measured&&(body.model_ver!==PRESENCE_V2_PROFILE.body_model||body.camera_state!=='ready'||body.model_state!=='ready'||!Number.isFinite(body.avg_persons)||body.avg_persons<0||body.avg_persons>measurement.config.count_ceiling||body.sample_count<1)
+      ||!body.measured&&body.model_ver!==null)fail('Invalid diagnostic measurement binding',400);
+  } else if (body.measured && (!a.has_camera || body.camera_state !== 'ready' || body.model_state !== 'ready' || !Number.isFinite(body.avg_persons) || body.avg_persons < 0 || body.avg_persons > (Number(a.config.count_ceiling) || 50) || body.sample_count < 1 || body.sample_count > Math.ceil(played / (Math.max(.5, Number(a.config.sample_interval_s) || 2) * 1000)) + 1 || body.model_ver !== MODEL || a.config.model !== 'coco-ssd')) fail('Invalid diagnostic measurement provenance', 400);
   if (!body.measured && (body.avg_persons !== null || body.sample_count !== 0 || body.model_ver !== null)) fail('Unmeasured diagnostic must be null', 400);
   if (!['disabled','starting','ready','unavailable'].includes(body.camera_state) || !['loading','ready','error','not_loaded'].includes(body.model_state)) fail('Invalid reported detector state', 400);
   const result = { id: a.id, assignment_id: a.id, run_uid: a.run_uid, device_id: device.id, screen_id: screen.id, org_id: screen.org_id,
     diagnostic: true, billable: false, source: 'device_report', config_version: a.config_version, model_configured: a.config.model || null,
     received_at: iso(now), requested_by: a.requested_by, started_at_device: body.started_at_device, ended_at_device: body.ended_at_device,
     playing_duration_ms: played, ended_reason: body.ended_reason, measured: body.measured, avg_persons: body.avg_persons, sample_count: body.sample_count, model_ver: body.model_ver,
-    camera_state: body.camera_state, model_state: body.model_state, payload_hash: hash };
+    camera_state: body.camera_state, model_state: body.model_state, ...(a.measurement_profile===PRESENCE_V2_PROFILE.id?{measurement_binding_id:body.measurement_binding_id,presence_profile_id:PRESENCE_V2_PROFILE.id}:{}),payload_hash: hash };
   db.diagnostic_results ||= []; db.diagnostic_results.push(result); a.status = 'completed'; a.completed_at = iso(now);
   return { changed: true, body: { ok: true, result_id: result.id } };
 }

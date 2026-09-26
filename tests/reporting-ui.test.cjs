@@ -8,7 +8,7 @@ const zero = () => ({ plays_rendered: 0, plays_billable: 0, plays_not_rendered: 
 function page(overrides = {}) {
   return { totals: zero(), byScreen: {}, byCampaign: {}, byCreative: {}, daily: {}, hourly: {},attentionProfiles:{},attention_page:{has_more:false,next_cursor:null}, coverage: { started_at: '2026-01-01T00:00:00Z', complete: true }, last_at: null, rows: 1, has_more: false, next_cursor: null, ...overrides };
 }
-const attentionCounters=n=>({plays:n,playing_ms:n*10000,body_observed_ms:n*8000,body_unknown_ms:n*2000,face_observed_ms:n*7000,face_unknown_ms:n*3000,attention_observed_ms:n*5000,attention_unknown_ms:n*5000,expression_observed_ms:n*4000,expression_unknown_ms:n*6000,presence_person_ms:n*3000,looking_person_ms:n*2000,face_assessable_person_ms:n*2500,smile_person_ms:n*1000,expression_assessable_person_ms:n*1500,estimated_impressions:n,attentive_impressions:n,tracked_visits:n});
+const attentionCounters=n=>({plays:n,playing_ms:n*10000,body_observed_ms:n*8000,body_unknown_ms:n*2000,face_observed_ms:n*7000,face_unknown_ms:n*3000,attention_observed_ms:n*5000,attention_unknown_ms:n*5000,expression_observed_ms:n*4000,expression_unknown_ms:n*6000,presence_person_ms:n*3000,looking_person_ms:n*2000,longest_look_ms:n*1500,face_assessable_person_ms:n*2500,smile_person_ms:n*1000,expression_assessable_person_ms:n*1500,estimated_impressions:n,attentive_impressions:n,tracked_visits:n});
 function profilePage(n){const c=attentionCounters(n),series={profile:'v1',manifest_sha256:'m',pipeline_sha256:'p',calibration_revision:'c',asset_id:'asset',asset_sha256:'sha',config_version:1,totals:c,byScreen:{screen:c},byCampaign:{campaign:c},byCreative:{creative:c},daily:{'2026-01-02':c},hourly:{'12':c},dayHours:{'2026-01-02T12':c}};return {attentionProfiles:{series},};}
 // Exercise the hook state machine without a DOM. Requests are controlled promises;
 // effects run after render and clean up exactly when their dependency key changes.
@@ -80,7 +80,7 @@ test('multi-page profile totals and dimensions do not double the first page with
  assert.match(f.requests[2].url,/after=%7E/);assert.match(f.requests[2].url,/attention_after=attention-3/);
  f.requests[2].resolve(page(profilePage(5)));await settle();
  const result=f.render().data,p=result.attentionProfiles.series;
- assert.equal(p.totals.plays,10);assert.equal(p.totals.playing_ms,100000);assert.equal(p.byCreative.creative.plays,10);assert.equal(p.daily['2026-01-02'].attention_observed_ms,50000);
+ assert.equal(p.totals.plays,10);assert.equal(p.totals.playing_ms,100000);assert.equal(p.totals.longest_look_ms,7500,'longest-look aggregation is MAX across pages');assert.equal(p.byCreative.creative.plays,10);assert.equal(p.daily['2026-01-02'].attention_observed_ms,50000);
  assert.equal(result.totals.plays_rendered,1);
 });
 
@@ -128,7 +128,7 @@ test('CSV distinguishes unknown days, known zero delivery and measured zero peop
 
 test('attention pagination does not double first-page totals and keeps unavailable metrics blank in export',async()=>{
  const {lib}=fixture(),p={profile:'v1',manifest_sha256:'m',pipeline_sha256:'p',calibration_revision:'c',asset_id:'asset',asset_sha256:'sha',config_version:2};
- const c=n=>({plays:n,playing_ms:n*10000,body_observed_ms:n*8000,body_unknown_ms:n*2000,face_observed_ms:n*7000,face_unknown_ms:n*3000,attention_observed_ms:n*5000,attention_unknown_ms:n*5000,expression_observed_ms:n*4000,expression_unknown_ms:n*6000,presence_person_ms:n*3000,looking_person_ms:n*2000,face_assessable_person_ms:n*2500,smile_person_ms:n*1000,expression_assessable_person_ms:n*1500,estimated_impressions:n,attentive_impressions:n,tracked_visits:n});
+ const c=n=>({plays:n,playing_ms:n*10000,body_observed_ms:n*8000,body_unknown_ms:n*2000,face_observed_ms:n*7000,face_unknown_ms:n*3000,attention_observed_ms:n*5000,attention_unknown_ms:n*5000,expression_observed_ms:n*4000,expression_unknown_ms:n*6000,presence_person_ms:n*3000,looking_person_ms:n*2000,longest_look_ms:n*1500,face_assessable_person_ms:n*2500,smile_person_ms:n*1000,expression_assessable_person_ms:n*1500,estimated_impressions:n,attentive_impressions:n,tracked_visits:n});
  const group=(n,mode)=>({ ...p,totals:c(n),byCreative:{creative:c(n)},byScreen:{screen:c(n)},byCampaign:{campaign:c(n)},daily:{'2026-01-02':c(n)},hourly:{},dayHours:{},byCreativeAsset:{asset:{creative_id:'creative',asset_id:'asset',asset_sha256:'sha',totals:c(n),daily:{'2026-01-02':c(n)}}},provenance:{[mode==='guided'?'[\"guided\",\"calA\"]':'[\"default\",null]']:{mode,calibration_revision:mode==='guided'?'calA':null,calibration:mode==='guided'?{yaw_tenths:12,pitch_tenths:-5,samples:10,span_ms:2700}:null,totals:c(n),daily:{'2026-01-02':c(n)}}}});
  const f=fixture();f.render();
  f.requests[0].resolve(page({attentionProfiles:{series:group(2,'default')},has_more:true,next_cursor:'screen-2',attention_page:{has_more:true,next_cursor:'attention-2'}}));await settle();
@@ -138,6 +138,19 @@ test('attention pagination does not double first-page totals and keeps unavailab
  const csv=lib.dailyReportCsv({...result,daily:[],hourly:[],coverage:{started_at:'2026-01-01T00:00:00Z',complete:true}},{from:'2026-01-02',to:'2026-01-02'}).split('\r\n');
  const header=csv[0].split(',').map(x=>x.slice(1,-1)),row=csv.at(-1).split(',').map(x=>x.slice(1,-1));assert.equal(row[header.indexOf('asset_versions')],'1');assert.equal(row[header.indexOf('calibration_provenance')],'default|guided:calA');assert.equal(row[header.indexOf('calibrated_attention_observed_share')],'0.8');
  assert.equal(row[header.indexOf('looking_person_ms')],'20000');assert.equal(row[header.indexOf('estimated_impressions')],'10');assert.equal(row[header.indexOf('attentive_impressions')],'10');assert.equal(row.length,header.length);assert.equal(csv[1].split(',').length,header.length,'paid-delivery CSV row has the same width as the header');
+});
+
+test('attention export follows one selected compatible profile and keeps known zero distinct from no coverage',()=>{
+ const {lib}=fixture(),first=profilePage(1).attentionProfiles.series,second=profilePage(2).attentionProfiles.series;
+ first.profile='older';second.profile='selected-newer';second.totals={...second.totals,estimated_impressions:0,attentive_impressions:0,body_observed_ms:1000,attention_observed_ms:1000,looking_person_ms:0};second.daily['2026-01-02']={...second.daily['2026-01-02'],estimated_impressions:0,attentive_impressions:0,body_observed_ms:1000,attention_observed_ms:1000,looking_person_ms:0};
+ const data={...page({attentionProfiles:{older:first,newer:second},daily:[],hourly:[]}),coverage:{started_at:'2026-01-01T00:00:00Z',complete:true}};
+ const csv=lib.dailyReportCsv(data,{from:'2026-01-02',to:'2026-01-02'},'newer').split('\r\n'),header=csv[0].split(',').map(x=>x.slice(1,-1));
+ const profileRows=csv.slice(1).filter(row=>row.includes('attention_profile_series'));
+ assert.equal(profileRows.length,1,'CSV must not combine profile series');
+ const values=profileRows[0].split(',').map(x=>x.slice(1,-1));assert.equal(values[header.indexOf('profile_series_id')],'newer');
+ assert.equal(values[header.indexOf('estimated_impressions')],'0');assert.equal(values[header.indexOf('attentive_impressions')],'0');
+ assert.equal(lib.attentionPeopleRate(0,0),null,'zero people-time with zero assessable duration is unavailable');
+ assert.equal(lib.attentionPeopleRate(0,5000),0,'zero looking with positive assessable duration is measured zero');
 });
 
 

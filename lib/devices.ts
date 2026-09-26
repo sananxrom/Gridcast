@@ -5,6 +5,8 @@ import crypto from 'crypto';
 import { playerReadiness } from './readiness';
 import { deviceDiagnosticRoute, diagnosticOffer, DiagnosticError } from './diagnostics';
 import { ATTENTION_PROFILE, validateAttentionCalibration, validateAttentionSummary, attentionQueuedEventBytes, ATTENTION_LIMITS, type AttentionCalibration, type CalibrationBinding } from './vision/attention-contracts';
+import { PRESENCE_V2_PROFILE, makePresenceBinding, presenceBindingConfig, sameBinding, validatePresenceBinding } from './vision/measurement-binding-v2';
+import { validatePresenceV2Summary } from './vision/attention-v2-contracts';
 const PAIR_TTL = 10 * 60e3, BACKLOG_TTL = 72 * 3600e3, ASSIGNMENT_TTL = 3600e3;
 const hash = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 const iso = (n: number) => new Date(n).toISOString();
@@ -24,6 +26,7 @@ function playbackItem(item: any, assignment: any) {
     attention_enabled: assignment.attention_enabled === true, attention_profile: assignment.attention_profile || null, attention_mode: assignment.attention_mode || (assignment.attention_calibration_revision ? 'guided' : 'default'),
     attention_calibration_revision: assignment.attention_calibration_revision || null,
     attention_manifest_sha256: assignment.attention_manifest_sha256 || null, attention_pipeline_sha256: assignment.attention_pipeline_sha256 || null,
+    ...(typeof assignment.measurement_binding_id === 'string' && typeof assignment.measurement_profile === 'string' ? {measurement_binding_id:assignment.measurement_binding_id,measurement_profile:assignment.measurement_profile} : {}),
     assignment_id: assignment.id, valid_until: assignment.valid_until, accept_until: assignment.accept_until, max_plays: assignment.max_plays };
 }
 export const pairingCodeHash = (code: string) => hash(code.trim().toUpperCase());
@@ -86,12 +89,12 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
   const { screen, device } = auth;
   if ((body.screen_id && body.screen_id !== screen.id) || (body.org_id && body.org_id !== screen.org_id) || (seg[0] === 'playlist' && seg[1] !== screen.id)) return fail(404, 'Not found');
   if (path.startsWith('diagnostic/')) {
-    try { return deviceDiagnosticRoute(db, path, body, screen, device, now, path === 'diagnostic/start' ? options.playlist(screen, device).config_version : undefined); }
+    try { return deviceDiagnosticRoute(db, path, body, screen, device, now, path === 'diagnostic/start' ? options.playlist(screen, device).config_version : undefined, options.playerProtocol || body.player_protocol || 0); }
     catch (e) { if (e instanceof DiagnosticError) return fail(e.status, e.message); throw e; }
   }
   if (path === 'attention/calibration') {
     const config=options.playlist(screen,device).config, calibration=body.calibration as AttentionCalibration;
-    if (config.attention_enabled !== true || config.attention_profile !== ATTENTION_PROFILE.id) return fail(403,'Attention is not enabled for this screen');
+    if ((config.attention_enabled !== true && (options.playerProtocol || 0) < 3) || config.attention_profile !== ATTENTION_PROFILE.id) return fail(403,'Camera calibration is not available for this screen');
     if (!screen.has_camera || config.camera_source === 'ip') return fail(400,'This player has no supported local camera');
     const binding: CalibrationBinding = { profile:ATTENTION_PROFILE.id,device_id:device.id,screen_id:screen.id,
       camera_ref:calibration?.camera_ref,width:calibration?.width,height:calibration?.height,rotation:calibration?.rotation };
@@ -105,16 +108,40 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
     const record={id:calibration.revision,org_id:screen.org_id,screen_id:screen.id,device_id:device.id,profile:ATTENTION_PROFILE.id,calibration:structuredClone(calibration),created_at:iso(now)};
     db.attention_calibrations.push(record);
     screen.attention_calibration=structuredClone(calibration);
-    db.settings ||= {}; db.settings.config_revision=(db.settings.config_revision || 0)+1;
-    return {changed:true,body:{ok:true,calibration_revision:calibration.revision,config_version:db.settings.config_revision}};
+    // Protocol 3 binds optional calibration independently from commercial assignment
+    // revisions. Keep the legacy protocol's original config-revision behavior intact.
+    if((options.playerProtocol||0)<3){db.settings||={};db.settings.config_revision=(db.settings.config_revision||0)+1;}
+    return {changed:true,body:{ok:true,calibration_revision:calibration.revision,config_version:db.settings?.config_revision||1}};
   }
   if (path === 'heartbeat') {
     if (!((typeof body.config_version === 'string' && body.config_version.length <= 128) || (Number.isSafeInteger(body.config_version) && body.config_version >= 0))) return fail(400, 'Invalid configuration version');
     const at = Date.parse(body.device_now); if (!Number.isFinite(at)) return fail(400, 'device_now is required');
     if (body.vision !== undefined) {
       const v = body.vision;
-      if (!v || !['disabled','starting','ready','unavailable'].includes(v.camera_state) || !['loading','ready','error','not_loaded'].includes(v.model_state) || (v.model_ver !== null && v.model_ver !== 'coco-ssd@2.2.3/lite_mobilenet_v2') || (v.last_sample_at !== null && (typeof v.last_sample_at !== 'string' || !Number.isFinite(Date.parse(v.last_sample_at))))) return fail(400, 'Invalid detector status');
-      device.vision = { camera_state: v.camera_state, model_state: v.model_state, model_ver: v.model_ver, last_sample_at: v.last_sample_at, reported_at: iso(now), source: 'device_report' };
+      if (!v || !['disabled','starting','ready','unavailable'].includes(v.camera_state) || !['loading','ready','error','not_loaded'].includes(v.model_state)
+        || (v.model_ver !== null && !['coco-ssd@2.2.3/lite_mobilenet_v2',PRESENCE_V2_PROFILE.body_model].includes(v.model_ver))
+        || (v.last_sample_at !== null && (typeof v.last_sample_at !== 'string' || !Number.isFinite(Date.parse(v.last_sample_at))))) return fail(400, 'Invalid detector status');
+      if(v.presence_profile_id!==undefined||v.measurement_binding_id!==undefined||v.assignment_id!==undefined){
+        const a=(db.device_assignments||[]).find((row:any)=>row.id===v.assignment_id&&row.device_id===device.id&&row.screen_id===screen.id);
+        const binding=(db.measurement_bindings||[]).find((row:any)=>row.id===v.measurement_binding_id);
+        if(v.presence_profile_id!==PRESENCE_V2_PROFILE.id||v.model_ver!==null&&v.model_ver!==PRESENCE_V2_PROFILE.body_model
+          ||!validatePresenceBinding(binding,a,device,screen,v.measurement_binding_id))return fail(400,'Heartbeat does not match an issued measurement binding');
+      }else if(v.model_ver===PRESENCE_V2_PROFILE.body_model)return fail(400,'New model status needs its issued measurement binding');
+      device.vision = { camera_state: v.camera_state, model_state: v.model_state, model_ver: v.model_ver, presence_profile_id:v.presence_profile_id||null,
+        measurement_binding_id:v.measurement_binding_id||null,assignment_id:v.assignment_id||null,last_sample_at: v.last_sample_at, reported_at: iso(now), source: 'device_report' };
+    }
+    if(body.live_attention!==undefined){
+      const live=body.live_attention, binding=(db.measurement_bindings||[]).find((row:any)=>row.id===live?.measurement_binding_id),assignment=(db.device_assignments||[]).find((row:any)=>row.id===live?.assignment_id&&row.device_id===device.id&&row.screen_id===screen.id);
+      const count=(value:any,max:number)=>value===null||Number.isSafeInteger(value)&&value>=0&&value<=max;
+      const sampled=Date.parse(live?.sampled_at);
+      if(!live||live.profile_id!==PRESENCE_V2_PROFILE.id||!validatePresenceBinding(binding,assignment,device,screen,live.measurement_binding_id)
+        ||!Number.isFinite(sampled)||sampled>now+60000||now-sampled>120000
+        ||!count(live.people,20)||!count(live.face_assessable,5)||!count(live.looking,5)||!count(live.smiling,5)
+        ||!['ok','error','stale','unavailable'].includes(live.body_status)||!['ok','error','stale','unavailable'].includes(live.face_status)
+        ||typeof live.body_saturated!=='boolean'||typeof live.face_saturated!=='boolean')return fail(400,'Invalid live measurement summary');
+      device.live_attention={profile_id:live.profile_id,measurement_binding_id:live.measurement_binding_id,assignment_id:live.assignment_id,sampled_at:live.sampled_at,
+        people:live.people,face_assessable:live.face_assessable,looking:live.looking,smiling:live.smiling,body_status:live.body_status,face_status:live.face_status,
+        body_saturated:live.body_saturated,face_saturated:live.face_saturated,reported_at:iso(now),source:'device_report'};
     }
     if (body.delivery_queue !== undefined) {
       const q = body.delivery_queue;
@@ -150,15 +177,16 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
     // The signature must cover everything the assignment row freezes — media identity, the rate it will be
     // billed at, and the measurement settings it was issued under — not just which campaign and creative.
     // Anything omitted here is a field where the playlist we serve and the evidence we keep can disagree.
-    const playlistSignature = (playlist: Playlist) => {
+    const playlistSignature = (playlist: Playlist, calibrationOverride?: any) => {
       const p = playlist;
+      const signatureCalibration = calibrationOverride === undefined ? p.config.attention_calibration : calibrationOverride;
       const frozen = p.items.map((item: any) => {
       const c = db.campaigns.find((x: any) => x.id === item.campaign_id);
       return [item.campaign_id, c?.advertiser_id || null, item.creative_id, item.youtube_id || null, item.asset_id || null,
         economics(item), item.duration_s, item.media_type || 'video', item.width || null, item.height || null, item.kind || 'paid', item.asset_sha256 || null, item.rate_type ?? c?.rate_type ?? 'flat', Number(item.rate_value ?? c?.rate_value) || 0, c?.committed_budget ?? null,
         p.config_version, p.config.camera_fail_mode || 'continue', p.config.model || null,
         Number(p.config.sample_interval_s) || 2, Number(p.config.count_ceiling) || 50,
-        p.config.attention_enabled === true, p.config.attention_profile || null, p.config.attention_calibration?.revision || null,p.config.attention_calibration||null,
+        p.config.attention_enabled === true, p.config.attention_profile || null, signatureCalibration?.revision || null,signatureCalibration||null,
         p.config.attention_enabled === true ? ATTENTION_PROFILE.manifest_sha256 : null,p.config.attention_enabled === true ? ATTENTION_PROFILE.pipeline_sha256 : null];
     });
       return hash(JSON.stringify({ frozen, config_version: p.config_version, rotation_version: p.rotation_version ?? null }));
@@ -170,7 +198,8 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
         campaign_id: item.campaign_id, advertiser_id: c?.advertiser_id || null, creative_id: item.creative_id, youtube_id: item.youtube_id || null, asset_id: item.asset_id || null, asset_sha256:item.asset_sha256||null,
         duration_s: item.duration_s, rate_type: item.rate_type ?? c?.rate_type ?? 'flat', rate_value: Number(item.rate_value ?? c?.rate_value) || 0,
         issued_at: iso(now), valid_until: iso(validUntil), accept_until: iso(now + BACKLOG_TTL), config_version: p.config_version,
-        camera_fail_mode: p.config.camera_fail_mode || 'continue', model_configured: p.config.model || null, sample_interval_s: Number(p.config.sample_interval_s) || 2, count_ceiling: Number(p.config.count_ceiling) || 50,
+        camera_fail_mode: p.config.camera_fail_mode || 'continue', model_configured: (options.playerProtocol || 0) >= 3 && screen.has_camera && p.config.camera_source !== 'ip' ? PRESENCE_V2_PROFILE.body_model : p.config.model || null,
+        sample_interval_s: Number(p.config.sample_interval_s) || 2, count_ceiling: Number(p.config.count_ceiling) || 50,
         attention_enabled:p.config.attention_enabled === true, attention_profile:p.config.attention_enabled === true ? p.config.attention_profile : null,
         attention_mode:p.config.attention_enabled===true&&p.config.attention_calibration?'guided':'default',
         attention_calibration_revision:p.config.attention_enabled === true ? p.config.attention_calibration?.revision || null : null,
@@ -181,8 +210,23 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
       if (!max) return []; a.max_plays = max;
       db.device_assignments.push(a); return [playbackItem(item, a)];
     };
+    const bindItems = (items: any[]) => items.map(item => {
+      const assignment = db.device_assignments.find((a: any) => a.id === item.assignment_id);
+      if (!assignment || (options.playerProtocol || 0) < 3 || !screen.has_camera || p.config.camera_source === 'ip') return item;
+      const measurementConfig = presenceBindingConfig(assignment.config_version, assignment.count_ceiling, p.config.confidence_min, p.config.attention_calibration);
+      const binding = makePresenceBinding(assignment, device, screen, measurementConfig, iso(now));
+      db.measurement_bindings ||= [];
+      const saved = db.measurement_bindings.find((row: any) => row.id === binding.id);
+      if (saved && !sameBinding(saved, binding)) throw new Error('Immutable measurement binding collision');
+      if (!saved) db.measurement_bindings.push(binding);
+      return { ...item, measurement_binding_id: binding.id, measurement_profile: binding.profile,
+        model_versions: binding.model_versions, measurement_config: binding.config };
+    });
     let signature = playlistSignature(p);
-    if (held && held.signature === signature && Date.parse(held.valid_until) > now + 60e3
+    const heldRows=(held?.ids||[]).map((id:string)=>db.device_assignments.find((a:any)=>a.id===id)).filter(Boolean);
+    const heldCalibration=heldRows.find((a:any)=>a.attention_calibration)?.attention_calibration||null;
+    const heldSignatureMatches=!!held&&(held.signature===signature||((options.playerProtocol||0)>=3&&held.signature===playlistSignature(p,heldCalibration)));
+    if (held && heldSignatureMatches && Date.parse(held.valid_until) > now + 60e3
       && Array.isArray(held.ids)
       && (!held.ids.some((id: string) => db.device_assignments.find((a: any) => a.id === id)?.kind !== 'filler')
         || held.ids.some((id: string) => { const a = db.device_assignments.find((a: any) => a.id === id); return a && a.kind !== 'filler' && (Number(device.assignment_uses?.find((u: any) => u.id === id)?.n) || 0) < a.max_plays; }))
@@ -196,8 +240,13 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
         const used = a ? Number(device.assignment_uses?.find((u: any) => u.id === a.id)?.n) || 0 : 0;
         return a && used < a.max_plays ? [playbackItem(item,a)] : grantItem(item,Date.parse(held.valid_until));
       });
-      held.ids = items.map((i: any) => i.assignment_id);
-      return { changed: true, body: { screen: safeScreen(screen), scheduling_mode:'continuous', budget_state: items.filter((i: any) => i.kind !== 'filler').length < p.items.filter((i: any) => i.kind !== 'filler').length ? 'reserved_elsewhere_or_exhausted' : 'available', items: items.filter((i: any) => i.kind !== 'filler'), filler_items: items.filter((i: any) => i.kind === 'filler'), config: p.config, config_version: p.config_version, server_time: iso(now), readiness: playerReadiness(p.readiness), diagnostic: diagnosticOffer(db, screen, device, now), valid_until: held.valid_until } };
+      const bound = bindItems(items);
+      held.ids = bound.map((i: any) => i.assignment_id);
+      held.binding_ids = bound.map((i: any) => i.measurement_binding_id).filter(Boolean);
+      // Measurement calibration changes the binding only. Rebase the mutable held-set
+      // signature after binding so the next poll does not rotate paid assignments.
+      held.signature = signature;
+      return { changed: true, body: { screen: safeScreen(screen), scheduling_mode:'continuous', budget_state: bound.filter((i: any) => i.kind !== 'filler').length < p.items.filter((i: any) => i.kind !== 'filler').length ? 'reserved_elsewhere_or_exhausted' : 'available', items: bound.filter((i: any) => i.kind !== 'filler'), filler_items: bound.filter((i: any) => i.kind === 'filler'), config: p.config, config_version: p.config_version, server_time: iso(now), readiness: playerReadiness(p.readiness), diagnostic: diagnosticOffer(db, screen, device, now), valid_until: held.valid_until } };
     }
     // Advance only when this transaction actually mints a replacement set. Retries and calendar
     // boundaries use the persisted phase above; final-minute renewal advances exactly once.
@@ -207,8 +256,8 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
       until = assignmentUntil();
       signature = playlistSignature(p);
     }
-    const items = p.items.flatMap((item: any) => grantItem(item,until));
-    device.assignment_set = { signature, rotation_index: rotationIndex, valid_until: iso(until), ids: items.map((i: any) => i.assignment_id) };
+    const items = bindItems(p.items.flatMap((item: any) => grantItem(item,until)));
+    device.assignment_set = { signature, rotation_index: rotationIndex, valid_until: iso(until), ids: items.map((i: any) => i.assignment_id), binding_ids: items.map((i: any) => i.measurement_binding_id).filter(Boolean) };
     return { changed: true, body: { screen: safeScreen(screen), scheduling_mode:'continuous', budget_state: items.filter((i: any) => i.kind !== 'filler').length < p.items.filter((i: any) => i.kind !== 'filler').length ? 'reserved_elsewhere_or_exhausted' : 'available', items: items.filter((i: any) => i.kind !== 'filler'), filler_items: items.filter((i: any) => i.kind === 'filler'), config: p.config, config_version: p.config_version, server_time: iso(now), readiness: playerReadiness(p.readiness), diagnostic: diagnosticOffer(db, screen, device, now), valid_until: iso(until) } };
   }
   const assignment = (db.device_assignments || []).find((a: any) => a.id === body.assignment_id && a.device_id === device.id && a.screen_id === screen.id);
@@ -229,7 +278,15 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
   if (!['ended','duration_observed','error','timeout','interrupted'].includes(body.ended_reason)) return fail(400, 'Invalid playback end reason');
   if (typeof body.measured !== 'boolean' || !Number.isSafeInteger(body.sample_count) || body.sample_count < 0 || body.sample_count > 100000) return fail(400, 'Invalid measurement');
   if (body.measured && (!Number.isFinite(body.avg_persons) || body.avg_persons < 0 || body.avg_persons > 10000 || !body.sample_count || typeof body.model_ver !== 'string' || !body.model_ver.trim())) return fail(400, 'Measured presence needs samples and actual model provenance');
-  if (body.measured && (assignment.model_configured !== 'coco-ssd' || body.model_ver !== 'coco-ssd@2.2.3/lite_mobilenet_v2' || body.sample_count > Math.ceil(played / (Math.max(.5, assignment.sample_interval_s) * 1000)) + 1 || body.avg_persons > assignment.count_ceiling)) return fail(400, 'Presence does not match the applied measurement configuration');
+  const hasMeasurementBinding = body.measurement_binding_id !== undefined || body.presence_profile_id !== undefined;
+  let measurementBinding:any=null;
+  if (hasMeasurementBinding) {
+    measurementBinding = (db.measurement_bindings || []).find((b: any) => b.id === body.measurement_binding_id);
+    if (body.presence_profile_id !== PRESENCE_V2_PROFILE.id || !validatePresenceBinding(measurementBinding, assignment, device, screen, body.measurement_binding_id)
+      || (body.measured && body.model_ver !== PRESENCE_V2_PROFILE.body_model) || (!body.measured && body.model_ver !== null)
+      || body.sample_count > Math.ceil(played / (Math.max(.5, assignment.sample_interval_s) * 1000)) + 1
+      || (body.measured && body.avg_persons > measurementBinding.config.count_ceiling)) return fail(400, 'Presence does not match the immutable measurement binding');
+  } else if (body.measured && (assignment.model_configured !== 'coco-ssd' || body.model_ver !== 'coco-ssd@2.2.3/lite_mobilenet_v2' || body.sample_count > Math.ceil(played / (Math.max(.5, assignment.sample_interval_s) * 1000)) + 1 || body.avg_persons > assignment.count_ceiling)) return fail(400, 'Presence does not match the applied measurement configuration');
   if (!body.measured && (body.avg_persons !== null || body.sample_count !== 0)) return fail(400, 'Unmeasured presence must be null with zero samples');
   const claimedOffset = Number.isFinite(body.server_clock_offset_ms) ? body.server_clock_offset_ms : 0;
   if (Math.abs(claimedOffset) > 864e5) return fail(400, 'Clock offset exceeds one day');
@@ -291,16 +348,24 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
   const billable = candidateBillable && budgetAllowed;
   let attentionStatus='absent', attention:any=undefined;
   if (body.attention !== undefined) {
-    if (!assignment.attention_enabled) attentionStatus='not_enabled';
-    else if (assignment.attention_profile !== ATTENTION_PROFILE.id) attentionStatus='profile_mismatch';
+    if (hasMeasurementBinding && (body.attention?.profile !== PRESENCE_V2_PROFILE.id || body.attention?.schema !== PRESENCE_V2_PROFILE.metric_schema)) attentionStatus='profile_mismatch';
+    else if (!hasMeasurementBinding && !assignment.attention_enabled) attentionStatus='not_enabled';
+    else if (!hasMeasurementBinding && assignment.attention_profile !== ATTENTION_PROFILE.id) attentionStatus='profile_mismatch';
     else if (attentionQueuedEventBytes(body) > ATTENTION_LIMITS.target_bytes) attentionStatus='size_limit';
     else {
       const candidate=body.attention, mode=candidate?.attention_mode || (typeof candidate?.calibration_revision==='string'?'guided':null);
-      const binding=assignment.attention_calibration&&{profile:assignment.attention_profile,device_id:assignment.device_id,screen_id:assignment.screen_id,camera_ref:assignment.attention_calibration.camera_ref,width:assignment.attention_calibration.width,height:assignment.attention_calibration.height,rotation:assignment.attention_calibration.rotation};
-      const guidedAllowed=!!assignment.attention_calibration_revision&&!!binding&&validateAttentionCalibration(assignment.attention_calibration,binding)&&candidate?.calibration_revision===assignment.attention_calibration_revision;
-      const validMode=mode==='default'
-        ? candidate?.attention_mode==='default'&&candidate.calibration_revision===null&&validateAttentionSummary(candidate,played,null,'default')
-        : mode==='guided'&&guidedAllowed&&validateAttentionSummary(candidate,played,assignment.attention_calibration_revision,'guided');
+      let validMode=false;
+      if(hasMeasurementBinding){
+        const revision=measurementBinding?.config?.calibration_revision||null;
+        validMode=mode==='default'&&revision===null?candidate?.attention_mode==='default'&&candidate.calibration_revision===null&&validatePresenceV2Summary(candidate,played,null,'default')
+          :mode==='guided'&&!!revision&&candidate?.calibration_revision===revision&&validatePresenceV2Summary(candidate,played,revision,'guided');
+      }else{
+        const calibrationBinding=assignment.attention_calibration&&{profile:assignment.attention_profile,device_id:assignment.device_id,screen_id:assignment.screen_id,camera_ref:assignment.attention_calibration.camera_ref,width:assignment.attention_calibration.width,height:assignment.attention_calibration.height,rotation:assignment.attention_calibration.rotation};
+        const guidedAllowed=!!assignment.attention_calibration_revision&&!!calibrationBinding&&validateAttentionCalibration(assignment.attention_calibration,calibrationBinding)&&candidate?.calibration_revision===assignment.attention_calibration_revision;
+        validMode=mode==='default'
+          ? candidate?.attention_mode==='default'&&candidate.calibration_revision===null&&validateAttentionSummary(candidate,played,null,'default')
+          : mode==='guided'&&guidedAllowed&&validateAttentionSummary(candidate,played,assignment.attention_calibration_revision,'guided');
+      }
       if(!validMode) attentionStatus='invalid';
       else { attention=structuredClone(candidate); attentionStatus='accepted'; }
     }
@@ -309,6 +374,7 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
   const reasons = [!paid && 'filler', !budgetAllowed && 'budget_allowance_exhausted', !timestampValid && 'clock_or_assignment_window', !durationValid && 'incomplete_playing_duration', !mediaValid && 'incomplete_media_progress', !completed && body.ended_reason, !cameraAllowed && 'camera_required', !withinAssignment && 'assignment_replay_cap', !withinThroughput && 'device_throughput_exceeded'].filter(Boolean);
   const play = { ...economics(assignment), id, play_uid: body.play_uid, seq_no: body.seq_no, device_id: device.id, org_id: screen.org_id, screen_id: screen.id,
     assignment_id: assignment.id, campaign_id: assignment.campaign_id, advertiser_id: assignment.advertiser_id, creative_id: assignment.creative_id, config_version: assignment.config_version,
+    ...(hasMeasurementBinding ? {measurement_binding_id:body.measurement_binding_id,presence_profile_id:PRESENCE_V2_PROFILE.id} : {}),
     started_at: body.started_at_device, ended_at: body.ended_at_device, started_at_device: body.started_at_device, ended_at_device: body.ended_at_device,
     kind: assignment.kind || 'paid', media_type: assignment.media_type || 'video',
     duration_ms: played, playing_duration_ms: played, media_started_s: image ? null : mediaStart, media_ended_s: image ? null : mediaEnd,
@@ -316,7 +382,8 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
     decoded_height: image ? body.decoded_height ?? null : null, visible_duration_ms: image ? body.visible_duration_ms ?? null : null, ended_reason: body.ended_reason,
     server_received_at: iso(now), delivery_lag_ms: now - (end + offset), server_clock_offset_ms: claimedOffset, applied_clock_offset_ms: offset,
     timestamp_valid: timestampValid, rendered, clock_offset_difference_ms: Number.isFinite(device.clock_offset_estimate_ms) ? claimedOffset - device.clock_offset_estimate_ms : null, billable, nonbillable_reasons: reasons, payload_hash: payloadHash, source: 'device_report', rate_type: assignment.rate_type, rate_value: assignment.rate_value,
-    ...(assignment.attention_enabled === true ? {attention_profile:assignment.attention_profile,attention_mode:receiptAttentionMode,attention_manifest_sha256:assignment.attention_manifest_sha256,
+    ...(hasMeasurementBinding ? {attention_profile:PRESENCE_V2_PROFILE.id,attention_mode:receiptAttentionMode,attention_manifest_sha256:measurementBinding?.manifest_sha256||null,
+      attention_pipeline_sha256:measurementBinding?.pipeline_sha256||null,attention_calibration_revision:receiptAttentionMode==='guided'?measurementBinding?.config?.calibration_revision||null:null} : assignment.attention_enabled === true ? {attention_profile:assignment.attention_profile,attention_mode:receiptAttentionMode,attention_manifest_sha256:assignment.attention_manifest_sha256,
       attention_pipeline_sha256:assignment.attention_pipeline_sha256,attention_calibration_revision:receiptAttentionMode==='guided'?assignment.attention_calibration_revision||null:null,attention_calibration:receiptAttentionMode==='guided'?assignment.attention_calibration||null:null,
       asset_id:assignment.asset_id||null,asset_sha256:assignment.asset_sha256||null} : {}),
     ...(attention ? {attention,attention_status:attentionStatus} : body.attention !== undefined ? {attention_status:attentionStatus} : {}) };
@@ -324,6 +391,7 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
   db.presence.push({ id, play_id: id, advertiser_id: assignment.advertiser_id, device_id: device.id, org_id: screen.org_id, screen_id: screen.id,
     measured: body.measured, avg_persons: body.measured ? body.avg_persons : null, sample_count: body.sample_count,
     model_ver: body.measured ? body.model_ver : null, model_configured: assignment.model_configured, config_version: assignment.config_version,
+    ...(hasMeasurementBinding ? {measurement_binding_id:body.measurement_binding_id,presence_profile_id:PRESENCE_V2_PROFILE.id} : {}),
     at: body.ended_at_device, server_received_at: iso(now), source: paid ? 'device_report' : 'filler_device_report' });
   // Every accepted attempt consumes its local allowance, including an acknowledged load failure.
   // Malformed reports returned above consume nothing; airtime still requires actual rendering.

@@ -27,8 +27,8 @@ export function addCounters(target: ReportCounters, source: Partial<ReportCounte
 }
 const attentionCounters = () => ({plays:0,playing_ms:0,body_observed_ms:0,body_unknown_ms:0,face_observed_ms:0,face_unknown_ms:0,
   attention_observed_ms:0,attention_unknown_ms:0,expression_observed_ms:0,expression_unknown_ms:0,presence_person_ms:0,
-  looking_person_ms:0,face_assessable_person_ms:0,smile_person_ms:0,expression_assessable_person_ms:0,estimated_impressions:0,attentive_impressions:0,tracked_visits:0});
-function addAttention(target:any,source:any){for(const k of Object.keys(attentionCounters()))target[k]=(Number(target[k])||0)+(Number(source?.[k])||0);return target;}
+  looking_person_ms:0,longest_look_ms:0,face_assessable_person_ms:0,smile_person_ms:0,expression_assessable_person_ms:0,estimated_impressions:0,attentive_impressions:0,tracked_visits:0});
+function addAttention(target:any,source:any){for(const k of Object.keys(attentionCounters()))target[k]=k==='longest_look_ms'?Math.max(Number(target[k])||0,Number(source?.[k])||0):(Number(target[k])||0)+(Number(source?.[k])||0);return target;}
 const attentionMode=(play:any,assignment:any)=>play.attention_mode||play.attention?.attention_mode||(typeof play.attention?.calibration_revision==='string'||assignment.attention_calibration_revision?'guided':'default');
 const attentionRevision=(play:any,assignment:any)=>attentionMode(play,assignment)==='guided'?(play.attention?.calibration_revision??assignment.attention_calibration_revision??null):null;
 const attentionIdentity=(play:any,assignment:any)=>[play.attention_profile||assignment.attention_profile,play.attention_manifest_sha256||assignment.attention_manifest_sha256,play.attention_pipeline_sha256||assignment.attention_pipeline_sha256,attentionMode(play,assignment),attentionRevision(play,assignment),assignment.asset_id||null,assignment.asset_sha256||null,assignment.config_version];
@@ -53,12 +53,12 @@ export function accrueScreenDay(db: any, play: any, assignment: any, playedAt: n
     delta.plays_filler = 1;
     if (play.rendered) {
       delta.filler_airtime_ms = play.playing_duration_ms;
-      if (presence.measured) { delta.filler_presence_n = 1; delta.filler_presence_sum = presence.avg_persons; }
+      if (presence.measured && !play.measurement_binding_id) { delta.filler_presence_n = 1; delta.filler_presence_sum = presence.avg_persons; }
     }
   } else if (play.rendered) {
     delta.plays_rendered = 1; delta.plays_billable = Number(play.billable === true);
     delta.airtime_ms = play.playing_duration_ms;
-    if (presence.measured) { delta.presence_n = 1; delta.presence_sum = presence.avg_persons; }
+    if (presence.measured && !play.measurement_binding_id) { delta.presence_n = 1; delta.presence_sum = presence.avg_persons; }
     const a = play.attention;
     if (a && play.attention_status === 'accepted') {
       acceptedAttention=a;
@@ -73,7 +73,7 @@ export function accrueScreenDay(db: any, play: any, assignment: any, playedAt: n
     const c=attentionCounters(); c.plays=1;c.playing_ms=acceptedAttention.playing_ms;
     c.body_observed_ms=acceptedAttention.body[0];c.body_unknown_ms=acceptedAttention.body[1];c.face_observed_ms=acceptedAttention.face[0];c.face_unknown_ms=acceptedAttention.face[1];
     c.attention_observed_ms=acceptedAttention.attention[0];c.attention_unknown_ms=acceptedAttention.attention[1];c.expression_observed_ms=acceptedAttention.expression[0];c.expression_unknown_ms=acceptedAttention.expression[1];
-    c.presence_person_ms=acceptedAttention.presence_person_ms||0;c.looking_person_ms=acceptedAttention.looking_person_ms||0;c.face_assessable_person_ms=acceptedAttention.face_assessable_person_ms||0;
+    c.presence_person_ms=acceptedAttention.presence_person_ms||0;c.looking_person_ms=acceptedAttention.looking_person_ms||0;c.longest_look_ms=acceptedAttention.longest_look_ms||0;c.face_assessable_person_ms=acceptedAttention.face_assessable_person_ms||0;
     c.smile_person_ms=acceptedAttention.smile_person_ms||0;c.expression_assessable_person_ms=acceptedAttention.expression_assessable_person_ms||0;c.estimated_impressions=acceptedAttention.estimated_impressions||0;c.attentive_impressions=acceptedAttention.attentive_impressions||0;c.tracked_visits=acceptedAttention.tracked_visits||0;
     addAttention(series.totals,c);
     if(validTime){const hour=String(new Date(at+330*60000).getUTCHours());series.hours[hour]||=attentionCounters();addAttention(series.hours[hour],c);}

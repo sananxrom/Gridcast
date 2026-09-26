@@ -9,14 +9,14 @@ import type { Firestore, Transaction } from 'firebase-admin/firestore';
 /** Lookups are hints only. Authentication and authorization still run inside fn. */
 export type StoreContext = {
   method: string; path: string[]; uid?: string; deviceId?: string; loginEmail?: string;
-  maintenanceId?: string; maintenanceLimiterIds?: string[]; pairingCodeHash?: string; playUid?: string; seqNo?: number; assignmentId?: string;
+  maintenanceId?: string; maintenanceLimiterIds?: string[]; pairingCodeHash?: string; playUid?: string; seqNo?: number; assignmentId?: string; measurementBindingId?: string;
   startedAtDevice?: string; clockOffset?: number; orgId?: string; entity?: string; after?: string; attentionAfter?:string; attentionRevision?:string; limit?: number; targetOrg?: string; from?: string; to?: string; reportScreen?: string; reportCampaign?: string;
 };
 export class StoreError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 const DOMAIN = ['orgs', 'users', 'screens', 'advertisers', 'creatives', 'campaigns', 'groups', 'devices', 'configs', 'assets'] as const;
-const EVENTS = ['plays', 'presence', 'device_assignments', 'audit', 'diagnostic_results','attention_calibrations'] as const;
+const EVENTS = ['plays', 'presence', 'device_assignments', 'measurement_bindings', 'audit', 'diagnostic_results','attention_calibrations'] as const;
 const COLLECTIONS = [...DOMAIN, ...EVENTS, 'maintenance_grants', 'maintenance_limits', 'diagnostic_assignments', 'settlement_buckets', 'campaign_budgets', 'screen_day','attention_day'];
 const DOMAIN_LIMIT = 2000;
 export const HISTORY_LIMIT = 1500;
@@ -283,6 +283,7 @@ export function createFirestoreStore(database: Firestore) {
         await referenced(tx,'diagnostic_assignments',[device.current_diagnostic_id, context.assignmentId],snapshot.diagnostic_assignments);
         await referenced(tx,'diagnostic_results',[context.assignmentId],snapshot.diagnostic_results);
       }
+      if (device && context.measurementBindingId) await referenced(tx,'measurement_bindings',[context.measurementBindingId],snapshot.measurement_bindings);
       if (context.assignmentId && !context.path[0].startsWith('diagnostic')) {
         await referenced(tx, 'device_assignments', [context.assignmentId], snapshot.device_assignments);
         const assignment = snapshot.device_assignments.find((a: any) => a.device_id === device?.id && a.org_id === orgId);
@@ -294,7 +295,22 @@ export function createFirestoreStore(database: Firestore) {
       }
       // Held assignments are immutable evidence. Load by ID for safe cache reuse, never
       // mint fresh reservations merely because this transaction omitted prior rows.
-      if (device && context.path[0] === 'playlist') await referenced(tx,'device_assignments',device.assignment_set?.ids || [],snapshot.device_assignments);
+      if (device && context.path[0] === 'playlist') {
+        await referenced(tx,'device_assignments',device.assignment_set?.ids || [],snapshot.device_assignments);
+        await referenced(tx,'measurement_bindings',device.assignment_set?.binding_ids || [],snapshot.measurement_bindings);
+        // Binding IDs are deterministic but the mutable held set can be written by a
+        // protocol-2 player that does not know about them. Prefetch the bounded records
+        // for held assignments so a later protocol-3 poll safely reuses them via tx.create.
+        for (const assignmentId of [...new Set(device.assignment_set?.ids || [])]) {
+          if (!validId(assignmentId)) continue;
+          const prior: any = await tx.get(database.collection('measurement_bindings').where('assignment_id','==',assignmentId).limit(501));
+          if (prior.docs.length > 500) throw new StoreError(503,'This device has too many measurement revisions for safe playlist reuse');
+          for (const row of prior.docs) {
+            const value = row.data();
+            if (value.device_id === device.id && !snapshot.measurement_bindings.some((b: any) => b.id === value.id)) snapshot.measurement_bindings.push(value);
+          }
+        }
+      }
       if ((device && ['playlist','play'].includes(context.path[0])) || (actor && context.method === 'POST' && context.path[0] === 'campaign')) {
         state.budgetCampaignIds = snapshot.campaigns.map((c: any) => c.id);
         await referenced(tx,'campaign_budgets',state.budgetCampaignIds!.map(budgetId),snapshot.campaign_budgets);
@@ -316,7 +332,10 @@ export function createFirestoreStore(database: Firestore) {
           // cross midnight between prefetch and validation without resetting an existing row.
           const receive = Date.now();
           await referenced(tx,'screen_day',[...(at >= Date.parse(a.issued_at)-60000 && at <= Date.parse(a.valid_until) ? [at] : []),receive-86400000,receive,receive+86400000].map(t => reportingKey(a.screen_id,a.campaign_id,a.creative_id,t)),snapshot.screen_day);
-          if(a.attention_enabled===true){const sample={screen_id:a.screen_id,campaign_id:a.campaign_id,creative_id:a.creative_id,attention_profile:a.attention_profile,attention_manifest_sha256:a.attention_manifest_sha256,attention_pipeline_sha256:a.attention_pipeline_sha256};
+          const v2Binding=snapshot.measurement_bindings.find((b:any)=>b.id===context.measurementBindingId&&b.assignment_id===a.id);
+          const sample=v2Binding?{screen_id:a.screen_id,campaign_id:a.campaign_id,creative_id:a.creative_id,attention_profile:v2Binding.profile,attention_manifest_sha256:v2Binding.manifest_sha256,attention_pipeline_sha256:v2Binding.pipeline_sha256,
+              attention:{calibration_revision:v2Binding.config.calibration_revision}}:a.attention_enabled===true?{screen_id:a.screen_id,campaign_id:a.campaign_id,creative_id:a.creative_id,attention_profile:a.attention_profile,attention_manifest_sha256:a.attention_manifest_sha256,attention_pipeline_sha256:a.attention_pipeline_sha256}:null;
+          if(sample){
             const times=[...(at >= Date.parse(a.issued_at)-60000 && at <= Date.parse(a.valid_until) ? [at] : []),receive-86400000,receive,receive+86400000];
             const attentionKeys=times.flatMap(t=>[attentionDayKey({...sample,attention_mode:'default'},a,t),attentionDayKey({...sample,attention_mode:'guided'},a,t)]);
             await referenced(tx,'attention_day',attentionKeys,snapshot.attention_day);}

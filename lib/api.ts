@@ -61,7 +61,8 @@ function validateInventory() {
 function playlistFor(screen: any, device?: any, rotationIndex = 0) {
   const calibration=calibrationForDevice(screen,device);
   const config:any = { ...cfg.flatten(resolveFor(screen)), attention_enabled: screen.attention_settings?.enabled === true,
-    attention_profile: screen.attention_settings?.profile || ATTENTION_PROFILE.id, attention_calibration: calibration };
+    attention_profile: screen.attention_settings?.profile || ATTENTION_PROFILE.id, attention_calibration: calibration,
+    presence_profile_id:screen.has_camera&&cfg.flatten(resolveFor(screen)).camera_source!=='ip'? 'presence-v2/efficientdet-lite0-mediapipe-face/1':null };
   const items: any[] = [], decisions: any[] = [], loopAdvertisers: any[] = [], rotationPool: any[] = [];
   for (const campaign of db.campaigns.filter((c: any) => c.screen_ids?.includes(screen.id))) {
     const advertiser = db.advertisers.find((a: any) => a.id === campaign.advertiser_id);
@@ -135,7 +136,8 @@ export function handle(method: string, seg: string[], q: URLSearchParams, body: 
         maintenanceLimiterIds: seg.join('/') === 'maintenance/redeem' ? maintenanceLimiterIds(clientKey) : undefined,
         loginEmail: seg.join('/') === 'login' ? String(body.email || '').trim().toLowerCase() : undefined,
         pairingCodeHash: seg.join('/') === 'pair' ? pairingCodeHash(String(body.code || '')) : undefined,
-        playUid: typeof body.play_uid === 'string' ? body.play_uid : undefined, attentionRevision:typeof body.calibration?.revision==='string'?body.calibration.revision:undefined,
+        playUid: typeof body.play_uid === 'string' ? body.play_uid : undefined, measurementBindingId: typeof body.measurement_binding_id === 'string' ? body.measurement_binding_id : undefined,
+        attentionRevision:typeof body.calibration?.revision==='string'?body.calibration.revision:undefined,
         startedAtDevice:body.started_at_device,clockOffset:body.server_clock_offset_ms,seqNo: body.seq_no, assignmentId: body.assignment_id, orgId: q.get('org') || q.get('org_id') || undefined,
         targetOrg: typeof body.org_id === 'string' ? body.org_id : undefined, entity:q.get('entity') || undefined,
         from:q.get('from') || undefined,to:q.get('to') || undefined,reportScreen:q.get('screen') || undefined,reportCampaign:q.get('campaign') || undefined,
@@ -171,7 +173,7 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
   const maintenance = maintenanceRoute(db,method,seg,body,token,me,{clientKey});
   if (maintenance) { if (maintenance.changed) await save(); return {status:maintenance.status,body:maintenance.body}; }
   const pairingAudit = method === 'POST' && p === 'pair' ? auditSnapshot(db) : null;
-  const transport = deviceRoute(db, method, seg, body, token, { playlist: playlistFor, playerProtocol: Number(q.get('protocol') || 0), clientKey: clientKey || undefined });
+  const transport = deviceRoute(db, method, seg, body, token, { playlist: playlistFor, playerProtocol: Number(q.get('protocol') || body.player_protocol || 0), clientKey: clientKey || undefined });
   if (transport) {
     if (transport.changed) {
       if (pairingAudit && transport.body.device?.id) {

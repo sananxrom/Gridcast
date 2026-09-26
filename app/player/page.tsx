@@ -12,18 +12,26 @@ import { ATTENTION_PROFILE, validateAttentionCalibration, prepareAttentionAssets
 import { validateAttentionSummary, prepareAttentionEnvelope, attentionQueuedEventBytes, ATTENTION_LIMITS } from '@/lib/vision/attention-contracts';
 import { summaryForAttentionMode } from '@/lib/vision/attention-summary';
 import { GazeCalibration } from '@/lib/vision/calibration';
-import type { Observation } from '@/lib/vision/metrics';
+import type { EvaluationSnapshot, FaceView, Observation, PlaySummary, TrackView } from '@/lib/vision/metrics';
+import { PRESENCE_V2_PROFILE } from '@/lib/vision/presence-v2-profile';
+import { createPresenceV2Runtime, preparePresenceV2Assets, type PresenceV2State } from '@/lib/vision/production-v2';
+import { presenceV2Summary, preparePresenceV2Envelope } from '@/lib/vision/attention-v2-contracts';
+import { PresenceV2LocalDiagnostics, type LocalTrackDiagnostics } from '@/lib/vision/local-diagnostics-v2';
 
 declare global { interface Window { YT: any; onYouTubeIframeAPIReady: () => void; cocoSsd: any; tf: any } }
-const APP_VERSION = 'gridcast-web/0.9.1';
+const APP_VERSION = 'gridcast-web/0.10.0';
 const MODEL_VERSION = 'coco-ssd@2.2.3/lite_mobilenet_v2';
+const PRESENCE_V2_MODEL_VERSION = PRESENCE_V2_PROFILE.body_model;
 type Credential = { token: string; device_id: string; screen_id: string };
-type Item = { kind?: 'diagnostic' | 'paid' | 'filler'; diagnostic_has_camera?: boolean; assignment_id: string; valid_until: string; campaign_id: string | null; creative_id: string;
+type Item = { kind?: 'diagnostic' | 'paid' | 'filler'; diagnostic_has_camera?: boolean; assignment_id: string; valid_until: string; campaign_id: string | null; creative_id: string; creative_name?:string;
+  measurement_binding_id?:string|null; measurement_profile?:string|null; measurement_config?:{calibration_revision:string|null;calibration:{yaw:number;pitch:number}|null;count_ceiling:number;confidence:number}|null;
   attention_enabled?:boolean; attention_profile?:string|null; attention_mode?:'default'|'guided'; attention_calibration_revision?:string|null;
   max_plays?: number; media_type?: 'video' | 'image'; youtube_id?: string; asset_url?: string; asset_id?: string; asset_sha256?: string; asset_bytes?: number; asset_mime?: string; width?: number; height?: number; duration_s: number };
 type Playlist = { screen: any; config: Record<string, any>; config_version: string | number; server_time: string; items: Item[]; filler_items?: Item[]; scheduling_mode?: string; budget_state?: string; readiness?: {message:string}; diagnostic?: {assignment_id:string;status:string;message:string} | null };
 type Slot = { item: Item; uid: string; started: number; startedPlaying: boolean; accumulated: number; segmentStart: number | null;
   mediaStart: number; samples: number[]; cameraHealthy: boolean; config: Record<string, any>; version: string | number; offset: number; done: boolean; attentionValid?:boolean; attentionStarted?:boolean; attentionMode?:'default'|'guided'; attentionRevision?:string|null; attentionBindingInvalidated?:boolean; attentionYaw?:number; attentionPitch?:number; diagnosticRun?: string; decodedWidth?: number; decodedHeight?: number };
+type AttentionDisplay = { snapshot:EvaluationSnapshot; tracks:TrackView[]; faces:FaceView[]; localTracks:LocalTrackDiagnostics[]; liveFresh:boolean; performance:{body_fps:number|null;face_fps:number|null;body_result_ms:number|null;face_result_ms:number|null} };
+type AttentionLastAd = { name:string; summary:PlaySummary|null; mode:'default'|'guided'; revision:string|null };
 function script(src: string, ready: () => boolean) {
   return new Promise<void>((resolve, reject) => {
     if (ready()) { resolve(); return; }
@@ -44,6 +52,9 @@ export default function Player() {
   const [credential, setCredential] = useState<Credential | null>(null), [code, setCode] = useState(''), [err, setErr] = useState('');
   const [screen, setScreen] = useState<any>(null), [current, setCurrent] = useState<Item | null>(null), [status, setStatus] = useState('Starting');
   const [count, setCount] = useState<number | null>(null), [average, setAverage] = useState<string>('—'), [recorded, setRecorded] = useState(0);
+  const [attentionDisplay,setAttentionDisplay]=useState<AttentionDisplay|null>(null),[attentionLastAd,setAttentionLastAd]=useState<AttentionLastAd|null>(null);
+  const [attentionProvenance,setAttentionProvenance]=useState<{mode:'default'|'guided';revision:string|null}|null>(null);
+  const [showTrackingBoxes,setShowTrackingBoxes]=useState(true),[showFaceDetails,setShowFaceDetails]=useState(true),[diagnosticsExpanded,setDiagnosticsExpanded]=useState(false);
   const [queue, setQueue] = useState({ pending: 0, blocked: 0, reserved: 0, total: 0 });
   const [visionStatus, setVisionStatus] = useState('Waiting for screen settings'), [visionRetry, setVisionRetry] = useState(false);
   const [diagnosticStatus, setDiagnosticStatus] = useState('');
@@ -56,6 +67,10 @@ const [soundBlocked, setSoundBlocked] = useState(false);
   const [attentionStatus,setAttentionStatus]=useState(''),[attentionProgress,setAttentionProgress]=useState<{message:string;phase:'checking'|'downloading'|'verifying'|'initializing';downloaded:number;verified:number;total:number;elapsedSeconds:number;etaSeconds:number|null}|null>(null),[attentionCalibrating,setAttentionCalibrating]=useState(false);
   const [attentionEnabled,setAttentionEnabled]=useState(false),[attentionSetupActive,setAttentionSetupActive]=useState(false);
   const [attentionModelsReady,setAttentionModelsReady]=useState(false),[attentionCameraReady,setAttentionCameraReady]=useState(false);
+  const commissioning = !rejected && (overlayEnabled || diagnosticActive);
+  const commissioningRef=useRef(false),attentionEnabledRef=useRef(false),attentionReadyRef=useRef(false),trackingBoxesRef=useRef(true),faceDetailsRef=useRef(true);
+  commissioningRef.current=commissioning;attentionEnabledRef.current=attentionEnabled;attentionReadyRef.current=attentionModelsReady&&attentionCameraReady;
+  trackingBoxesRef.current=showTrackingBoxes;faceDetailsRef.current=showFaceDetails;
   const operationBusy = useRef(false);
   const settlePlayer = useRef<() => Promise<void>>(async () => {});
   const retryCamera = useRef<() => void>(() => {});
@@ -64,6 +79,26 @@ const [soundBlocked, setSoundBlocked] = useState(false);
   const retryAttention = useRef<() => void>(() => {}), cancelAttention = useRef<() => void>(() => {});
   const camera = useRef<HTMLVideoElement>(null), canvas = useRef<HTMLCanvasElement>(null), media = useRef<HTMLVideoElement>(null), standbyMedia = useRef<HTMLVideoElement>(null), imageSurface = useRef<HTMLImageElement>(null), youtubeMount = useRef<HTMLDivElement>(null);
   useEffect(() => answerEvidenceProtocol(), []);
+  useEffect(() => {
+    const video=camera.current, overlay=canvas.current, ctx=overlay?.getContext('2d');
+    if (!overlay || !ctx) return;
+    const clear=()=>ctx.clearRect(0,0,overlay.width,overlay.height);
+    if (!commissioning || !attentionEnabled || !attentionModelsReady || !attentionCameraReady || !attentionDisplay?.liveFresh || document.hidden || video?.paused || !video?.videoWidth || !video?.videoHeight) { clear(); return; }
+    const width=video.videoWidth,height=video.videoHeight;
+    if(overlay.width!==width||overlay.height!==height){overlay.width=width;overlay.height=height;}
+    clear();
+    const color=(looking:boolean|null,uncertain=false)=>uncertain||looking===null?'#f59e0b':looking?'#10b981':'#3b82f6';
+    const rect=(box:[number,number,number,number])=>({x:(1-box[2])*width,y:box[1]*height,w:(box[2]-box[0])*width,h:(box[3]-box[1])*height});
+    ctx.font='600 14px system-ui'; ctx.lineWidth=3;
+    if(trackingBoxesRef.current) for(const track of attentionDisplay.tracks){
+      const r=rect(track.box),uncertain=track.uncertain||track.looking===null,c=color(track.looking,uncertain),local=attentionDisplay.localTracks.find(x=>x.key===track.key),label=`#${track.key} · ${uncertain?'Unknown':track.looking?'Looking':'Not looking'}${local?.distance_cm!==null&&local?.distance_cm!==undefined?` · ~${(local.distance_cm/100).toFixed(1)}m ${local.distance_band||''}`:''}${local?.stopped?' · Stopped':''}`;
+      ctx.strokeStyle=c;ctx.strokeRect(r.x,r.y,r.w,r.h);ctx.fillStyle=c;const tw=ctx.measureText(label).width+12,ty=Math.max(22,r.y-4);ctx.fillRect(r.x,ty-19,tw,20);ctx.fillStyle='#071018';ctx.fillText(label,r.x+6,ty-5);
+    }
+    if(faceDetailsRef.current) for(const face of attentionDisplay.faces){
+      const r=rect(face.box),uncertain=face.reason!==null||face.looking===null,c=color(face.looking,uncertain),label=`Face ${face.track_key===null?'unmatched':`#${face.track_key}`} · ${uncertain?'Unknown':face.looking?'Looking':'Not looking'}`;
+      ctx.strokeStyle=c;ctx.strokeRect(r.x,r.y,r.w,r.h);ctx.fillStyle=c;const tw=ctx.measureText(label).width+12,ty=Math.min(height-2,r.y+r.h+21);ctx.fillRect(r.x,ty-18,tw,20);ctx.fillStyle='#071018';ctx.fillText(label,r.x+6,ty-4);
+    }
+  },[commissioning,attentionEnabled,attentionModelsReady,attentionCameraReady,attentionDisplay,showTrackingBoxes,showFaceDetails]);
   useEffect(() => {
     try { const c = JSON.parse(localStorage.getItem('gc_device') || 'null'); if (c?.token && c?.device_id && c?.screen_id) setCredential(c); }
     catch { setErr('Saved pairing could not be read. Pair this player again.'); }
@@ -91,7 +126,9 @@ const [soundBlocked, setSoundBlocked] = useState(false);
       return preparedImages.get(item.assignment_id)!;
     };
     let yt: any = null, ytReady = false, detector: any = null, stream: MediaStream | null = null, cameraOK = false;
-    let attentionWorker:any=null,attentionAbort:AbortController|null=null,attentionMetrics:any=null,attentionCalibration:any=null,attentionCameraRef='',attentionProfile='',attentionRotation:0|90|180|270=0;
+    let attentionWorker:any=null,attentionAbort:AbortController|null=null,presenceV2Setup:Promise<void>|null=null,attentionMetrics:any=null,attentionCalibration:any=null,attentionCameraRef='',attentionProfile='',attentionRotation:0|90|180|270=0;
+    const presenceV2Diagnostics=new PresenceV2LocalDiagnostics();
+    let presenceV2State:PresenceV2State|null=null;
     let activeCalibrator:GazeCalibration|null=null,activeCalibratorToken:string|null=null,calibrationRequested=false,calibrationRequestUntil=0,calibrationFeedbackUntil=0,attentionSetupPaused=false;
     let startup = false, pulling = false, flushing = false, heartbeatBusy = false, fatal = true, actualOffset = 0, reservedPlayUid: string | null = null;
     let requestedAudio = true, browserBlockedAudio = false;
@@ -99,14 +136,76 @@ const [soundBlocked, setSoundBlocked] = useState(false);
     let diagnosticFlushing = false, lastSampleAt: string | null = null;
     const attemptedDiagnostics = new Set<string>();
     let lastPull = 0, lastHeartbeat = 0, lastDetect = 0, lastReservationTouch = 0, detecting = false;
-    let cameraStarting = false, cameraKey = '', lastCameraFrame = -1, detectorBroken = false;
+    let cameraStarting = false, cameraKey = '', lastCameraFrame = -1, detectorBroken = false, presenceFramePump = 0, lastPresenceBindingCheck = 0;
     const inferenceFrame = document.createElement('canvas');
     const cameraSurface = camera.current, overlay = canvas.current;
     setVisionStatus('Waiting for screen settings'); setVisionRetry(false); setCount(null);
     const booted = performance.now(), timers = new Set<ReturnType<typeof setTimeout>>();
     const later = (f: () => void, delay: number) => { const t = setTimeout(() => { timers.delete(t); if (!disposed) f(); }, delay); timers.add(t); };
     const state = (value: string) => { if (!disposed) setStatus(value); };
-    function stopAttention(){attentionAbort?.abort();attentionAbort=null;attentionWorker?.close();attentionWorker=null;activeCalibrator=null;activeCalibratorToken=null;attentionProfile='';setAttentionModelsReady(false);setAttentionCalibrating(false);if(currentSlot)currentSlot.attentionValid=false;}
+    const isPresenceV2=(item?:Item|null)=>item?.measurement_profile===PRESENCE_V2_PROFILE.id&&typeof item.measurement_binding_id==='string';
+    const hasPresenceV2=(settings?:Playlist|null)=>!!settings&&(settings.config?.presence_profile_id===PRESENCE_V2_PROFILE.id||[...(settings.items||[]),...(settings.filler_items||[])].some(isPresenceV2));
+    function stopAttention(){attentionAbort?.abort();attentionAbort=null;presenceV2Setup=null;attentionWorker?.close();attentionWorker=null;presenceV2Diagnostics.reset();presenceV2State=null;activeCalibrator=null;activeCalibratorToken=null;attentionProfile='';setAttentionModelsReady(false);setAttentionCalibrating(false);setAttentionDisplay(null);if(currentSlot)currentSlot.attentionValid=false;}
+    async function ensurePresenceV2(settings:Playlist){
+      if(!hasPresenceV2(settings))return;
+      if(attentionWorker&&attentionProfile===PRESENCE_V2_PROFILE.id)return;
+      if(presenceV2Setup&&attentionProfile===PRESENCE_V2_PROFILE.id)return presenceV2Setup;
+      if(attentionProfile!==PRESENCE_V2_PROFILE.id){attentionAbort?.abort();attentionWorker?.close();activeCalibrator=null;activeCalibratorToken=null;attentionWorker=null;attentionMetrics=createAttentionMetrics();}
+      attentionProfile=PRESENCE_V2_PROFILE.id;presenceV2State=null;attentionAbort=new AbortController();const controller=attentionAbort;
+      const modelConfig=[...(settings.items||[]),...(settings.filler_items||[])].find(isPresenceV2)?.measurement_config;
+      setAttentionSetupActive(true);setAttentionModelsReady(false);setAttentionStatus('Preparing the pinned body and face models');
+      const setup=(async()=>{try{
+        const assets=await preparePresenceV2Assets(controller.signal,value=>{if(!disposed&&!controller.signal.aborted){setAttentionStatus(value.message);setAttentionProgress({...value});}});
+        if(disposed||controller.signal.aborted)return;
+        setAttentionProgress({message:'Verified model files · initializing local models',phase:'initializing',downloaded:assets.downloaded,verified:assets.verified,total:assets.total,elapsedSeconds:assets.elapsedSeconds,etaSeconds:null});
+        attentionWorker=await createPresenceV2Runtime(assets,controller.signal,(observation,context)=>{
+          if(context?.calibration_id&&context.calibration_id===activeCalibratorToken)activeCalibrator?.observe(observation);
+          const slot=currentSlot,play=context?.play,accepted=!!(play&&slot&&slot.uid===play.uid&&slot.segmentStart===play.segment&&slot.attentionValid&&slot.attentionStarted||context?.diagnostic_uid&&slot&&slot.uid===context.diagnostic_uid&&slot.diagnosticRun);
+          if(accepted){
+            attentionMetrics?.observe(observation);
+            if(observation.bodies){const now=observation.at;presenceV2Diagnostics.observeBodies(now,attentionMetrics?.liveTracks(now)||[],cameraSurface?.videoWidth||640,cameraSurface?.videoHeight||480);}
+            if(observation.faces){const now=observation.at;presenceV2Diagnostics.observeFaces(now,observation.faces.faces||[],attentionMetrics?.liveFaces(now)||[]);}
+          }
+        },state=>{
+          presenceV2State=state;
+          const body=state.body.state,face=state.face.state;setAttentionModelsReady(body==='ready'||face==='ready');
+          const line=(stage:typeof state.body,label:string)=>`${label}: ${stage.state==='ready'?'ready':stage.state==='error'?`unavailable${stage.message?` · ${stage.message}`:''}`:'loading'}`;
+          setAttentionStatus(`${line(state.body,'People')} · ${line(state.face,'Face / attention')}${modelConfig?.calibration_revision?' · guided calibration':' · default zero offsets'}`);
+          if(body==='error')setVisionRetry(true);else setVisionRetry(false);
+        });
+        if(disposed||controller.signal.aborted){attentionWorker?.close();attentionWorker=null;return;}
+        startPresenceFramePump();
+        setAttentionProgress(null);setAttentionSetupActive(false);
+      }catch(error:any){if(error?.name!=='AbortError'&&!disposed){setAttentionModelsReady(false);setAttentionStatus(`CV unavailable · ${error.message||'model setup failed'}; playback continues`);setAttentionProgress(null);setAttentionSetupActive(false);}}})();
+      presenceV2Setup=setup;
+      try{await setup;}finally{if(presenceV2Setup===setup)presenceV2Setup=null;}
+    }
+    function startPresenceFramePump(){
+      if(presenceFramePump||disposed)return;
+      const tick=()=>{
+        presenceFramePump=0;
+        if(disposed)return;
+        const s=currentSlot;
+        if(attentionWorker&&cameraSurface&&cameraHealthyNow()&&!document.hidden){
+          if(s&&isPresenceV2(s.item)&&s.segmentStart!==null&&!s.done){
+            if(s.attentionMode==='guided'&&performance.now()-lastPresenceBindingCheck>=250){
+              lastPresenceBindingCheck=performance.now();
+              const track=stream?.getVideoTracks()[0],width=cameraSurface.videoWidth,height=cameraSurface.videoHeight,raw=Number(window.screen.orientation?.angle||0),rotation:0|90|180|270=([0,90,180,270] as number[]).includes(raw)?raw as 0|90|180|270:0;
+              const currentRef=track?localCameraRef(paired.device_id,paired.screen_id,track,width,height,rotation):'';
+              if(!track||currentRef!==attentionCameraRef||width!==attentionCalibration?.width||height!==attentionCalibration?.height||rotation!==attentionCalibration?.rotation||attentionCalibration?.revision!==s.attentionRevision){
+                attentionMetrics?.boundary(s.uid,false,performance.now());s.attentionBindingInvalidated=true;s.attentionValid=false;setAttentionStatus('Camera changed during this play · guided attention paused; playback continues.');
+              }
+            }
+            const play=s.attentionValid&&!s.diagnosticRun?{uid:s.uid,segment:s.segmentStart,mode:s.attentionMode,revision:s.attentionRevision}:null;
+            void attentionWorker.frame(cameraSurface,{yaw:s.attentionYaw||0,pitch:s.attentionPitch||0},{play,diagnostic_uid:s.diagnosticRun?s.uid:null,calibration_id:activeCalibratorToken},s.item.measurement_config?.confidence);
+          }else if(activeCalibratorToken){
+            void attentionWorker.frame(cameraSurface,{yaw:0,pitch:0},{calibration_id:activeCalibratorToken},currentSlot?.item.measurement_config?.confidence);
+          }
+        }
+        presenceFramePump=requestAnimationFrame(tick);
+      };
+      presenceFramePump=requestAnimationFrame(tick);
+    }
     async function ensureAttention(settings:Playlist){
       const k=settings.config;
       if(k.attention_enabled!==true||k.attention_profile!==ATTENTION_PROFILE.id){stopAttention();attentionCalibration=null;calibrationRequested=false;attentionSetupPaused=false;setAttentionCameraReady(false);setAttentionStatus('Off');setAttentionProgress(null);setAttentionSetupActive(false);return;}
@@ -125,7 +224,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
           if(context?.calibration_id&&context.calibration_id===activeCalibratorToken)activeCalibrator?.observe(observation);
           const s=currentSlot,p=context?.play;
           if(p&&s&&s.uid===p.uid&&s.segmentStart===p.segment&&s.attentionValid&&s.attentionMode===p.mode&&s.attentionRevision===p.revision)attentionMetrics?.observe(observation);
-        },message=>{if(!disposed){attentionSetupPaused=true;setAttentionModelsReady(false);setAttentionStatus(`Optional attention unavailable · ${message}; playback continues`);attentionWorker=null;}});
+        },message=>{if(!disposed){attentionSetupPaused=true;setAttentionModelsReady(false);setAttentionDisplay(null);setAttentionStatus(`Optional attention unavailable · ${message}; playback continues`);attentionWorker=null;}});
         if(disposed||controller.signal.aborted){attentionWorker?.close();attentionWorker=null;return;}
         const savedCalibration=resolveAttentionCalibration(settings);
         setAttentionModelsReady(true);
@@ -133,7 +232,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
       }catch(error:any){if(error?.name!=='AbortError'&&!disposed){attentionSetupPaused=true;setAttentionModelsReady(false);setAttentionStatus(`Optional attention unavailable · ${error.message||'model setup failed'}; playback continues`);setAttentionProgress(null);} }
     }
     function resolveAttentionCalibration(settings:Playlist){
-      if(settings.config.attention_enabled!==true||!stream||!cameraSurface){attentionCalibration=null;return null;}
+      if((settings.config.attention_enabled!==true&&!hasPresenceV2(settings))||!stream||!cameraSurface){attentionCalibration=null;return null;}
       const track=stream.getVideoTracks()[0],width=cameraSurface.videoWidth,height=cameraSurface.videoHeight;
       const rawAngle=Number(window.screen.orientation?.angle||0),rotation:0|90|180|270=([0,90,180,270] as number[]).includes(rawAngle)?rawAngle as 0|90|180|270:0;attentionRotation=rotation;
       attentionCameraRef=localCameraRef(paired.device_id,paired.screen_id,track,width,height,rotation);
@@ -169,14 +268,16 @@ const [soundBlocked, setSoundBlocked] = useState(false);
       if (playing && s.segmentStart === null) {
         if (!s.startedPlaying) { s.started = Date.now(); s.mediaStart = mediaTime(); s.startedPlaying = true; }
         s.segmentStart = performance.now(); state(s.diagnosticRun ? 'Running screen diagnostic · no commercial delivery' : 'Playing');
-        s.attentionValid=s.config.attention_enabled===true&&s.item.attention_enabled===true&&s.item.attention_profile===ATTENTION_PROFILE.id&&!s.attentionBindingInvalidated;
+        s.attentionValid=isPresenceV2(s.item)||s.config.attention_enabled===true&&s.item.attention_enabled===true&&s.item.attention_profile===ATTENTION_PROFILE.id&&!s.attentionBindingInvalidated;
         if(!s.diagnosticRun&&s.attentionValid&&attentionMetrics){if(!s.attentionStarted)attentionMetrics.reset();attentionMetrics.boundary(s.uid,true,s.segmentStart);s.attentionStarted=true;}
+        setAttentionDisplay(null);
         if (!s.diagnosticRun) void authRequest('/nowplaying', { assignment_id: s.item.assignment_id }).catch(() => {});
       } else if (!playing && s.segmentStart !== null) {
         s.accumulated += performance.now() - s.segmentStart; s.segmentStart = null;
         if(s.attentionValid&&attentionMetrics)attentionMetrics.boundary(s.uid,false,performance.now());
+        if(s.attentionStarted&&attentionMetrics)setAttentionDisplay({snapshot:attentionMetrics.snapshot(performance.now()),tracks:[],faces:[],localTracks:[],liveFresh:false,performance:{body_fps:presenceV2State?.body.observed_fps??null,face_fps:presenceV2State?.face.observed_fps??null,body_result_ms:presenceV2State?.body.result_ms??null,face_result_ms:presenceV2State?.face.result_ms??null}});
         clearDetection();
-        if (!disposed && cameraHealthyNow() && detector && !detectorBroken && !cameraStarting) setVisionStatus('Ready · counts resume with playback');
+        if (!disposed && cameraHealthyNow() && (isPresenceV2(s.item)?presenceV2State?.body.state==='ready':!!detector&&!detectorBroken) && !cameraStarting) setVisionStatus('Ready · counts resume with playback');
       }
     }
     function cameraHealthyNow() {
@@ -190,12 +291,12 @@ const [soundBlocked, setSoundBlocked] = useState(false);
     }
     function cameraLost() {
       if (disposed || !stream) return;
-      cameraOK = false; setAttentionCameraReady(false); if (currentSlot) currentSlot.cameraHealthy = false; clearDetection();
+      cameraOK = false; setAttentionCameraReady(false); if (currentSlot) currentSlot.cameraHealthy = false; setAttentionDisplay(null);clearDetection();
       if (!disposed && !cameraStarting) { setVisionStatus('Camera interrupted. Check the camera, then retry.'); setVisionRetry(true); }
     }
     function cameraRecovered() {
       cameraOK = cameraHealthyNow(); setAttentionCameraReady(cameraOK);
-      if (!disposed && cameraOK && detector && !detectorBroken && !cameraStarting) {
+      if (!disposed && cameraOK && ((hasPresenceV2(playlist) && presenceV2State?.body.state === 'ready') || detector && !detectorBroken) && !cameraStarting) {
         setVisionStatus('Ready · counts update during playback'); setVisionRetry(false);
       }
     }
@@ -243,7 +344,13 @@ const [soundBlocked, setSoundBlocked] = useState(false);
       try { if (media.current) media.current.muted = true; if (standbyMedia.current) standbyMedia.current.muted = true;
         activeMedia?.pause(); yt?.mute?.(); yt?.stopVideo?.(); } catch {}
     }
-    function vision() { return { camera_state: !playlist?.screen.has_camera ? 'disabled' : cameraStarting ? 'starting' : cameraHealthyNow() ? 'ready' : 'unavailable', model_state: detectorBroken ? 'error' : detector ? 'ready' : cameraStarting ? 'loading' : 'not_loaded', model_ver: detector && !detectorBroken ? MODEL_VERSION : null, last_sample_at: lastSampleAt }; }
+    function vision() {
+      const v2=isPresenceV2(currentSlot?.item), bodyState=presenceV2State?.body.state;
+      return { camera_state: !playlist?.screen.has_camera ? 'disabled' : cameraStarting ? 'starting' : cameraHealthyNow() ? 'ready' : 'unavailable',
+        model_state: v2 ? bodyState==='ready'?'ready':bodyState==='error'?'error':cameraStarting?'loading':'not_loaded' : detectorBroken ? 'error' : detector ? 'ready' : cameraStarting ? 'loading' : 'not_loaded',
+        model_ver: v2 ? bodyState==='ready'?PRESENCE_V2_MODEL_VERSION:null : detector && !detectorBroken ? MODEL_VERSION : null,
+        ...(v2?{presence_profile_id:PRESENCE_V2_PROFILE.id,measurement_binding_id:currentSlot?.item.measurement_binding_id,assignment_id:currentSlot?.item.assignment_id}:{}),last_sample_at: lastSampleAt };
+    }
     async function flushTest() {
       if (diagnosticFlushing || disposed || fatal) return;
       diagnosticFlushing = true;
@@ -274,6 +381,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
       const s = currentSlot; if (!s || s.done) return;
       segment(false); const mediaEnd = mediaTime(); s.done = true; if (!disposed) setDiagnosticActive(false); currentSlot = null; retiring = true; stopMedia(); clearDetection();
       if (reason === 'error' || reason === 'timeout') failedUntil.set(s.item.assignment_id, Date.now() + 30000);
+      const v2=isPresenceV2(s.item);
       const measured = s.cameraHealthy && cameraHealthyNow() && s.samples.length > 0;
       const avg = measured ? s.samples.reduce((a, b) => a + b, 0) / s.samples.length : null;
       const event = { play_uid: s.uid, assignment_id: s.item.assignment_id, campaign_id: s.item.campaign_id, creative_id: s.item.creative_id,
@@ -282,7 +390,9 @@ const [soundBlocked, setSoundBlocked] = useState(false);
         media_evidence: s.item.media_type === 'image' ? 'image_decode' : 'media_timeline',
         ...(s.item.media_type === 'image' ? { decoded_width: s.decodedWidth || 0, decoded_height: s.decodedHeight || 0, visible_duration_ms: Math.round(s.accumulated) } : {}),
         playing_duration_ms: Math.round(s.accumulated), media_started_s: s.mediaStart, media_ended_s: mediaEnd, ended_reason: reason,
-        server_clock_offset_ms: s.offset, measured, avg_persons: avg, sample_count: measured ? s.samples.length : 0, model_ver: measured ? MODEL_VERSION : null };
+        server_clock_offset_ms: s.offset, measured, avg_persons: avg, sample_count: measured ? s.samples.length : 0,
+        model_ver: measured ? v2?PRESENCE_V2_MODEL_VERSION:MODEL_VERSION : null,
+        ...(v2?{measurement_binding_id:s.item.measurement_binding_id,presence_profile_id:PRESENCE_V2_PROFILE.id}: {}) };
       if (s.diagnosticRun) {
         const report = { ...event, run_uid: s.diagnosticRun, camera_state: vision().camera_state, model_state: vision().model_state };
         try { await saveDiagnostic(paired.device_id, report); void flushTest(); }
@@ -291,17 +401,19 @@ const [soundBlocked, setSoundBlocked] = useState(false);
         return;
       }
       let firstEnqueueEvent:Record<string,any>=event;
-      if(s.attentionStarted&&attentionMetrics&&s.item.attention_enabled===true){
+      if(s.attentionStarted&&attentionMetrics&&(v2||s.item.attention_enabled===true)){
         attentionMetrics.boundary(s.uid,false,performance.now());
         const summary=attentionMetrics.snapshot(performance.now()).current;
         const revision=s.attentionMode==='guided'?s.attentionRevision||null:null;
-        const candidate=summary?summaryForAttentionMode(summary,event.playing_duration_ms,s.attentionMode||'default',revision):undefined;
-        const preparedEnvelope=prepareAttentionEnvelope(event,candidate,revision,s.attentionMode||'default');
+        setAttentionLastAd({name:s.item.creative_name||s.item.creative_id,summary,mode:s.attentionMode||'default',revision});
+        const mode=s.attentionMode||'default';
+        const candidate=summary?(v2?presenceV2Summary(summary,event.playing_duration_ms,mode,revision):summaryForAttentionMode(summary,event.playing_duration_ms,mode,revision)):undefined;
+        const preparedEnvelope=v2?preparePresenceV2Envelope(event,candidate,revision,mode):prepareAttentionEnvelope(event,candidate,revision,mode);
         firstEnqueueEvent=preparedEnvelope.event as Record<string,any>;
         if(preparedEnvelope.outcome==='size_limit')setAttentionStatus('This play was too large for the attention allowance. Legacy delivery evidence was saved without optional analytics.');
         else if(preparedEnvelope.outcome==='invalid')setAttentionStatus('Attention data was unavailable or invalid. Legacy delivery evidence was saved; unknown was not counted as zero.');
-        else if(preparedEnvelope.outcome==='included')setAttentionStatus('Attention analytics attached to this play.');
-        attentionMetrics.reset();s.attentionStarted=false;
+        else if(preparedEnvelope.outcome==='included')setAttentionStatus('Camera analytics attached to this play.');
+        attentionMetrics.reset();s.attentionStarted=false;setAttentionDisplay(null);
       }
       try {
         await enqueuePlay(paired.device_id, firstEnqueueEvent, Number(s.config.offline_buffer_plays) || 5000);
@@ -323,10 +435,11 @@ const [soundBlocked, setSoundBlocked] = useState(false);
       try {
         const ticket = await beginOnlineAuthorization(paired.device_id);
         if (disposed || fatal) return;
-        const started = Date.now(), d: Playlist = await authRequest('/playlist/' + paired.screen_id + '?protocol=2');
+        const started = Date.now(), d: Playlist = await authRequest('/playlist/' + paired.screen_id + '?protocol=3');
         if (disposed || fatal) return;
         if (!d.config || !Array.isArray(d.items)) throw new Error('Player update required. Reload this page.');
-        setAttentionEnabled(d.config.attention_enabled===true);
+        setAttentionEnabled(d.config.attention_enabled===true||hasPresenceV2(d));
+        if(hasPresenceV2(d))attentionMetrics||=createAttentionMetrics();
         if (!(await authorizeOnlineSchedule(paired.device_id, ticket))) return;
         if (disposed || fatal) return;
         const received = Date.now(); actualOffset = Date.parse(d.server_time) - ((started + received) / 2);
@@ -378,7 +491,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
       if (disposed || fatal) { await releaseDiagnosticReservation(paired.device_id, uid); return false; }
       // Mark before requesting: an acknowledgement can be lost after the server consumes the run.
       attemptedDiagnostics.add(offer.assignment_id);
-      const response = await deviceRequest('/diagnostic/start', { assignment_id: offer.assignment_id, run_uid: uid });
+      const response = await deviceRequest('/diagnostic/start', { assignment_id: offer.assignment_id, run_uid: uid, player_protocol:3 });
       if (response.status >= 400) {
         if (response.status < 500) await releaseDiagnosticReservation(paired.device_id, uid);
         throw new Error(response.value.error || 'Screen test could not start.');
@@ -390,7 +503,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
       if (disposed || fatal) return false;
       const item: Item = reply.assignment;
       currentSlot = { item, uid, diagnosticRun: uid, started: Date.now(), startedPlaying: false, accumulated: 0, segmentStart: null,
-        mediaStart: 0, samples: [], cameraHealthy: !!item.diagnostic_has_camera && cameraHealthyNow() && !!detector && reply.config.model === 'coco-ssd', config: reply.config, version: reply.config_version, offset: actualOffset, done: false,attentionValid:false };
+        mediaStart: 0, samples: [], cameraHealthy: !!item.diagnostic_has_camera && cameraHealthyNow() && (isPresenceV2(item)||!!detector&&reply.config.model === 'coco-ssd'), config: reply.config, version: reply.config_version, offset: actualOffset, done: false,attentionValid:false };
       setDiagnosticActive(true); setCurrent(item); setDiagnosticStatus('Diagnostic sample · excluded from campaign presence and billing'); state('Loading diagnostic clip');
       activeMedia = media.current; activeSurface = 0; setSurface(0);
       if (!activeMedia) { void finish('error'); return true; }
@@ -435,11 +548,12 @@ const [soundBlocked, setSoundBlocked] = useState(false);
           playlist = pending; pending = null; cycleItems = playlist.items;
           const at = cycleItems.findIndex(i => i.assignment_id === nextId); cycleIndex = at >= 0 ? at : 0;
           void initCamera();
-          if(playlist.config.attention_enabled===true){resolveAttentionCalibration(playlist);void ensureAttention(playlist);}
+          if(hasPresenceV2(playlist)){void ensurePresenceV2(playlist);}
+          else if(playlist.config.attention_enabled===true){resolveAttentionCalibration(playlist);void ensureAttention(playlist);}
           else void ensureAttention(playlist);
         }
         if (!playlist) { state('Waiting for an authorised playlist'); return; }
-        if(playlist.config.attention_enabled!==true)calibrationRequested=false;
+        if(playlist.config.attention_enabled!==true&&!hasPresenceV2(playlist))calibrationRequested=false;
         if (activeCalibratorToken) return;
         if (calibrationRequested) {
           if (!calibrationRequestUntil) calibrationRequestUntil=Date.now()+12000;
@@ -485,9 +599,12 @@ const [soundBlocked, setSoundBlocked] = useState(false);
         // A camera or orientation change can invalidate the saved binding while
         // offline. Recheck it at every play boundary before choosing offsets.
         if(playlist.config.attention_enabled===true)resolveAttentionCalibration(playlist);
+        const v2=isPresenceV2(item),calibrated=v2?!!item.measurement_config?.calibration_revision:playlist.config.attention_enabled===true&&item.attention_enabled===true&&!!attentionCalibration&&item.attention_calibration_revision===attentionCalibration.revision;
+        const calibration=v2?item.measurement_config?.calibration:attentionCalibration;
         currentSlot = { item, uid: playUid, started: Date.now(), startedPlaying: false, accumulated: 0, segmentStart: null,
-          mediaStart: 0, samples: [], cameraHealthy: cameraHealthyNow() && !!detector && playlist.config.model === 'coco-ssd', config: { ...playlist.config }, version: playlist.config_version, offset: actualOffset, done: false,
-          attentionValid:playlist.config.attention_enabled===true&&item.attention_enabled===true&&item.attention_profile===ATTENTION_PROFILE.id,attentionMode:playlist.config.attention_enabled===true&&item.attention_enabled===true&&!!attentionCalibration&&item.attention_calibration_revision===attentionCalibration.revision?'guided':'default',attentionRevision:playlist.config.attention_enabled===true&&item.attention_enabled===true&&!!attentionCalibration&&item.attention_calibration_revision===attentionCalibration.revision?item.attention_calibration_revision:null,attentionYaw:playlist.config.attention_enabled===true&&item.attention_enabled===true&&!!attentionCalibration&&item.attention_calibration_revision===attentionCalibration.revision?attentionCalibration.yaw_tenths/10:0,attentionPitch:playlist.config.attention_enabled===true&&item.attention_enabled===true&&!!attentionCalibration&&item.attention_calibration_revision===attentionCalibration.revision?attentionCalibration.pitch_tenths/10:0,attentionStarted:false };
+          mediaStart: 0, samples: [], cameraHealthy: cameraHealthyNow() && (v2||!!detector&&playlist.config.model === 'coco-ssd'), config: { ...playlist.config }, version: playlist.config_version, offset: actualOffset, done: false,
+          attentionValid:v2||playlist.config.attention_enabled===true&&item.attention_enabled===true&&item.attention_profile===ATTENTION_PROFILE.id,attentionMode:calibrated?'guided':'default',attentionRevision:v2?item.measurement_config?.calibration_revision||null:calibrated?item.attention_calibration_revision||null:null,attentionYaw:calibrated?calibration?.yaw??(calibration?.yaw_tenths||0)/10:0,attentionPitch:calibrated?calibration?.pitch??(calibration?.pitch_tenths||0)/10:0,attentionStarted:false };
+        setAttentionProvenance(currentSlot.attentionValid?{mode:currentSlot.attentionMode||'default',revision:currentSlot.attentionRevision||null}:null);setAttentionDisplay(null);
         reservedUid = null;
         state('Preparing media');
         if (item.asset_url && item.media_type === 'image') {
@@ -523,8 +640,10 @@ const [soundBlocked, setSoundBlocked] = useState(false);
       try {
         let delivery_queue: { pending: number; blocked: number } | undefined;
         try { const saved = await queueStatus(paired.device_id); delivery_queue = { pending: saved.pending, blocked: saved.blocked }; } catch {}
-        await authRequest('/heartbeat', { device_now: new Date().toISOString(), app_ver: APP_VERSION, agent_ver: detector ? MODEL_VERSION : 'camera-unavailable',
-          config_version: playlist.config_version, uptime_s: Math.round((performance.now() - booted) / 1000), free_disk_bytes: null, vision: vision(), ...(delivery_queue ? { delivery_queue } : {}) });
+        const v2Item=isPresenceV2(currentSlot?.item),live=v2Item&&attentionMetrics?attentionMetrics.snapshot(performance.now()).live:null;
+        await authRequest('/heartbeat', { device_now: new Date().toISOString(), app_ver: APP_VERSION, agent_ver: v2Item ? PRESENCE_V2_PROFILE.id : detector ? MODEL_VERSION : 'camera-unavailable', assignment_id:currentSlot?.item.assignment_id, measurement_binding_id:currentSlot?.item.measurement_binding_id,
+          config_version: playlist.config_version, uptime_s: Math.round((performance.now() - booted) / 1000), free_disk_bytes: null, vision: vision(),
+          ...(v2Item&&live?{live_attention:{profile_id:PRESENCE_V2_PROFILE.id,measurement_binding_id:currentSlot?.item.measurement_binding_id,assignment_id:currentSlot?.item.assignment_id,sampled_at:new Date().toISOString(),...live}}:{}), ...(delivery_queue ? { delivery_queue } : {}) });
         lastHeartbeat = Date.now();
       } catch {} finally { heartbeatBusy = false; }
     }
@@ -541,7 +660,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
       const settings = currentSlot ? playlist || pending : pending || playlist;
       if (disposed || fatal || cameraStarting || detecting || !settings) return;
       const k = settings.config;
-      const key = JSON.stringify([settings.screen.has_camera, k.model, k.camera_source, k.camera_device_id, k.inference_res]);
+      const key = JSON.stringify([settings.screen.has_camera, hasPresenceV2(settings), k.model, k.camera_source, k.camera_device_id, k.inference_res]);
       if (!force && key === cameraKey) return;
       cameraKey = key; cameraStarting = true;
       if (currentSlot) currentSlot.cameraHealthy = false;
@@ -559,6 +678,16 @@ const [soundBlocked, setSoundBlocked] = useState(false);
         if (!cameraSurface) { stopCamera(); return; }
         cameraSurface.srcObject = stream; await cameraSurface.play();
         if (disposed || fatal) return;
+        if(hasPresenceV2(settings)){
+          stage='model';setVisionStatus('Preparing the pinned local body and face models');
+          detector?.dispose?.();detector=null;detectorBroken=false;
+          if(k.attention_enabled===true)resolveAttentionCalibration(settings);
+          await ensurePresenceV2(settings);
+          if(disposed||fatal)return;
+          cameraRecovered();
+          if(presenceV2State?.body.state==='ready')setVisionStatus('Ready · local body and face models run independently');
+          return;
+        }
         stage = 'model'; setVisionStatus('Loading people detector');
         if (detectorBroken) { detector?.dispose?.(); detector = null; detectorBroken = false; }
         if (!detector) {
@@ -581,7 +710,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
     }
     retryCamera.current = () => { void initCamera(true); };
     calibrateAttention.current=async(fromBoundary=false)=>{
-      if(!playlist||playlist.config.attention_enabled!==true||playlist.config.attention_profile!==ATTENTION_PROFILE.id)throw Error('Attention is not enabled for this screen.');
+      if(!playlist||(playlist.config.attention_enabled!==true&&!hasPresenceV2(playlist))||playlist.config.attention_profile!==ATTENTION_PROFILE.id)throw Error('Camera calibration is not available for this screen.');
       if(activeCalibratorToken)return;
       attentionSetupPaused=false;
       calibrationRequested=true; calibrationRequestUntil=Date.now()+12000;
@@ -601,7 +730,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
           yaw_spread_tenths:result.yaw_spread_tenths,pitch_spread_tenths:result.pitch_spread_tenths,completed_at:new Date().toISOString()};
         const binding={profile:ATTENTION_PROFILE.id,device_id:paired.device_id,screen_id:paired.screen_id,camera_ref:calibration.camera_ref,width:video.videoWidth,height:video.videoHeight,rotation:attentionRotation};
         if(!validateAttentionCalibration(calibration,binding))throw Error('Calibration geometry changed. Previous calibration kept.');
-        const savePromise=authRequest('/attention/calibration',{calibration});
+        const savePromise=authRequest('/attention/calibration',{calibration,player_protocol:3});
         void savePromise.then(()=>{if(disposed||activeCalibratorToken!==token)void pull();},()=>{});
         let saveTimer:ReturnType<typeof setTimeout>|undefined;
         const saved=await Promise.race([savePromise,new Promise<never>((_,reject)=>{saveTimer=setTimeout(()=>reject(new Error('Calibration save timed out. Playback continues; refresh will reconcile if it was saved.')),10000);})]).finally(()=>{if(saveTimer)clearTimeout(saveTimer);});
@@ -621,10 +750,18 @@ const [soundBlocked, setSoundBlocked] = useState(false);
     async function detect() {
       const v = cameraSurface, c = overlay, target = currentSlot;
       // Never sample an idle, paused or background player. Only one inference may run at once.
-      if (disposed || fatal || document.hidden || detecting || detectorBroken || !detector || cameraStarting || !target || target.segmentStart === null || target.done) return;
+      const v2=isPresenceV2(target?.item);
+      if (disposed || fatal || document.hidden || detecting || cameraStarting || !target || target.segmentStart === null || target.done || !v2&&(detectorBroken||!detector)) return;
       if (target.diagnosticRun && !target.item.diagnostic_has_camera) return;
       cameraOK = cameraHealthyNow();
       if (!v || !c || !cameraOK) { cameraLost(); return; }
+      if(v2){
+        const snapshot=attentionMetrics?.snapshot(performance.now()),people=snapshot?.live.people;
+        if(snapshot?.live.body_status!=='ok'||people===null||people===undefined){setCount(null);return;}
+        const ceiling=Math.max(1,Math.min(500,Number(target.item.measurement_config?.count_ceiling)||50)),n=Math.min(people,ceiling);
+        setCount(n);setVisionRetry(false);setVisionStatus(`${n?'Counting':'No people detected'} · EfficientDet body model · ${Math.round(1000/PRESENCE_V2_PROFILE.body_interval_ms)} samples/s`);
+        target.samples.push(n);target.cameraHealthy=true;lastSampleAt=new Date().toISOString();return;
+      }
       if (v.currentTime === lastCameraFrame) { cameraLost(); return; }
       const segmentAtCapture = target.segmentStart, activeStream = stream, activeDetector = detector;
       detecting = true;
@@ -650,7 +787,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
         setCount(n); setVisionRetry(false); setVisionStatus(`${n ? 'Counting' : 'No people detected'} · updates every ${Number(k.sample_interval_s) || 2}s`);
         target.samples.push(n); lastSampleAt = new Date().toISOString();
         if (c.width !== width || c.height !== height) { c.width = width; c.height = height; }
-        const ctx = c.getContext('2d'); if (ctx) { ctx.clearRect(0, 0, width, height); ctx.strokeStyle = '#F59E0B'; ctx.lineWidth = 3; for (const p of persons) ctx.strokeRect(...p.bbox as [number, number, number, number]); }
+        const ctx = c.getContext('2d'); if (ctx) { ctx.clearRect(0, 0, width, height); if(!(attentionEnabledRef.current&&attentionReadyRef.current)){ctx.strokeStyle = '#F59E0B'; ctx.lineWidth = 3; for (const p of persons) ctx.strokeRect(...p.bbox as [number, number, number, number]);} }
       } catch {
         target.cameraHealthy = false; detectorBroken = true; clearDetection();
         if (!disposed) { setVisionStatus('People detection failed. Retry the camera and detector.'); setVisionRetry(true); }
@@ -722,10 +859,13 @@ const [soundBlocked, setSoundBlocked] = useState(false);
       } else void startNext();
       void initCamera();
       if (Date.now() - lastPull > (needsAllowanceRefresh ? 5000 : waitingEmpty ? 10000 : Math.min(300, Math.max(30, (Number(playlist?.config.sync_interval_min) || 5) * 60)) * 1000)) { lastPull = Date.now(); void pull(); }
-      if (Date.now() - lastHeartbeat > Math.max(10, Number(playlist?.config.heartbeat_s) || 30) * 1000) { lastHeartbeat = Date.now(); void heartbeat(); }
+      if (Date.now() - lastHeartbeat > (isPresenceV2(currentSlot?.item) ? 3000 : Math.max(10, Number(playlist?.config.heartbeat_s) || 30) * 1000)) { lastHeartbeat = Date.now(); void heartbeat(); }
       const interval=Math.max(500,(Number(currentSlot?.config.sample_interval_s ?? playlist?.config.sample_interval_s)||2)*1000);
       if (Date.now() - lastDetect > interval) { lastDetect = Date.now(); void detect(); }
-      else if(currentSlot&&currentSlot.attentionValid&&currentSlot.segmentStart!==null&&!currentSlot.done&&!currentSlot.diagnosticRun&&attentionWorker&&!attentionWorker.busy&&cameraSurface&&cameraHealthyNow()&&!document.hidden&&Date.now()+750<lastDetect+interval){
+      // The next legacy sample already owns the next due ticker slot. Do not reserve an
+      // arbitrary quiet window before it: at the supported 500 ms minimum that window
+      // starved Attention entirely, and at 2 s it forced avoidable stale-face gaps.
+      else if(currentSlot&&currentSlot.segmentStart!==null&&!currentSlot.done&&attentionWorker&&!isPresenceV2(currentSlot.item)&&currentSlot.attentionValid&&!currentSlot.diagnosticRun&&!attentionWorker.busy&&!detecting&&cameraSurface&&cameraHealthyNow()&&!document.hidden){
         const s=currentSlot;
         if(s?.attentionMode==='guided'){
           const track=stream?.getVideoTracks()[0],width=cameraSurface.videoWidth,height=cameraSurface.videoHeight,raw=Number(window.screen.orientation?.angle||0),rotation:0|90|180|270=([0,90,180,270] as number[]).includes(raw)?raw as 0|90|180|270:0;
@@ -734,11 +874,14 @@ const [soundBlocked, setSoundBlocked] = useState(false);
             attentionMetrics?.boundary(s.uid,false,performance.now());s.attentionBindingInvalidated=true;s.attentionValid=false;setAttentionStatus('Camera changed during this play · guided attention paused; playback continues.');
           }
         }
-        const play=s?.attentionValid?{uid:s.uid,segment:s.segmentStart,mode:s.attentionMode,revision:s.attentionRevision}:null;
-        if(s?.attentionValid)void attentionWorker.frame(cameraSurface,{yaw:s.attentionYaw||0,pitch:s.attentionPitch||0},{play,calibration_id:activeCalibratorToken});
+        const play=s?.attentionValid&&!s.diagnosticRun?{uid:s.uid,segment:s.segmentStart,mode:s.attentionMode,revision:s.attentionRevision}:null;
+        if(s&& (s.attentionValid||isPresenceV2(s.item)))void attentionWorker.frame(cameraSurface,{yaw:s.attentionYaw||0,pitch:s.attentionPitch||0},{play,diagnostic_uid:s.diagnosticRun?s.uid:null,calibration_id:activeCalibratorToken},s.item.measurement_config?.confidence);
       }
-      if(activeCalibratorToken&&attentionWorker&&!attentionWorker.busy&&cameraSurface&&cameraHealthyNow()&&!document.hidden)
-        void attentionWorker.frame(cameraSurface,{yaw:0,pitch:0},{calibration_id:activeCalibratorToken});
+      if(commissioningRef.current&&attentionEnabledRef.current&&attentionReadyRef.current&&!document.hidden&&currentSlot?.attentionStarted&&currentSlot.segmentStart!==null&&cameraHealthyNow()&&attentionMetrics){
+        const now=performance.now();setAttentionDisplay({snapshot:attentionMetrics.snapshot(now),tracks:attentionMetrics.liveTracks(now),faces:attentionMetrics.liveFaces(now),localTracks:presenceV2Diagnostics.snapshot(now,attentionMetrics.liveTracks(now)),liveFresh:true,performance:{body_fps:presenceV2State?.body.observed_fps??null,face_fps:presenceV2State?.face.observed_fps??null,body_result_ms:presenceV2State?.body.result_ms??null,face_result_ms:presenceV2State?.face.result_ms??null}});
+      }else if(currentSlot?.attentionStarted&&attentionMetrics){
+        setAttentionDisplay({snapshot:attentionMetrics.snapshot(performance.now()),tracks:[],faces:[],localTracks:[],liveFresh:false,performance:{body_fps:presenceV2State?.body.observed_fps??null,face_fps:presenceV2State?.face.observed_fps??null,body_result_ms:presenceV2State?.body.result_ms??null,face_result_ms:presenceV2State?.face.result_ms??null}});
+      }else setAttentionDisplay(null);
     }, 250);
     const flusher = setInterval(() => { void retryUnsaved(); void flush(); void flushTest(); }, 5000);
     let evidenceStarted = false;
@@ -756,7 +899,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
     }, message => { if (!disposed) { setPublicFailure(true); state(message); } });
     if ('serviceWorker' in navigator) void navigator.serviceWorker.register('/player-sw.js', { scope: '/player' }).then(reg => { const worker = reg.active || reg.installing || reg.waiting; worker?.postMessage({ type: 'PREPARE_PLAYER', urls: performance.getEntriesByType('resource').map(r => r.name).filter(u => u.startsWith(location.origin + '/_next/static/')) }); }).catch(() => {});
     return () => {
-      const settling = settlePlayer.current(); disposed = true; evidenceGuard.stop(settling); clearInterval(ticker); clearInterval(flusher); timers.forEach(clearTimeout);
+      const settling = settlePlayer.current(); disposed = true; evidenceGuard.stop(settling); clearInterval(ticker); clearInterval(flusher); if(presenceFramePump)cancelAnimationFrame(presenceFramePump); timers.forEach(clearTimeout);
       for (const native of natives) { native?.removeEventListener('playing', nativePlaying); native?.removeEventListener('pause', nativePause); native?.removeEventListener('waiting', nativePause);
       native?.removeEventListener('ended', nativeEnd); native?.removeEventListener('error', nativeError); native?.removeEventListener('loadedmetadata', metadata); native?.removeEventListener('loadedmetadata', disableTextTracks);
       native?.textTracks?.removeEventListener('addtrack', disableNewTextTrack); }
@@ -821,11 +964,14 @@ const [soundBlocked, setSoundBlocked] = useState(false);
     <Input aria-label="Pairing code" value={code} disabled={busy} onChange={e => setCode(e.target.value)} onKeyDown={e => e.key === 'Enter' && pair()} maxLength={8} placeholder="ABCDEFGH" autoComplete="off" className="h-14 text-center font-mono text-2xl uppercase tracking-widest" />
     <p className="my-2 text-sm text-destructive" role="alert">{err}</p><Button className="w-full" disabled={busy || code.trim().length !== 8} onClick={pair}>{busy ? 'Checking…' : credential ? 'Confirm replacement and keep records' : 'Pair and play'}</Button>
     {credential && <Button className="mt-3" disabled={busy} onClick={() => { setRecoveryOpen(false); setCode(''); setErr(''); }}>Cancel</Button>}
-    <p className="mt-4 text-xs text-muted-foreground">When Attention V1 is enabled for this screen, aggregate attention summaries are sent. Camera frames, faces, landmarks and temporary person IDs stay on this device.</p>
+    <p className="mt-4 text-xs text-muted-foreground">Camera-enabled players use their assigned presence profile and may send bounded aggregate measurements. Camera frames, face geometry, landmarks and temporary person IDs stay on this device.</p>
   </div>;
-  const commissioning = !rejected && (overlayEnabled || diagnosticActive || attentionSetupActive);
   const attentionPreparing=!!attentionProgress;
   const attentionReady=attentionModelsReady&&attentionCameraReady;
+  const displayedSummary=attentionDisplay?.snapshot.current||attentionLastAd?.summary||null;
+  const displayedSummaryName=attentionDisplay?.snapshot.current?(current?.creative_name||current?.creative_id||'Current creative'):attentionLastAd?.name;
+  const liveValue=(value:number|null)=>attentionDisplay?.liveFresh&&value!==null?String(value):'—';
+  const localTrackDiagnostics=attentionDisplay?.liveFresh?attentionDisplay.localTracks:[],rangeCounts={near:localTrackDiagnostics.filter(x=>x.distance_band==='near').length,mid:localTrackDiagnostics.filter(x=>x.distance_band==='mid').length,far:localTrackDiagnostics.filter(x=>x.distance_band==='far').length},stoppedCount=localTrackDiagnostics.filter(x=>x.stopped===true).length,localDiagnosticsReady=attentionDisplay?.snapshot.live.body_status==='ok'&&attentionDisplay.snapshot.live.people!==null&&localTrackDiagnostics.length===attentionDisplay.snapshot.live.people,localValue=(value:number)=>attentionDisplay?.liveFresh&&localDiagnosticsReady?String(value):'Unavailable';
   if (!credential) return <div className="grid min-h-screen place-items-center bg-slate-950 p-4">{pairingForm}</div>;
   return <div className="fixed inset-0 cursor-none bg-black text-white" style={{ cursor: 'none' }}>
     <div ref={youtubeMount} className={`absolute inset-0 h-full w-full ${!current || current.asset_url ? 'hidden' : ''}`} />
@@ -843,15 +989,31 @@ const [soundBlocked, setSoundBlocked] = useState(false);
       {rejected && <div className="mt-2 flex gap-3"><Button disabled={busy} onClick={retry}>Retry existing pairing</Button><Button disabled={busy} onClick={openRecovery}>Enter a new pairing code</Button></div>}
       {!recoveryOpen && err && <p role="alert" className="mt-1 text-amber-300">{err}</p>}
     </div>}
-    <div data-role="commissioning-preview" aria-hidden={!commissioning} style={{ opacity: commissioning ? 1 : 0, pointerEvents: commissioning ? 'auto' : 'none' }} className="fixed bottom-3 right-3 z-10 w-[170px]">
-      <div className="relative"><video data-role="camera" ref={camera} autoPlay muted playsInline tabIndex={-1} className="w-full rounded bg-neutral-900" /><canvas ref={canvas} className="pointer-events-none absolute inset-0 h-full w-full" /></div>
-      {commissioning && <><p className="mt-1 text-[10px] text-white/60">Local camera preview · never uploaded</p><p className="mt-1 text-xs" role="status">{visionStatus}</p>{visionRetry && <button className="mt-2 text-xs underline" onClick={() => retryCamera.current()}>Retry camera</button>}{attentionEnabled&&<div className="mt-2 flex flex-wrap gap-2">{attentionPreparing||attentionCalibrating?<Button variant="outline" onClick={()=>cancelAttention.current()}>{attentionCalibrating?'Cancel calibration':'Cancel setup'}</Button>:attentionReady?<Button onClick={()=>void calibrateAttention.current().catch(()=>{})}>{attentionSetupActive?'Retry calibration':'Calibrate attention · 3 seconds'}</Button>:<Button onClick={()=>retryAttention.current()}>Retry attention setup</Button>}</div>}</>}
-      {commissioning && attentionCalibrating && <div className="pointer-events-none fixed inset-0 z-[11] grid place-items-center"><div className="h-3 w-3 rounded-full bg-white shadow-[0_0_0_6px_rgba(0,0,0,.55)]"/><span className="absolute mt-12 rounded bg-black/80 px-3 py-2 text-xs">Look at the centre marker and hold still for 3 seconds</span></div>}
+    <div data-role="commissioning-preview" aria-hidden={!commissioning} style={{ opacity: commissioning ? 1 : 0, pointerEvents: commissioning ? 'auto' : 'none' }} className="fixed bottom-3 left-3 right-3 z-10 ml-auto max-h-[min(86vh,820px)] w-auto max-w-[min(30rem,calc(100vw-1.5rem))] overflow-y-auto cursor-auto sm:left-auto">
+      <div className="rounded-xl border border-white/15 bg-slate-950/90 p-3 text-white shadow-2xl backdrop-blur">
+        <div className="mb-2 flex items-start justify-between gap-2"><div><p className="text-[10px] text-white/60">{screen?.name||'Gridcast'} · {diagnosticActive?'Screen test':'Local diagnostics'}</p><p className="mt-0.5 text-sm font-semibold">{current?.creative_name||current?.creative_id||'Waiting for the next creative'}</p><p className="text-[10px] text-white/60">{attentionEnabled?(attentionReady?attentionStatus||'Combined camera analysis ready':attentionStatus||'Preparing local camera analysis'):'Legacy presence model'}{attentionProvenance&&` · ${attentionProvenance.mode==='guided'?'Guided calibration':'Default settings'}`}</p></div>{commissioning&&<button type="button" aria-expanded={diagnosticsExpanded} onClick={()=>setDiagnosticsExpanded(v=>!v)} className="shrink-0 rounded border border-white/20 px-2 py-1 text-xs">{diagnosticsExpanded?'Compact':'Details'}</button>}</div>
+        {commissioning&&<div data-role="commissioning-stats" className="space-y-2 text-xs">
+          <div className="grid grid-cols-4 gap-1" aria-live="polite">{[['People now',attentionDisplay?.snapshot.live.people],['Faces assessable',attentionDisplay?.snapshot.live.face_assessable],['Looking now',attentionDisplay?.snapshot.live.looking],['Smiling now',attentionDisplay?.snapshot.live.smiling]].map(([label,value])=><div key={String(label)} className="rounded bg-white/5 px-2 py-1.5"><div className="text-[9px] text-white/60">{label}</div><strong className="text-xl leading-6 tabular-nums">{liveValue(value as number|null)}</strong></div>)}</div>
+          <p className="rounded bg-white/5 px-2 py-1 text-[10px] text-white/70">Estimated distance band · Near {localValue(rangeCounts.near)} · Mid {localValue(rangeCounts.mid)} · Far {localValue(rangeCounts.far)} · Stopped {localValue(stoppedCount)}</p>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1 rounded bg-white/5 px-2 py-1.5 text-[10px]" aria-label="Current creative measurements"><span>Visits</span><span className="text-right tabular-nums">{displayedSummary?.body_observed_s?displayedSummary.tracked_visits:'Unavailable'}</span><span>Dwell person-time</span><span className="text-right tabular-nums">{displayedSummary?.dwell_person_s===null||!displayedSummary?'Unavailable':`${displayedSummary.dwell_person_s.toFixed(1)}s`}</span><span>Looking person-time</span><span className="text-right tabular-nums">{displayedSummary?.attention_person_s===null||!displayedSummary?'Unavailable':`${displayedSummary.attention_person_s.toFixed(1)}s`}</span><span>Est. / attentive impressions</span><span className="text-right tabular-nums">{displayedSummary?.body_observed_s?`${displayedSummary.estimated_impressions??'Unavailable'} / ${displayedSummary.attentive_impressions??'Unavailable'}`:'Unavailable'}</span><span>Longest look</span><span className="text-right tabular-nums">{displayedSummary?.longest_look_s===null||!displayedSummary?'Unavailable':`${displayedSummary.longest_look_s.toFixed(1)}s`}</span><span>Visible-smile rate</span><span className="text-right tabular-nums">{displayedSummary?.visible_smile_rate===null||!displayedSummary?'Unavailable':`${(displayedSummary.visible_smile_rate*100).toFixed(1)}%`}</span></div>
+        </div>}
+        <div className={`relative mt-2 h-44 w-full overflow-hidden rounded bg-neutral-900 ${diagnosticsExpanded?'h-60':''}`}><video data-role="camera" ref={camera} autoPlay muted playsInline tabIndex={-1} className={`absolute inset-0 h-full w-full object-contain ${attentionEnabled&&attentionReady?'scale-x-[-1]':''}`} /><canvas ref={canvas} className="pointer-events-none absolute inset-0 h-full w-full object-contain" /></div>
+        {commissioning&&<div data-role="commissioning-stats" className="mt-2 space-y-2 text-xs">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-white/70"><span><i className="mr-1 inline-block h-2 w-2 rounded-full bg-emerald-500"/>Looking</span><span><i className="mr-1 inline-block h-2 w-2 rounded-full bg-blue-500"/>Not looking</span><span><i className="mr-1 inline-block h-2 w-2 rounded-full bg-amber-500"/>Unknown</span><span className="text-white/50">Body: {attentionDisplay?.snapshot.live.body_status||'unavailable'} · face: {attentionDisplay?.snapshot.live.face_status||'unavailable'}</span></div>
+          {diagnosticsExpanded&&<>
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px]"><label className="flex items-center gap-1"><input type="checkbox" aria-label="Show tracking boxes" checked={showTrackingBoxes} onChange={e=>setShowTrackingBoxes(e.target.checked)}/>Show tracking boxes</label><label className="flex items-center gap-1"><input type="checkbox" aria-label="Show face details" checked={showFaceDetails} onChange={e=>setShowFaceDetails(e.target.checked)}/>Show face details</label></div>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1 border-t border-white/10 pt-2 text-[10px]"><span>Body observed / unknown</span><span className="text-right">{displayedSummary?`${displayedSummary.body_observed_s.toFixed(1)}s / ${displayedSummary.body_unknown_s.toFixed(1)}s`:'Unavailable'}</span><span>Face observed / unknown</span><span className="text-right">{displayedSummary?`${displayedSummary.face_observed_s.toFixed(1)}s / ${displayedSummary.face_unknown_s.toFixed(1)}s`:'Unavailable'}</span><span>Attention observed / unknown</span><span className="text-right">{displayedSummary?`${displayedSummary.attention_observed_s.toFixed(1)}s / ${displayedSummary.attention_unknown_s.toFixed(1)}s`:'Unavailable'}</span><span>Body throughput / response</span><span className="text-right">{attentionDisplay?.performance.body_fps===null||attentionDisplay?.performance.body_fps===undefined?'Unavailable':`${attentionDisplay.performance.body_fps.toFixed(1)} fps · ${attentionDisplay.performance.body_result_ms?.toFixed(1)??'—'} ms`}</span><span>Face throughput / response</span><span className="text-right">{attentionDisplay?.performance.face_fps===null||attentionDisplay?.performance.face_fps===undefined?'Unavailable':`${attentionDisplay.performance.face_fps.toFixed(1)} fps · ${attentionDisplay.performance.face_result_ms?.toFixed(1)??'—'} ms`}</span><span>Estimated distance / stopped</span><span className="text-right">Face width 14.5 cm at 65° FOV; body height 165 cm; stopped below 0.15 body-heights/s for 2.5 s. Approximate local estimates only.</span><span>Calibration</span><span className="text-right">{attentionProvenance?attentionProvenance.mode==='guided'?`Guided · ${attentionProvenance.revision?.slice(0,8)||'saved'}`:'Default · zero offsets':'Unavailable'}</span><span>Recorded / pending</span><span className="text-right">{recorded} / {queue.pending}{queue.reserved?` · ${queue.reserved} reserved`:''}</span><span>Camera / model</span><span className="text-right">{visionStatus}</span><span>Setup</span><span className="text-right">{attentionStatus||'Unavailable'}</span></div>
+            <div className="max-h-28 space-y-1 overflow-y-auto border-t border-white/10 pt-2">{attentionDisplay?.liveFresh&&attentionDisplay.tracks.length?attentionDisplay.tracks.map(track=><p key={track.key} className="flex justify-between gap-2 text-[10px]"><span>Track #{track.key} · {track.uncertain||track.looking===null?'Unknown':track.looking?'Looking':'Not looking'}{track.smiling===null?' · smile unknown':track.smiling?' · smiling':' · not smiling'}</span><span className="shrink-0 tabular-nums">Dwell {track.dwell_s.toFixed(1)}s · look {track.longest_look_s.toFixed(1)}s</span></p>):<p className="text-[10px] text-white/50">Temporary track details unavailable while observations are stale or paused.</p>}</div>
+            <p className="border-t border-white/10 pt-2 text-[10px] text-white/60">{diagnosticActive?'Diagnostic sample':`Last play average: ${average}`} · {diagnosticStatus||status}</p>
+            {commissioning&&visionRetry&&<button className="underline" onClick={()=>retryCamera.current()}>Retry camera</button>}
+            {commissioning&&attentionEnabled&&<div className="flex flex-wrap gap-2">{attentionPreparing||attentionCalibrating?<Button variant="outline" onClick={()=>cancelAttention.current()}>{attentionCalibrating?'Cancel calibration':'Cancel setup'}</Button>:attentionReady?<Button variant="outline" onClick={()=>void calibrateAttention.current().catch(()=>{})}>{attentionSetupActive?'Retry calibration':'Calibrate attention · 3 seconds'}</Button>:<Button variant="outline" onClick={()=>retryAttention.current()}>Retry camera analysis</Button>}</div>}
+            {diagnosticStatus&&<p className="text-[10px] text-amber-200">{diagnosticStatus}</p>}{queue.blocked>0&&<p className="text-[10px] text-amber-300">{queue.blocked} delivery records need review and remain saved on this device.</p>}
+            {attentionEnabled&&attentionProgress&&attentionProgress.total>0&&<div className="text-[10px]" aria-live="polite">{attentionProgress.phase==='initializing'?<p>Verified model files · initializing local models · {attentionProgress.elapsedSeconds}s</p>:<><div className="flex justify-between"><span>Verified model files · {Math.floor(100*attentionProgress.verified/attentionProgress.total)}%</span><span>{attentionProgress.elapsedSeconds}s</span></div><progress className="h-2 w-full" max={attentionProgress.total} value={attentionProgress.verified} aria-label="Attention model files verified"/><p>{attentionProgress.message}</p></>}</div>}
+          </>}
+        </div>}
+      </div>
+      {commissioning&&attentionCalibrating&&<div className="pointer-events-none fixed inset-0 z-[11] grid place-items-center"><div className="h-3 w-3 rounded-full bg-white shadow-[0_0_0_6px_rgba(0,0,0,.55)]"/><span className="absolute mt-12 rounded bg-black/80 px-3 py-2 text-xs">Look at the centre marker and hold still for 3 seconds</span></div>}
     </div>
-    {commissioning && <div data-role="commissioning-stats" className="fixed bottom-3 left-3 z-10 rounded bg-black/80 p-3 text-xs">{diagnosticActive ? 'Diagnostic sample' : 'People now'}: {count ?? '—'} · Last play average: {average}<br />Recorded this session: {recorded} · Pending delivery: {queue.pending}
-      {diagnosticStatus && <p className="mt-1 text-amber-200">{diagnosticStatus}</p>}
-      {queue.blocked > 0 && <p className="mt-1 text-amber-300">{queue.blocked} delivery records need review and remain saved on this device.</p>}
-    </div>}
     {rejected && recoveryOpen && <div className="fixed inset-0 z-20 grid place-items-center bg-slate-950 p-4">{pairingForm}</div>}
   </div>;
 }

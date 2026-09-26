@@ -33,11 +33,11 @@ test('only actual playing contributes time; pause/resume does not carry continuo
  const s=m.snapshot(9000).current;near(s.playing_s,.6);near(s.attention_person_s,.6);near(s.longest_look_s,.4);assert.equal(s.estimated_impressions,0);
 });
 test('large unobserved gaps are unknown, and UI polling does not manufacture observed dwell',()=>{
- const a=start(),b=start();observe(a,0);observe(b,0);
- for(let at=50;at<5000;at+=50)a.snapshot(at);
+ const a=start(),b=start();stable(a,0,1000);stable(b,0,1000);
+ for(let at=1005;at<5000;at+=5)a.snapshot(at);
  a.boundary('play-a',false,5000);b.boundary('play-a',false,5000);
- assert.deepEqual(a.snapshot(5000),b.snapshot(5000));const s=a.snapshot(5000).current;
- assert.equal(s.presence_person_s,null);assert.equal(s.attention_person_s,null);near(s.body_unknown_s,5);near(s.face_unknown_s,5);
+ assert.deepEqual(a.snapshot(5000),b.snapshot(5000),'dense read-only UI projections cannot alter any final summary field');const s=a.snapshot(5000).current;
+ near(s.presence_person_s,1);near(s.attention_person_s,1);near(s.body_observed_s,1);near(s.body_unknown_s,4);near(s.face_unknown_s,4);
 });
 test('ordinary delayed worker results remain accepted after a newer projected UI snapshot',()=>{
  const m=start();observe(m,0);m.snapshot(1000);observe(m,125);assert.equal(m.snapshot(125).live.body_status,'ok');near(m.snapshot(125).current.presence_person_s,.125);

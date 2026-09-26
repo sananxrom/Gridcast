@@ -8,12 +8,12 @@ const moduleObject = { exports: {} };
 new Function('require','module','exports', ts.transpileModule(fs.readFileSync(path.join(__dirname, '../lib/devices.ts'), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText)(name=>name.startsWith('.')?require('./load-lib.cjs')(name.slice(2)):require(name),moduleObject,moduleObject.exports);
 const { issuePairing, pairingCodeHash, deviceIdFromToken, deviceRoute, revokeDevices, playRecordId, calibrationForDevice } = moduleObject.exports;
 const MODEL = 'coco-ssd@2.2.3/lite_mobilenet_v2';
-function fixture() {
+function fixture(protocol=2) {
   let now = Date.parse('2026-09-24T00:00:00.000Z');
   const db = { orgs: [{id:'org1',status:'active'},{id:'org2',status:'active'}], screens: [{id:'screen1',org_id:'org1',status:'active',has_camera:true},{id:'screen2',org_id:'org2',status:'active'}], devices: [], device_assignments: [], plays: [], presence: [], campaigns: [{id:'campaign1',org_id:'org1',advertiser_id:'advertiser1',rate_type:'per_play',rate_value:9,committed_budget:100000,accrued_spend:0}] };
   let config = { model:'coco-ssd', sample_interval_s:2, count_ceiling:50, camera_fail_mode:'continue' };
   const item = {campaign_id:'campaign1',creative_id:'creative1',duration_s:10,youtube_id:'example',rate_value:2};
-  const options = () => ({ now, playerProtocol:2, clientKey:crypto.randomUUID(), playlist: () => ({ items:[item],config,config_version:3 }) });
+  const options = () => ({ now, playerProtocol:protocol, clientKey:crypto.randomUUID(), playlist: () => ({ items:[item],config,config_version:3 }) });
   const call = (method, route, body={}, token) => { const r=deviceRoute(db,method,route.split('/'),body,token,options());return {...r,status:r?.status||200}; };
   const pair = (sid='screen1') => { const screen=db.screens.find(s=>s.id===sid);const code=issuePairing(db,screen,now);const r=call('POST','pair',{code:code.code}); assert.equal(r.status,200);return r.body; };
   const paired=pair(), assignment=call('GET','playlist/screen1',{},paired.token).body.items[0];
@@ -26,7 +26,7 @@ test('calibration revisions are immutable, assignments freeze full provenance, d
  const makeCalibration=(revision,deviceId,yaw=12)=>({schema:'calibration-v1/1',profile:f.config.attention_profile,revision,device_id:deviceId,screen_id:'screen1',camera_ref:'opaqueCameraReference123',width:640,height:480,rotation:0,method:'guided-3s',yaw_tenths:yaw,pitch_tenths:-5,samples:10,span_ms:2700,yaw_spread_tenths:2,pitch_spread_tenths:3,completed_at:new Date(f.db.screens[0].pairing_expires_at?Date.parse(f.db.screens[0].pairing_expires_at)-600000:Date.now()).toISOString()});
  const first=makeCalibration('calibrationA',f.paired.device.id),saved=f.call('POST','attention/calibration',{calibration:first},f.paired.token);
  assert.equal(saved.status,200);assert.equal(f.db.attention_calibrations.length,1);assert.deepEqual(f.db.attention_calibrations[0].calibration,first);
- const configRevision=f.db.settings.config_revision;assert.equal(f.call('POST','attention/calibration',{calibration:first},f.paired.token).body.duplicate,true);assert.equal(f.db.settings.config_revision,configRevision);
+ const configRevision=f.db.settings?.config_revision;assert.equal(f.call('POST','attention/calibration',{calibration:first},f.paired.token).body.duplicate,true);assert.equal(f.db.settings?.config_revision,configRevision,'calibration does not revise commercial config');
  assert.equal(f.call('POST','attention/calibration',{calibration:{...first,yaw_tenths:99}},f.paired.token).status,409);
  f.config.attention_calibration=first;
  const firstItem=f.call('GET','playlist/screen1',{},f.paired.token).body.items[0],oldAssignment=f.db.device_assignments.find(a=>a.id===firstItem.assignment_id);
@@ -124,6 +124,16 @@ test('heartbeat works without a playlist item and records applied version indepe
  for(const q of [{pending:-1,blocked:0},{pending:0,blocked:5001},{pending:1.5,blocked:0},null])
   assert.equal(f.call('POST','heartbeat',{device_now:'2026-09-24T00:00:11Z',config_version:3,delivery_queue:q},f.paired.token).status,400);
 });
+test('V2 live heartbeat stores only bounded aggregate counts under its issued binding',()=>{
+ const f=fixture(3),item=f.assignment,id='presence-v2/efficientdet-lite0-mediapipe-face/1';
+ assert.equal(item.measurement_profile,id);assert.ok(item.measurement_binding_id);
+ const heartbeat={device_now:'2026-09-24T00:00:11Z',config_version:3,vision:{camera_state:'ready',model_state:'ready',model_ver:'efficientdet-lite0-int8/1',presence_profile_id:id,measurement_binding_id:item.measurement_binding_id,assignment_id:item.assignment_id,last_sample_at:null},live_attention:{profile_id:id,measurement_binding_id:item.measurement_binding_id,assignment_id:item.assignment_id,sampled_at:'2026-09-24T00:00:11Z',people:2,face_assessable:1,looking:1,smiling:0,body_status:'ok',face_status:'ok',body_saturated:false,face_saturated:false,boxes:[[0,0,1,1]]}};
+ assert.equal(f.call('POST','heartbeat',heartbeat,f.paired.token).status,200);
+ assert.equal(f.db.devices[0].live_attention.people,2);assert.equal(f.db.devices[0].live_attention.looking,1);assert.equal('boxes' in f.db.devices[0].live_attention,false,'geometry is never persisted');
+ assert.equal(f.call('POST','heartbeat',{...heartbeat,live_attention:{...heartbeat.live_attention,people:21}},f.paired.token).status,400);
+ assert.equal(f.db.devices[0].live_attention.people,2,'invalid readings do not replace the last accepted aggregate');
+});
+
 test('wrong assignment/device/config cannot report or announce a play',()=>{
  const f=fixture();const other=f.pair('screen2');
  assert.equal(f.call('POST','play',f.event(),other.token).status,409);

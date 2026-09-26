@@ -132,7 +132,7 @@ export const SETTINGS: Setting[] = [
     info: 'How often a frame is sampled during a play. Every presence figure on the platform assumes this value.' }),
   T('model', 'Detection model', 'measurement', 'select', 'coco-ssd', { common: true, options: ['coco-ssd'], locked: true,
     lockReason: 'Recorded against every measurement as model_ver',
-    info: 'COCO-SSD 2.2.3, lite_mobilenet_v2. The actual model version and configuration revision are recorded with every measured play.' }),
+    info: 'Legacy player setting: COCO-SSD 2.2.3 lite_mobilenet_v2. Updated camera-enabled players use the independently pinned combined V2 profile; actual model provenance is recorded with each play.' }),
   T('confidence_min', 'Confidence floor', 'measurement', 'number', 0.45, { locked: true,
     lockReason: 'Moves every number on the platform',
     info: 'Detections below this confidence are discarded.' }),
@@ -152,10 +152,10 @@ export const SETTINGS: Setting[] = [
   T('presence_metric', 'Metric', 'measurement', 'derived', 'avg_persons', { locked: true,
     lockReason: 'Phase 1 metric',
     info: 'Mean of per-sample counts across one play. Not reach, not impressions, not unique people.' }),
-  T('attention_enabled', 'Attention analytics', 'measurement', 'toggle', false, { locked: true,
+  T('attention_enabled', 'Legacy attention analytics', 'measurement', 'toggle', false, { locked: true,
     lockReason: 'Enabled per screen by a platform administrator; never changes presence or billing',
-    info: 'Optional local face-direction analytics with a screen-and-camera-specific calibration.' }),
-  T('attention_profile', 'Attention profile', 'measurement', 'select', 'attention-v1/mediapipe-1.0.1', { locked: true,
+    info: 'Optional V1 compatibility for older players. Updated camera-enabled players use the pinned V2 body/face profile; calibration remains optional.' }),
+  T('attention_profile', 'Legacy attention profile', 'measurement', 'select', 'attention-v1/mediapipe-1.0.1', { locked: true,
     lockReason: 'Versioned profile assigned by the platform', options: ['attention-v1/mediapipe-1.0.1'] }),
 
   // ----------------------------------------------------------------- privacy
