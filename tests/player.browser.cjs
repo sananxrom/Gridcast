@@ -11,6 +11,14 @@ const {chromium} = require('playwright');
 const root=path.resolve(__dirname,'..');
 const executablePath=[process.env.GC_TEST_BROWSER_PATH,chromium.executablePath(),'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome','/usr/bin/chromium'].filter(Boolean).find(fs.existsSync);
 const ffmpeg=[process.env.GC_TEST_FFMPEG_PATH,'/opt/homebrew/bin/ffmpeg','/usr/bin/ffmpeg'].filter(Boolean).find(fs.existsSync);
+// Compile the repository's current CSS rather than using a stale .next build or
+// duplicating selected layout rules. Every fixture in this process shares one
+// deterministic Tailwind build; no generated files are written to the repository.
+let stylesheet;
+function currentPlayerStyles() {
+ if(stylesheet===undefined)stylesheet=execFileSync(process.execPath,[require.resolve('tailwindcss/lib/cli.js'),'--config',path.join(root,'tailwind.config.ts'),'--input',path.join(root,'app/globals.css'),'--minify'],{cwd:root,encoding:'utf8',maxBuffer:8*1024*1024,stdio:['ignore','pipe','pipe']});
+ return stylesheet;
+}
 const compile = file=>ts.transpileModule(fs.readFileSync(path.join(root,file),'utf8'),{fileName:file,compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,jsx:ts.JsxEmit.React,esModuleInterop:true}}).outputText;
 const deviceModule={exports:{}};new Function('require','module','exports',compile('lib/devices.ts'))(name=>name.startsWith('.')?require('./load-lib.cjs')(name.slice(2)):require(name),deviceModule,deviceModule.exports);
 const {issuePairing,deviceRoute}=deviceModule.exports;
@@ -48,6 +56,7 @@ new Function('require','module','exports',${JSON.stringify(compile('app/player/p
 window.fixtureEvidence=evidence.exports;window.fixtureQueue=q.exports;window.fixtureCache=cache.exports;window.fixtureDiagnostic=diagnostic.exports;
 ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(player.exports.default));`;
 async function harness(options={}) {
+ const css=currentPlayerStyles();
  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'gridcast-playback-test-'));
  execFileSync(ffmpeg,['-v','error','-f','lavfi','-i','color=c=blue:s=128x72:r=25','-t','2','-an','-c:v','libvpx','-y',path.join(temp,'fixture.webm')]);
  const video=fs.readFileSync(path.join(temp,'fixture.webm'));
@@ -63,6 +72,7 @@ async function harness(options={}) {
  if(options.diagnostic){db.campaigns=[];require('./load-lib.cjs')('diagnostics').requestDiagnostic(db,db.screens[0],{id:'admin'},{config,config_version:7});}
  const server=http.createServer(async(req,res)=>{
   const u=new URL(req.url,'http://localhost');if(u.pathname.startsWith('/_next/static/'))u.pathname=u.pathname.replace('/_next/static/','/');requests.push({method:req.method,path:u.pathname});
+  if(u.pathname==='/player-fixture.css'){res.writeHead(200,{'Content-Type':'text/css','Cache-Control':'no-store'});res.end(css);return;}
   if(u.pathname==='/player-sw.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(root,'public/player-sw.js')));return;}
   if(u.pathname.startsWith('/api/playlist/')&&options.failFirstPlaylist&&!playlistFailed){playlistFailed=true;res.writeHead(503,{'Content-Type':'application/json'});res.end('{"error":"Fixture connection failed"}');return;}
   if(u.pathname.startsWith('/models/coco-ssd/')){res.setHeader('Content-Type',u.pathname.endsWith('.json')?'application/json':'application/octet-stream');res.end(fs.readFileSync(path.join(root,'public',u.pathname)));return;}
@@ -85,7 +95,7 @@ async function harness(options={}) {
   if(u.pathname==='/react.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(root,'node_modules/react/umd/react.development.js')));return;}
   if(u.pathname==='/react-dom.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(root,'node_modules/react-dom/umd/react-dom.development.js')));return;}
   if(u.pathname==='/player.js'){res.setHeader('Content-Type','application/javascript');res.end(bundle());return;}
-  res.setHeader('Content-Type','text/html');res.end('<!doctype html><html><head><meta charset="utf-8"><title>Gridcast player integration fixture</title></head><body><div id="root"></div><script src="/_next/static/react.js"></script><script src="/_next/static/react-dom.js"></script>'+(options.realModel?'<script src="/tf.js"></script><script src="/coco.js"></script>':'')+'<script src="/_next/static/player.js"></script></body></html>');
+  res.setHeader('Content-Type','text/html');res.end('<!doctype html><html><head><meta charset="utf-8"><title>Gridcast player integration fixture</title><link rel="stylesheet" href="/_next/static/player-fixture.css"></head><body><div id="root"></div><script src="/_next/static/react.js"></script><script src="/_next/static/react-dom.js"></script>'+(options.realModel?'<script src="/tf.js"></script><script src="/coco.js"></script>':'')+'<script src="/_next/static/player.js"></script></body></html>');
  });
  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});base=`http://127.0.0.1:${server.address().port}`;
  let browser;

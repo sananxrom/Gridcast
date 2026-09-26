@@ -405,3 +405,85 @@ stacking diagnosis. It does not prove the live recovery controls are blocked or 
 
 No remaining design objection to the browser-first direction. This review changes the plan only; it does
 not fix the test harness, build the CV module, deploy or independently verify Claude's runtime test result.
+
+## 9. Build 1 implemented — isolated attention lab
+
+The local evaluation entry point is `/vision-lab/evaluate`. It is intentionally outside `/player` and does
+not import a campaign, submit a receipt, change the commercial detector, or write any server data.
+Start with **Try simulation** to exercise timing and exports without a camera. For a real test, close
+same-origin Gridcast player tabs, **Prepare offline files**, then **Start camera test**. Camera access
+requires a user action. The optional video is a local file/object URL, never an upload. A plain test card
+is available without a file. Pause/buffering excludes timing; **Next test ad** splits attribution immediately.
+
+### 9.1 Implementation decisions and evidence
+
+- **Classic worker, CPU default.** The exact pinned MediaPipe 1.0.1 runtime failed initialization in a
+  module worker with `ModuleFactory not set`. Classic-worker initialization and transferred-frame inference
+  worked with CPU and GPU in installed Chrome. GPU initialization in the headless software-rendering probe
+  was slow; that probe is not a hardware performance comparison. The lab offers GPU explicitly and reports
+  its actual rates. No silent main-thread fallback is enabled.
+- **Pinned download package.** `public/vision-lab/assets.json` lists seven exact URLs, byte lengths and SHA-256
+  hashes: the JS bundle, SIMD and non-SIMD WASM loaders/runtimes, Face Landmarker float16 v1 and EfficientDet
+  Lite0 int8 v1. Total preparation is approximately 31.9 MB; the two model files alone are approximately
+  8.36 MB. Fetching both WASM variants supports offline initialization without guessing browser SIMD support.
+  Model downloads are accepted by Sanan; hash/version verification makes their provenance reproducible.
+- **Separate cache scope.** `public/vision-lab/sw.js` controls only `/vision-lab/`, caching its page, exact
+  build chunks and verified model package. It does not replace the player service worker or cache APIs.
+  The browser may evict cache data: an initial online preparation is required, and failed/offline missing
+  assets display a startup error rather than making up measurements. Changing model/runtime bytes requires
+  an explicit new profile/manifest and associated tests; cache names alone are not version evidence.
+- **One frame in flight.** `lib/vision/engine.ts` transfers reduced frames to the worker, targets eight face
+  and three body runs per second, drops excess work, stops stalled inference, and refuses unchanged video
+  timestamps or muted/ended/paused camera inputs. Late results become unavailable. Rates shown are achieved
+  rates, not a promise. Hidden tabs stop; resources are released on abort, camera disconnect and unmount.
+- **Isolation boundary.** An origin-scoped Web Lock prevents concurrent attention tests in the same browser
+  profile. Service-worker client inspection rejects an existing same-origin `/player` and checks every
+  2.5 seconds while running; a newly opened player stops the lab and adds an export warning. This cannot
+  detect a different origin/browser/profile or another application using CPU/GPU. Close those workloads
+  manually for a controlled comparison; do not describe this as system-wide exclusivity.
+
+### 9.2 Measurement meaning and limits
+
+`lib/vision/metrics.ts` keeps one body-led temporary track set, with faces assigned to bodies. Retained
+unmatched tracks do not add to current people count. Ambiguous crossings and unavailable face evidence
+remain unknown. A successful empty body detection plus a contradictory face detection does not become
+known-zero attention. Samples predating newly created tracks or a newer play boundary cannot classify them.
+
+The full camera frame is the evaluation zone in this build. Body observations cap at 20, faces at five,
+retained tracks at 40, and completed play summaries at 20. Freshness is 750 ms for body and 500 ms for face
+observations; long unseen intervals are conservatively unknown rather than bridged by track retention.
+Tracker IDs survive matching only temporarily in memory. No per-person identifiers, frames, landmarks,
+boxes or face templates are included in aggregate downloads.
+
+Exports contain independently observed/unknown/saturated time, assessable-person denominators, presence,
+attention and visible-smile person-seconds, dwell, longest uninterrupted look, per-play estimated/attentive
+impressions, and right-censored visits. Thresholds are one second of observed presence and two seconds of
+estimated looking per temporary visit/play. They are evaluation definitions, not certified reach or unique
+people. Visit loss/reacquisition and crossing ambiguity can change estimates; human validation is required.
+Visible smile is a facial-expression estimate, not happiness, preference or a causal ad response.
+
+The face-direction heuristic uses pose/iris information, blink and face-resolution gates, and explicit
+experimental horizontal/vertical offsets. It is not calibrated eye tracking. Export metadata freezes the
+run's mode/backend/offsets so later control changes cannot relabel old results. Simulations remain marked
+synthetic after stopping. Snapshots do not alter accumulated timing; UI refresh rate cannot manufacture time.
+
+### 9.3 Verification and next handoff
+
+Tests are in `tests/attention-metrics.test.cjs`, `tests/attention-engine.test.cjs`,
+`tests/attention-runtime.browser.cjs` and `tests/attention-evaluation.browser.cjs`. The runtime fixture uses
+exact locally hash-verified model bytes; its service-worker fixture uses local URLs and alone is not CDN
+proof. The compiled-page test separately uses the actual CDN URLs, verifies preparation, reloads offline
+and initializes/runs the CPU models with a synthetic camera. Set `GC_TEST_EVALUATION_URL` to a running local
+production build; set `GC_TEST_REAL_CDN=1` for this network-dependent integration check. Runtime test assets
+are opt-in via `GC_TEST_VISION_ASSETS`; missing prerequisites are explicitly skipped.
+
+The prior player harness now generates/loads current Tailwind CSS. All five original player suites pass;
+normal recovery interactions were also checked against a compiled `/player` with active creative shield
+and isolated API fixtures. No application player styling change was needed.
+
+**Next is Build 2:** a real-person session in Sanan's chosen computer browser, timed enter/exit, look away,
+two-person crossing, occlusion, lighting, spectacles, camera placement and cap scenarios; record coverage,
+errors, achieved rates and video playback behavior. Repeat on Brave/Safari before promising support there.
+Model execution on synthetic frames establishes integration, not detection or gaze accuracy. Production
+receipt/reporting integration and physical Android/TV rollout remain Builds 3 and 4, with the §8 receipt
+budget and existing measurement/billing separation preserved.
