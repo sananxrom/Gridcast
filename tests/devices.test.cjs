@@ -70,9 +70,12 @@ test('measurement is null when unmeasured and requires exact actual model and bo
 });
 test('heartbeat works without a playlist item and records applied version independently of plays',()=>{
  const f=fixture(),n=f.db.plays.length;
- assert.equal(f.call('POST','heartbeat',{device_now:'2026-09-24T00:00:11Z',config_version:3,app_ver:'test',uptime_s:12},f.paired.token).status,200);
+ assert.equal(f.call('POST','heartbeat',{device_now:'2026-09-24T00:00:11Z',config_version:3,app_ver:'test',uptime_s:12,delivery_queue:{pending:4,blocked:2}},f.paired.token).status,200);
  assert.equal(f.db.plays.length,n);assert.equal(f.db.devices[0].applied_config_version,3);assert.equal(f.db.devices[0].clock_offset_estimate_ms,0);
+ assert.deepEqual(f.db.devices[0].delivery_queue,{pending:4,blocked:2,reported_at:'2026-09-24T00:00:11.000Z',source:'device_report'});
  assert.equal(f.call('POST','heartbeat',{device_now:'2026-09-24T00:00:11Z',config_version:{}},f.paired.token).status,400);
+ for(const q of [{pending:-1,blocked:0},{pending:0,blocked:5001},{pending:1.5,blocked:0},null])
+  assert.equal(f.call('POST','heartbeat',{device_now:'2026-09-24T00:00:11Z',config_version:3,delivery_queue:q},f.paired.token).status,400);
 });
 test('wrong assignment/device/config cannot report or announce a play',()=>{
  const f=fixture();const other=f.pair('screen2');

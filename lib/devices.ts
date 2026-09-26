@@ -89,6 +89,12 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
       if (!v || !['disabled','starting','ready','unavailable'].includes(v.camera_state) || !['loading','ready','error','not_loaded'].includes(v.model_state) || (v.model_ver !== null && v.model_ver !== 'coco-ssd@2.2.3/lite_mobilenet_v2') || (v.last_sample_at !== null && (typeof v.last_sample_at !== 'string' || !Number.isFinite(Date.parse(v.last_sample_at))))) return fail(400, 'Invalid detector status');
       device.vision = { camera_state: v.camera_state, model_state: v.model_state, model_ver: v.model_ver, last_sample_at: v.last_sample_at, reported_at: iso(now), source: 'device_report' };
     }
+    if (body.delivery_queue !== undefined) {
+      const q = body.delivery_queue;
+      if (!q || !Number.isSafeInteger(q.pending) || q.pending < 0 || q.pending > 5000 || !Number.isSafeInteger(q.blocked) || q.blocked < 0 || q.blocked > 5000)
+        return fail(400, 'Invalid delivery queue status');
+      device.delivery_queue = { pending: q.pending, blocked: q.blocked, reported_at: iso(now), source: 'device_report' };
+    }
     device.last_heartbeat_at = iso(now); device.status = 'online';
     device.app_ver = String(body.app_ver || '').slice(0, 80); device.agent_ver = String(body.agent_ver || '').slice(0, 100);
     device.applied_config_version = body.config_version ?? null;

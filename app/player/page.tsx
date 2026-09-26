@@ -1,7 +1,7 @@
 'use client';
 import React, { useEffect, useRef, useState } from 'react';
 import { joinPlayerEvidence, answerEvidenceProtocol } from '@/lib/player-evidence-lock';
-import { flushPlays, enqueuePlay, queueStatus, queueCapacity } from '@/lib/player-queue';
+import { flushPlays, enqueuePlay, queueStatus, queueCapacity, reservePlay, touchPlayReservation, releasePlayReservation, RETAINED_RECORD_LIMIT } from '@/lib/player-queue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { BrandLogo } from '@/components/ui/brand-mark';
@@ -10,7 +10,7 @@ import { cacheMedia, cachedMediaUrl, saveReadySchedule, readySchedule, reserveLo
 import { cameraConstraints, cameraError, frameSize } from '@/lib/player-vision';
 
 declare global { interface Window { YT: any; onYouTubeIframeAPIReady: () => void; cocoSsd: any; tf: any } }
-const APP_VERSION = 'gridcast-web/0.7.0';
+const APP_VERSION = 'gridcast-web/0.8.0';
 const MODEL_VERSION = 'coco-ssd@2.2.3/lite_mobilenet_v2';
 type Credential = { token: string; device_id: string; screen_id: string };
 type Item = { kind?: 'diagnostic' | 'paid' | 'filler'; diagnostic_has_camera?: boolean; assignment_id: string; valid_until: string; campaign_id: string | null; creative_id: string;
@@ -38,7 +38,7 @@ export default function Player() {
   const [credential, setCredential] = useState<Credential | null>(null), [code, setCode] = useState(''), [err, setErr] = useState('');
   const [screen, setScreen] = useState<any>(null), [current, setCurrent] = useState<Item | null>(null), [status, setStatus] = useState('Starting');
   const [count, setCount] = useState<number | null>(null), [average, setAverage] = useState<string>('—'), [recorded, setRecorded] = useState(0);
-  const [queue, setQueue] = useState({ pending: 0, blocked: 0, total: 0 });
+  const [queue, setQueue] = useState({ pending: 0, blocked: 0, reserved: 0, total: 0 });
   const [visionStatus, setVisionStatus] = useState('Waiting for screen settings'), [visionRetry, setVisionRetry] = useState(false);
   const [diagnosticStatus, setDiagnosticStatus] = useState('');
   const [surface, setSurface] = useState(0), [imageSource, setImageSource] = useState(''), [offlineStatus, setOfflineStatus] = useState('');
@@ -80,12 +80,12 @@ export default function Player() {
       return preparedImages.get(item.assignment_id)!;
     };
     let yt: any = null, ytReady = false, detector: any = null, stream: MediaStream | null = null, cameraOK = false;
-    let startup = false, pulling = false, flushing = false, heartbeatBusy = false, fatal = true, actualOffset = 0;
+    let startup = false, pulling = false, flushing = false, heartbeatBusy = false, fatal = true, actualOffset = 0, reservedPlayUid: string | null = null;
     let requestedAudio = true, browserBlockedAudio = false;
     let diagnosticBlockedMessage = '';
     let diagnosticFlushing = false, lastSampleAt: string | null = null;
     const attemptedDiagnostics = new Set<string>();
-    let lastPull = 0, lastHeartbeat = 0, lastDetect = 0, detecting = false;
+    let lastPull = 0, lastHeartbeat = 0, lastDetect = 0, lastReservationTouch = 0, detecting = false;
     let cameraStarting = false, cameraKey = '', lastCameraFrame = -1, detectorBroken = false;
     const inferenceFrame = document.createElement('canvas');
     const cameraSurface = camera.current, overlay = canvas.current;
@@ -235,9 +235,10 @@ export default function Player() {
       }
       try {
         await enqueuePlay(paired.device_id, event, Number(s.config.offline_buffer_plays) || 5000);
+        if (reservedPlayUid === s.uid) reservedPlayUid = null;
         if (!disposed) { setRecorded(v => v + 1); setAverage(avg === null ? '—' : avg.toFixed(1)); setQueue(await queueStatus(paired.device_id)); }
         void flush();
-      } catch (e: any) { unsaved.set(s.uid, () => enqueuePlay(paired.device_id, event, Number(s.config.offline_buffer_plays) || 5000)); fatal = true; if (!disposed) { setPublicFailure(true); setStorageWarning('A delivery record could not be saved. Keep this player open while storage is retried.'); } state('Playback stopped to preserve delivery records.'); }
+      } catch (e: any) { unsaved.set(s.uid, async () => { await enqueuePlay(paired.device_id, event, Number(s.config.offline_buffer_plays) || 5000); if (reservedPlayUid === s.uid) reservedPlayUid = null; }); fatal = true; if (!disposed) { setPublicFailure(true); setStorageWarning('A delivery record could not be saved. Keep this player open while storage is retried.'); } state('Playback stopped to preserve delivery records.'); }
       retiring = false; if (!disposed && !fatal) void startNext();
     }
     async function retryUnsaved() {
@@ -355,6 +356,7 @@ export default function Player() {
     async function startNext() {
       if (startup || retiring || currentSlot || fatal || disposed || document.hidden) return;
       startup = true;
+      let reservedUid: string | null = null;
       try {
         // Apply refreshed authorizations at a creative boundary, preserving round order.
         if (pending) {
@@ -371,6 +373,16 @@ export default function Player() {
         }
         if (disposed || fatal) return;
         setPublicFailure(false);
+        const playUid = crypto.randomUUID();
+        if (!(await reservePlay(paired.device_id, playUid, Number(playlist.config.offline_buffer_plays) || 5000))) {
+          const stored = await queueStatus(paired.device_id); setQueue(stored);
+          state(stored.total >= RETAINED_RECORD_LIMIT ? 'Saved delivery history reached the device limit. Existing records remain saved; playback is paused.'
+            : stored.blocked ? 'Retryable delivery storage is full. Reconnect to retry pending records; blocked history remains saved on this device.'
+              : 'Delivery storage is full. Reconnect to retry saved deliveries; new playback remains paused until space is available.');
+          setPublicFailure(true); return;
+        }
+        reservedUid = playUid;
+        reservedPlayUid = playUid;
         let item: Item | undefined;
         // Entries repeated by the server represent explicit relative turns/weights.
         for (let attempt = 0; attempt < cycleItems.length; attempt++) {
@@ -384,11 +396,15 @@ export default function Player() {
           if (eligible(candidate)) exhausted.add(candidate.assignment_id);
         }
         waitingEmpty = !item;
-        if (!item) { setCurrent(null); if (await startDiagnostic()) return; state(diagnosticBlockedMessage || (playlist.budget_state === 'reserved_elsewhere_or_exhausted' ? 'Waiting for paid playback allowance' : playlist.readiness?.message || 'No authorised playable content. Waiting for a refreshed schedule.')); return; }
+        if (!item) {
+          await releasePlayReservation(paired.device_id, playUid); if (reservedPlayUid === playUid) reservedPlayUid = null; reservedUid = null;
+          setCurrent(null); if (await startDiagnostic()) return; state(diagnosticBlockedMessage || (playlist.budget_state === 'reserved_elsewhere_or_exhausted' ? 'Waiting for paid playback allowance' : playlist.readiness?.message || 'No authorised playable content. Waiting for a refreshed schedule.')); return;
+        }
         if (!item.asset_url) await ensureYouTube();
         if (disposed || fatal) return;
-        currentSlot = { item, uid: crypto.randomUUID(), started: Date.now(), startedPlaying: false, accumulated: 0, segmentStart: null,
+        currentSlot = { item, uid: playUid, started: Date.now(), startedPlaying: false, accumulated: 0, segmentStart: null,
           mediaStart: 0, samples: [], cameraHealthy: cameraHealthyNow() && !!detector && playlist.config.model === 'coco-ssd', config: { ...playlist.config }, version: playlist.config_version, offset: actualOffset, done: false };
+        reservedUid = null;
         state('Preparing media');
         if (item.asset_url && item.media_type === 'image') {
           const { url, image: decoded } = await prepareImage(item);
@@ -415,14 +431,16 @@ export default function Player() {
         } else { setCurrent(item); if (requestedAudio && !browserBlockedAudio) { yt.unMute(); yt.setVolume(100); } else yt.mute(); yt.loadVideoById({ videoId: item.youtube_id, startSeconds: 0 }); yt.playVideo(); }
         void prepareNext();
       } catch (e: any) { state(e.message || 'Playback could not start'); if (currentSlot) void finish('error'); }
-      finally { startup = false; }
+      finally { if (reservedUid) { if (reservedPlayUid === reservedUid) reservedPlayUid = null; void releasePlayReservation(paired.device_id, reservedUid); } startup = false; }
     }
     async function heartbeat() {
       if (!playlist || heartbeatBusy || fatal || disposed) return;
       heartbeatBusy = true;
       try {
+        let delivery_queue: { pending: number; blocked: number } | undefined;
+        try { const saved = await queueStatus(paired.device_id); delivery_queue = { pending: saved.pending, blocked: saved.blocked }; } catch {}
         await authRequest('/heartbeat', { device_now: new Date().toISOString(), app_ver: APP_VERSION, agent_ver: detector ? MODEL_VERSION : 'camera-unavailable',
-          config_version: playlist.config_version, uptime_s: Math.round((performance.now() - booted) / 1000), free_disk_bytes: null, vision: vision() });
+          config_version: playlist.config_version, uptime_s: Math.round((performance.now() - booted) / 1000), free_disk_bytes: null, vision: vision(), ...(delivery_queue ? { delivery_queue } : {}) });
         lastHeartbeat = Date.now();
       } catch {} finally { heartbeatBusy = false; }
     }
@@ -530,9 +548,13 @@ export default function Player() {
       const native = e.target as HTMLVideoElement, item = currentSlot?.item; if (native !== activeMedia || !item?.asset_url || item.media_type === 'image') return;
       if (!Number.isFinite(native.duration) || Math.abs(native.duration - item.duration_s) > 1 || (item.width && item.width !== native.videoWidth) || (item.height && item.height !== native.videoHeight)) void finish('error');
     };
+    const disableTextTracks = (e: Event) => { const native = e.currentTarget as HTMLVideoElement; for (const track of Array.from(native.textTracks || [])) track.mode = 'disabled'; };
+    const disableNewTextTrack = (e: TrackEvent) => { if (e.track) e.track.mode = 'disabled'; };
     for (const native of natives) {
       native?.addEventListener('playing', nativePlaying); native?.addEventListener('pause', nativePause); native?.addEventListener('waiting', nativePause);
       native?.addEventListener('ended', nativeEnd); native?.addEventListener('error', nativeError); native?.addEventListener('loadedmetadata', metadata);
+      native?.addEventListener('loadedmetadata', disableTextTracks);
+      native?.textTracks?.addEventListener('addtrack', disableNewTextTrack);
     }
     const visibility = () => { if (document.hidden) { clearDetection(); void finish('interrupted'); } else void startNext(); };
     const online = () => { void flush(); void pull(); };
@@ -557,6 +579,14 @@ export default function Player() {
     document.addEventListener('visibilitychange', visibility); window.addEventListener('online', online);
     const ticker = setInterval(() => {
       if (disposed || fatal) return;
+      if (reservedPlayUid && Date.now() - lastReservationTouch >= 30000) {
+        const uid = reservedPlayUid; lastReservationTouch = Date.now();
+        void touchPlayReservation(paired.device_id, uid).then(ok => {
+          if (!ok && reservedPlayUid === uid && !fatal) { fatal = true; stopMedia(); state('Delivery storage reservation was interrupted. Playback stopped to preserve records.'); if (currentSlot?.uid === uid) void finish('interrupted'); else { reservedPlayUid = null; setPublicFailure(true); } }
+        }).catch(() => {
+          if (reservedPlayUid === uid && !fatal) { fatal = true; stopMedia(); state('Delivery storage reservation could not be renewed. Playback stopped to preserve records.'); if (currentSlot?.uid === uid) void finish('interrupted'); else { reservedPlayUid = null; setPublicFailure(true); } }
+        });
+      }
       const s = currentSlot;
       if (s) {
         const played = s.accumulated + (s.segmentStart === null ? 0 : performance.now() - s.segmentStart), elapsed = Date.now() - s.started;
@@ -587,7 +617,8 @@ export default function Player() {
     return () => {
       const settling = settlePlayer.current(); disposed = true; evidenceGuard.stop(settling); clearInterval(ticker); clearInterval(flusher); timers.forEach(clearTimeout);
       for (const native of natives) { native?.removeEventListener('playing', nativePlaying); native?.removeEventListener('pause', nativePause); native?.removeEventListener('waiting', nativePause);
-      native?.removeEventListener('ended', nativeEnd); native?.removeEventListener('error', nativeError); native?.removeEventListener('loadedmetadata', metadata); }
+      native?.removeEventListener('ended', nativeEnd); native?.removeEventListener('error', nativeError); native?.removeEventListener('loadedmetadata', metadata); native?.removeEventListener('loadedmetadata', disableTextTracks);
+      native?.textTracks?.removeEventListener('addtrack', disableNewTextTrack); }
       objectUrls.forEach(url => URL.revokeObjectURL(url));
       window.removeEventListener('storage', credentialChanged);
       document.removeEventListener('visibilitychange', visibility); window.removeEventListener('online', online);
@@ -653,16 +684,17 @@ export default function Player() {
   </div>;
   const commissioning = !rejected && (overlayEnabled || diagnosticActive);
   if (!credential) return <div className="grid min-h-screen place-items-center bg-slate-950 p-4">{pairingForm}</div>;
-  return <div className="fixed inset-0 bg-black text-white">
+  return <div className="fixed inset-0 cursor-none bg-black text-white" style={{ cursor: 'none' }}>
     <div ref={youtubeMount} className={`absolute inset-0 h-full w-full ${!current || current.asset_url ? 'hidden' : ''}`} />
     <video data-role="creative" data-active={surface === 0} ref={media} playsInline preload="auto" className={`absolute inset-0 h-full w-full object-contain ${current?.asset_url && current.media_type !== 'image' && surface === 0 ? '' : 'hidden'}`} />
     <video data-role="creative" data-active={surface === 1} ref={standbyMedia} playsInline preload="auto" className={`absolute inset-0 h-full w-full object-contain ${current?.asset_url && current.media_type !== 'image' && surface === 1 ? '' : 'hidden'}`} />
     <img ref={imageSurface} src={imageSource || undefined} alt="" className={`absolute inset-0 h-full w-full object-contain ${current?.media_type === 'image' ? '' : 'hidden'}`} />
-    <div className="pointer-events-none absolute inset-0 z-[2]" />
-    {soundBlocked && current && <Button data-role="enable-sound" className="fixed bottom-4 left-1/2 z-20 -translate-x-1/2" onClick={() => { void recoverSound.current(); }}>Enable sound</Button>}
-    {(commissioning || !current || publicFailure || rejected || !!storageWarning) && <div data-role="player-status" className="fixed left-3 top-3 z-10 rounded bg-black/80 p-3 text-xs" role="status">
+    <div data-role="creative-interaction-shield" aria-label={soundBlocked && current ? 'Tap anywhere to enable sound' : undefined}
+      className="absolute inset-0 z-[2] cursor-none" style={{ position: 'absolute', inset: 0, zIndex: 2, cursor: 'none', pointerEvents: current ? 'auto' : 'none' }}
+      onClick={() => { if (soundBlocked && current) void recoverSound.current(); }} />
+    {(commissioning || !current || publicFailure || rejected || !!storageWarning || soundBlocked && !!current) && <div data-role="player-status" className="fixed left-3 top-3 z-10 rounded bg-black/80 p-3 text-xs" role="status">
       {commissioning && <><b>{screen?.name || 'Gridcast'}</b> · {diagnosticActive ? 'Screen test' : 'Media playback'}<br /></>}
-      {storageWarning || status}{commissioning && offlineStatus && <p className="mt-1">{offlineStatus}</p>}
+      {soundBlocked && current ? <span>Tap the screen for sound</span> : storageWarning || status}{commissioning && offlineStatus && <p className="mt-1">{offlineStatus}</p>}
       {rejected && <div className="mt-2 flex gap-3"><Button disabled={busy} onClick={retry}>Retry existing pairing</Button><Button disabled={busy} onClick={openRecovery}>Enter a new pairing code</Button></div>}
       {!recoveryOpen && err && <p role="alert" className="mt-1 text-amber-300">{err}</p>}
     </div>}

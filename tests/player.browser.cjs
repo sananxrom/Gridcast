@@ -527,9 +527,10 @@ test('uploaded creatives use the default-on sound setting', {skip:!executablePat
 
 test('browser sound autoplay rejection retries muted and exposes gesture recovery without a second play', {skip:!executablePath||!ffmpeg}, async()=>{
  const h=await harness({blockUnmutedAudio:true});try{
-  await h.page.getByRole('button',{name:'Enable sound',exact:true}).waitFor();
+  await h.page.locator('[data-role="player-status"]').getByText('Tap the screen for sound').waitFor();
+  assert.equal(await h.page.getByRole('button',{name:'Enable sound',exact:true}).count(),0,'sound recovery must not cover the creative with a button');
   assert.equal(await h.page.locator('video[data-role="creative"][data-active="true"]').evaluate(v=>v.muted),true);
-  await h.page.getByRole('button',{name:'Enable sound',exact:true}).click();
+  await h.page.locator('[data-role="creative-interaction-shield"]').click({position:{x:200,y:200}});
   await h.page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.muted;});
   await waitFor(()=>h.bodies.length===1,5000);
   assert.equal(h.bodies.length,1,'Sound recovery must not create another delivery record');
@@ -544,11 +545,23 @@ test('creative sound can be disabled by inherited playback config', {skip:!execu
  }finally{await h.cleanup();}
 });
 
+test('native caption tracks are disabled after media metadata becomes available', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness();try{
+  const mode=await h.page.locator('video[data-role="creative"][data-active="true"]').evaluate(video=>{
+   const track=video.addTextTrack('captions','Fixture captions','en');track.mode='showing';video.dispatchEvent(new Event('loadedmetadata'));const metadataMode=track.mode;
+   track.mode='showing';const added=new Event('addtrack');Object.defineProperty(added,'track',{value:track});video.textTracks.dispatchEvent(added);return [metadataMode,track.mode];
+  });
+  assert.deepEqual(mode,['disabled','disabled']);
+ }finally{await h.cleanup();}
+});
+
 test('YouTube playback requests sound by default and uses the autoplay-blocked fallback', {skip:!executablePath||!ffmpeg}, async()=>{
  const h=await harness({youtube:true,blockYouTubeAudio:true});try{
-  await h.page.getByRole('button',{name:'Enable sound',exact:true}).waitFor();
+  await h.page.locator('[data-role="player-status"]').getByText('Tap the screen for sound').waitFor();
+  assert.equal(await h.page.locator('[data-role="creative-interaction-shield"]').evaluate(el=>getComputedStyle(el).pointerEvents),'auto');
+  assert.equal(await h.page.locator('.fixed.inset-0.cursor-none').first().evaluate(el=>getComputedStyle(el).cursor),'none');
   assert.equal(await h.page.evaluate(()=>window.fixtureYT.muted),true,'blocked YouTube autoplay should retry muted');
-  await h.page.getByRole('button',{name:'Enable sound',exact:true}).click();
+  await h.page.locator('[data-role="creative-interaction-shield"]').click({position:{x:200,y:200}});
   await h.page.waitForFunction(()=>window.fixtureYT&&!window.fixtureYT.muted);
   await waitFor(()=>h.bodies.length===1,5000);
   assert.equal(h.bodies.length,1,'YouTube sound recovery must not create another delivery record');

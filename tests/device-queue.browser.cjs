@@ -7,7 +7,7 @@ const ts = require('typescript');
 const {chromium} = require('playwright');
 const candidates = [process.env.GC_TEST_BROWSER_PATH,chromium.executablePath(),'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome','/usr/bin/chromium'].filter(Boolean);
 const executablePath = candidates.find(p=>fs.existsSync(p));
-test('IndexedDB queue persists reload, assigns atomic sequences, retries, and retains rejected records', {skip:!executablePath}, async()=>{
+test('IndexedDB queue reserves capacity across tabs, retries, and retains blocked and interrupted records', {skip:!executablePath}, async()=>{
  const source=ts.transpileModule(fs.readFileSync(path.join(__dirname,'../lib/player-queue.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText;
  const server=http.createServer((req,res)=>{res.writeHead(200,{'Content-Type':'text/html'});res.end('<!doctype html><title>Queue integration test</title>');});
  await new Promise(r=>server.listen(0,'127.0.0.1',r));
@@ -26,8 +26,20 @@ test('IndexedDB queue persists reload, assigns atomic sequences, retries, and re
   await page.evaluate(()=>{const original=Date.now;Date.now=()=>original()+600000;});
   await page.evaluate(()=>window.testQueue.flushPlays('device-a',async event=>event.seq_no===1?{status:200}:{status:409,error:'conflicting payload'}));
   const after=await page.evaluate(()=>window.testQueue.queuedPlays('device-a'));assert.equal(after.length,1);assert.equal(after[0].blocked,true);assert.equal(after[0].event.seq_no,2);
-  await page.reload();await init();const status=await page.evaluate(()=>window.testQueue.queueStatus('device-a'));assert.deepEqual(status,{pending:0,blocked:1,total:1});
-  const full=await page.evaluate(async()=>{try{await window.testQueue.enqueuePlay('device-a',{play_uid:'three'},1);return false;}catch{return true;}});assert.equal(full,true);
-  assert.equal(await page.evaluate(()=>window.testQueue.queueCapacity('device-a', 1)),false);
+  await page.reload();await init();const status=await page.evaluate(()=>window.testQueue.queueStatus('device-a'));assert.deepEqual(status,{pending:0,blocked:1,reserved:0,total:1});
+  assert.equal(await page.evaluate(()=>window.testQueue.queueCapacity('device-a', 1)),true,'a retained blocked record does not consume retryable capacity');
+  const admitted=await page.evaluate(async()=>{const ok=await window.testQueue.reservePlay('device-a','three',1);if(ok)await window.testQueue.enqueuePlay('device-a',{play_uid:'three'},1);return ok;});assert.equal(admitted,true);
+  assert.equal(await page.evaluate(()=>window.testQueue.queueCapacity('device-a', 1)),false,'an unacknowledged report occupies retryable capacity');
+  const denied=await page.evaluate(()=>window.testQueue.reservePlay('device-a','four',1));assert.equal(denied,false);
+  await page.evaluate(async()=>window.testQueue.flushPlays('device-a',async event=>event.play_uid==='three'?{status:200}:{status:409,error:'conflicting payload'}));
+  assert.equal(await page.evaluate(()=>window.testQueue.queueCapacity('device-a', 1)),true,'an acknowledged report releases its reserved capacity');
+  const abandoned=await page.evaluate(async()=>window.testQueue.reservePlay('device-a','abandoned',1));assert.equal(abandoned,true);
+  await page.evaluate(()=>{const original=Date.now;Date.now=()=>original()+121000;});
+  const interrupted=await page.evaluate(()=>window.testQueue.queueStatus('device-a'));assert.equal(interrupted.blocked,2,'an expired reservation is retained as interrupted evidence');
+  await page.evaluate(()=>window.testQueue.enqueuePlay('device-a',{play_uid:'abandoned',ended_reason:'interrupted'}));
+  const recovered=await page.evaluate(()=>window.testQueue.queuedPlays('device-a'));assert.ok(recovered.some(row=>row.event.play_uid==='abandoned'&&!row.blocked&&row.event.ended_reason==='interrupted'),'a late completion fills its original reservation');
+  const races=await page.evaluate(async()=>Promise.all([window.testQueue.reservePlay('device-b','race-one',1),window.testQueue.reservePlay('device-b','race-two',1)]));
+  assert.equal(races.filter(Boolean).length,1,'concurrent tabs cannot reserve the same final pending slot');
+  const winner=races[0]?'race-one':'race-two';await page.evaluate(uid=>window.testQueue.releasePlayReservation('device-b',uid),winner);
  } finally {await browser?.close();await new Promise(r=>server.close(r));}
 });

@@ -239,6 +239,12 @@ retries from a direct user gesture. New sound-off config mutes active and standb
 successful playlist sync arrives. Standby media and camera remain muted. The reported one-laptop exception
 remains unverified; user interaction, another media surface or browser state are possibilities, not findings.
 
+If autoplay is blocked, the player now shows a small “Tap the screen for sound” message in its public status
+corner and places an interaction shield over the creative. A tap anywhere in the creative area calls sound
+recovery from that user gesture; there is no persistent button over the ad. The shield and hidden cursor keep
+pointer hover/clicks from reaching the YouTube frame. A real YouTube device repro is still required before
+claiming that every browser/OS control is suppressed.
+
 Keep requested sound, browser-blocked sound and the active playback surface separate. An unmuted element
 does not prove audible speakers, a non-silent source or that anyone heard it. Add no billing interpretation
 or new receipt schema for this cleanup.
@@ -307,10 +313,32 @@ OS or host shell. Existing `controls: 0` and missing native controls do not esta
 Retain the app's minimal kiosk controls; targeted context-menu/Picture-in-Picture restrictions may be added
 only with relevant browser testing, not as a guarantee against OS/browser media controls.
 
-The current pointer-events-none layer does not intercept clicks. If an interaction shield is added, route
-intentional sound recovery through an actual gesture handler and test iframe behavior. A tap may show minimal
-status, never commissioning or maintenance. Do not mask creative content, rely on browser-specific CSS as
-an absolute guarantee, or block the only interaction that can recover playback.
+The player now uses an interaction shield above the creative and routes a tap through the direct sound
+recovery gesture. It hides the cursor over the player surface and disables native text tracks on metadata
+load or when new tracks arrive. Browser tests cover the local player path; the YouTube iframe behavior and
+browser/OS chrome still need a real-device repro. The shield never opens commissioning or maintenance.
+YouTube captions follow viewer preference; no universal captions-off guarantee exists. Do not mask creative
+content, treat browser-specific CSS as an absolute guarantee, or block the only interaction that can recover
+playback.
+
+### Commercial delivery storage
+
+The player now separates retryable pending count from retained blocked count. Before selecting an assignment
+or filler for playback, it writes an IndexedDB reservation for the play UID in the same database used by the
+queue. The transaction enforces the configured pending limit across tabs and a fixed 5,000-record retained
+history bound; each reservation persists 8 KiB of padding so completion can replace it without requiring
+additional queue capacity. The completed event is limited to 4 KiB and atomically replaces the reservation.
+Acknowledgement frees the pending and retained-history slot. A permanent server rejection moves the existing
+row to blocked status; it remains exportable under its original device identity and does not consume the
+retryable pending limit. Old v1 rows are preserved and included in both capacity calculations.
+
+Active reservations are refreshed every 30 seconds. An abandoned reservation becomes a blocked interrupted
+metadata record after two minutes, holding its original retained-history slot. A late completion with the
+same play UID can fill that record idempotently. No row is evicted. If the pending or retained-history bound
+is full, playback pauses before another creative starts; authorized export does not clear either bound and
+there is no self-service deletion/reconciliation flow. Device heartbeats report bounded pending/blocked
+counts for that exact device; the authorized screen detail view shows them with their report time. Counts are
+self-reported device telemetry, not proof that every report reached the server.
 
 ## 6. Delivery and verification sequence
 
@@ -319,10 +347,10 @@ an absolute guarantee, or block the only interaction that can recover playback.
    production build passed. The reviewed commit was released through the existing Firebase workflow.
    The temporary export limitation remains documented below.
 3. Release B scoped maintenance is deployed; see §8 for index readiness and verification boundaries.
-4. Audio configuration/fallback shipped in `9380162` / `build-2026-09-25-006`; source tests cover default-on,
-   inherited overrides, sound-off sync, native fallback and YouTube fallback. Physical speakers and
-   Android/WebView remain unverified. Caption/control work remains a separate follow-up. Heartbeat-driven
-   refresh is also still a follow-up.
+4. Audio configuration/fallback shipped in `9380162` / `build-2026-09-25-006`; the tap-anywhere recovery,
+   interaction shield and native caption-track suppression are follow-up source changes. Physical speakers,
+   Android/WebView and real YouTube chrome remain unverified. Heartbeat-driven config refresh is a separate
+   follow-up.
 5. Record actual results and exact release SHAs in AI-LOG.md. Keep source review, automated tests, desktop
    browser tests and physical-device validation distinct. Do not mark an untested browser/device as passed.
 
@@ -426,8 +454,11 @@ The service worker probes open `/player` tabs for this coordination protocol. Ol
 reload instructions; their absence from the lock API is not mistaken for safety. Maintenance requires
 Web Locks, BroadcastChannel and service-worker support. The browser controls local storage and can evict
 it; this feature does not promise durability after browser clearing, forced termination or OS failure.
-Exports do **not** free commercial or diagnostic capacity. The previously identified commercial blocked-row
-capacity defect is a separate follow-up. Audio, captions and YouTube hover/change chrome remain unchanged.
+Exports do **not** free commercial or diagnostic capacity. Commercial queue admission now counts retryable
+reports and reservations separately from blocked rows while retaining a bounded no-eviction history. The
+player reports scoped pending/blocked counts on heartbeat. Audio recovery no longer leaves a center-screen
+button over creative; pointer shielding, native text-track disabling and sound recovery are implemented.
+Physical device, YouTube iframe and browser/OS chrome validation remain open.
 
 ### Release prerequisite and validation
 

@@ -99,7 +99,7 @@ export const SETTINGS: Setting[] = [
     info: 'When the venue is open. The player sleeps outside this window, and it prices the screen.' }),
   T('start_automatically', 'Start automatically', 'playback', 'toggle', true, { common: true }),
   T('audio_enabled', 'Creative sound', 'playback', 'toggle', true, { common: true,
-    info: 'Request sound for uploaded videos and YouTube. Browsers may require a tap before allowing sound; playback then continues muted until you enable it.' }),
+    info: 'Request sound for uploaded videos and YouTube. If the browser blocks autoplay, tap the player once; it stays muted until that gesture or a kiosk sound policy allows audio.' }),
   T('resume_playlist', 'Resume playlist', 'playback', 'toggle', true, { common: true,
     info: 'Continue from the last played slide after a restart.' }),
   T('start_from_cache', 'Start from cache', 'playback', 'toggle', true, {
@@ -184,7 +184,7 @@ export const SETTINGS: Setting[] = [
   T('work_offline', 'Work offline', 'connectivity', 'toggle', false, { common: true,
     info: 'Stop contacting the server entirely and play from cache. For a screen on a dead connection.' }),
   T('offline_buffer_plays', 'Offline play buffer', 'connectivity', 'number', 5000, {
-    info: 'Completed play reports wait locally for up to 72 hours. A full queue stops new playback until space is available. This does not cache YouTube videos.' }),
+    info: 'Completed play reports wait locally for up to 72 hours. Pending reports use this limit; blocked history is retained separately up to its fixed device limit. Playback pauses when safe storage is full. This does not cache YouTube videos.' }),
   T('heartbeat_s', 'Heartbeat interval', 'connectivity', 'number', 30, { unit: 's', locked: true,
     lockReason: 'Drives live / not responding / offline across the platform',
     info: 'A screen is “not responding” after 90s without a heartbeat, and offline after 900s.' }),

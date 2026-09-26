@@ -149,6 +149,8 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
         {mayEdit && <div className="space-y-2 p-3 text-xs">
           <p className="text-muted-foreground">Device: {d.device && d.device.status!=='revoked'?'paired':d.device?.status||'not paired'}</p>
           {d.device?.last_heartbeat_at && <p>Last heartbeat: {fmtDate(d.device.last_heartbeat_at,{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</p>}
+          {d.device?.delivery_queue ? <p>Saved delivery records reported by device: {d.device.delivery_queue.pending} pending · {d.device.delivery_queue.blocked} blocked <span className="text-muted-foreground">(updated {fmtDate(d.device.delivery_queue.reported_at,{hour:'2-digit',minute:'2-digit',second:'2-digit'})})</span></p>
+            : d.device && d.device.status!=='revoked' ? <p className="text-muted-foreground">Delivery queue counts have not been reported by this player yet.</p> : null}
           {d.config_version && <p className="break-all text-muted-foreground">Config version: <span className="font-mono">{d.config_version}</span></p>}
           {d.device && d.device.applied_config_version!==d.config_version && <p className="text-warn">Device has not acknowledged the current configuration.</p>}
           <div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" onClick={pair} disabled={busy}>Generate pairing code</Button>{d.device && d.device.status!=='revoked' && <Button variant="destructive" size="sm" onClick={revoke} disabled={busy}>Unpair device</Button>}</div>
