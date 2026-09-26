@@ -615,3 +615,7 @@ During design, a chart preview may use explicitly synthetic data or clearly labe
 It must never fabricate missing dimensions or appear as production evidence. Before any production deploy,
 resolve Claude's 15:30 review point about access to the standalone lab; it currently has a public route.
 That access decision is distinct from production player commissioning and advertiser report permissions.
+
+**Execution plan:** [25-attention-production-build-plan.md](25-attention-production-build-plan.md) expands
+§10 into implementation slices, commissioning states, compatibility/data budgets, reporting definitions,
+acceptance checks and staged rollback. It is a plan, not an implementation or deployment record.
