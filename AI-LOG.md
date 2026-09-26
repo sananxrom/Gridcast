@@ -3482,3 +3482,96 @@ defect remains live in `build-2026-09-25-005`.
 **Files:** `gridcast-research/23-player-surface-cleanup.md`, `AI-LOG.md`.
 **Commit:** Application `9380162`; implementation log `7ecb584`; deployment log follows in a documentation-only commit.
 **Outcome/Open:** Sound is enabled in production by default. Browser autoplay may require the player’s **Enable sound** tap or a managed kiosk allowlist; actual speakers, OS volume and physical Android/WebView remain unverified. Captions/YouTube control cleanup remains separate work.
+
+### 2026-09-26 00:30 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Post-deploy review of audio (9380162): correct, one visible problem
+
+**Asked:** Sanan: check the log. Audio was built and deployed as `build-2026-09-25-006` before I reviewed it.
+I read the full `app/player/page.tsx` and `lib/config.ts` diff of `9380162`. I did not re-run tests this turn.
+
+**Correct against doc 23 §4:**
+- `audio_enabled`, playback group, default `true`, `common: true` (`lib/config.ts`).
+- The blocked-sound fallback retries the same slot muted, with no new play record. `playNative` catches only
+  `NotAllowedError` while sound was requested, then sets `video.muted = true` and plays the same element
+  again. YouTube `onAutoplayBlocked` mutes and calls `playVideo()` on the same player.
+- Once blocked, it stays muted (`browserBlockedAudio`), so sound is not retried on every creative. It is
+  retried after a tap on "Enable sound" or a configuration change (`applyAudio`).
+- Standby media is prepared with `target.muted = true`. `applyAudio` mutes both native surfaces on every
+  configuration receipt and unmutes only the active one. `stopMedia` mutes before pausing. Camera `<video>`
+  keeps `muted`.
+- `recoverSound` calls `play()` / `unMute()` before its first `await`, so the browser still sees the tap as
+  the user gesture.
+
+**Finding: the "Enable sound" button sits over the ad on every unattended screen.**
+`app/player/page.tsx:662` renders a full `<Button>` at `fixed bottom-4 left-1/2 z-20` whenever
+`soundBlocked && current`, with no timeout. On a kiosk without the managed autoplay policy, which is every
+screen today, the browser blocks sound on the first play. The button then stays centred over every creative
+until someone taps it, and after a reload it comes back. That breaks doc 23's rule that ordinary playback is
+kept "free of persistent clutter" and that the sound affordance is "minimal". It covers part of the
+advertiser's creative.
+**Proposal, which also serves the YouTube fix:** remove the button. Make the full-screen layer at `:661`
+(`pointer-events-none absolute inset-0 z-[2]`) capture pointer events, and call `recoverSound` from its tap
+handler, so a tap anywhere enables sound. Show a small line in the public status corner, "Tap the screen for
+sound", only while `soundBlocked`. That one change:
+1. removes the button from the ad;
+2. stops mouse hover and taps reaching the YouTube iframe, which is half of Sanan's YouTube-controls report
+   (my 21:55 entry);
+3. keeps the gesture inside a real user event.
+Pair it with `cursor: none` over the creative area. Doc 23 §5 already anticipated this: "if an interaction
+shield is added, route intentional sound recovery through an actual gesture handler".
+
+**For Sanan's "I still can't hear sound" (Codex 23:06):** screens opened before `build-2026-09-25-006` still
+run 0.6.0 until reloaded. After a reload the first ad will very likely be silent with the button showing,
+until someone taps once. The permanent fix is the managed Chrome `AutoplayAllowlist` for the player origin
+(doc 23 §4). Hypothesis until checked on the actual screen.
+**Files:** `AI-LOG.md`. Not committed.
+
+### 2026-09-26 13:42 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Attention CV prototype evaluated; doc 24 proposes a staged plan for debate
+
+**Asked:** Sanan shared `~/Downloads/public.zip` and `https://gridlocal-attention.netlify.app/`, a standalone
+attention prototype someone built: "idea is to replace our current CV system with this. It does person
+counting and also gaze, impression and duration too." Analyse pros and cons, plan the integration, and discuss
+with the other agents here.
+**Did:** Read all three files (`index.html`, `tracker.html`, `viewer.html`). `diff` against the hosted copy
+shows only Netlify's injected comment and HUD script. Wrote
+`gridcast-research/24-attention-cv-evaluation.md`. No source changes.
+
+**Summary of doc 24.**
+- *What it is:* MediaPipe Face Landmarker (irises, head pose, blendshapes) at 8 fps plus an EfficientDet
+  person detector at 3 fps, both from public CDNs; frame-to-frame tracking of faces into visits (dwell, looking
+  segments, distance, zone, smile); output as a JSON file downloaded by hand; a separate viewer that computes
+  "impressions", "viewable", "attentive impressions", eCPM and brand moments.
+- *Pros:* measures attention, not only presence; wider range; honest null handling when a model is starved
+  (`tracker.html:805-816`); frames never stored or sent.
+- *Conflicts with hard rules:* it tracks people (Standing Context: "No tracking"); it names its metric
+  "impressions" (`presence_metric` lock: "Not reach, not impressions"); it analyses faces, which invalidates
+  the `face_recognition` copy "person-shaped objects"; it infers smiles, a step beyond the locked
+  `demographics`. These are Sanan's decisions, not ours.
+- *Other cons:* legal/DPDP exposure from face processing (hypothesis; needs a lawyer); unvalidated gaze and
+  invented metric definitions; a single-file prototype with no server, tests, tenancy or evidence queue;
+  CDN-loaded models where we self-host; unknown device cost at 11 inferences a second.
+- *Recommendation:* do not replace wholesale. Most of the attention value needs no tracking: count "people
+  looking" per 2 s sample exactly as we count "people present", giving `avg_looking` and attention
+  person-seconds per play. Per-person duration is the part that truly needs tracking, and it comes last.
+- *Plan:* Phase 0 decisions and legal review; Phase 1 shadow run beside COCO-SSD on one screen, with a 24 h
+  device benchmark and a ground-truth trial extended to "looking"; Phase 2 presence upgrade as a new `model_ver`,
+  never blended with old series; Phase 3 sample-based attention (`avg_looking`, `looking_sum`/`looking_n` in
+  `screen_day`); Phase 4 optional in-memory tracked durations, aggregates only. Smiles, the JSON/viewer data
+  path and eCPM are not adopted.
+
+**For Codex, and the Cowork session if it reads this: please argue doc 24 by number,** especially:
+(1) is sample-based `avg_looking` a sound substitute for tracked attention, or does it lose what advertisers
+buy; (2) can the Android target run the face model continuously during video playback; (3) anything I have
+misread in `tracker.html` or `viewer.html`.
+**Decisions needed from Sanan (doc 24 §5 Phase 0):** face model allowed?; in-memory per-visit tracking
+allowed?; keep "never impressions" or define a new term?; smile inference (recommend no); legal review owner.
+**Files:** `gridcast-research/24-attention-cv-evaluation.md`, `AI-LOG.md`. Not committed.
+
+### 2026-09-26 14:15 IST · GPT-6 (Codex desktop) · Commercial queue, player interaction and queue telemetry
+
+**Asked:** “ignore Attention/CV proposal … do the rest”. The attention/CV proposal was excluded.
+**Did:** Replaced the persistent centered sound button with a small public-corner prompt and a full-screen tap shield that routes an actual gesture to sound recovery and prevents pointer hover/click from reaching the YouTube iframe. Hid the cursor over creative playback and disabled native text tracks on metadata and add-track events. Added IndexedDB v2 delivery reservations: transactional pending/retained-capacity checks, 8 KiB persisted reservation padding, 4 KiB event bound, cross-tab admission, late completion reuse, and retained interrupted metadata after a two-minute abandoned reservation. Blocked records no longer consume retryable pending slots; retained history remains bounded at 5,000 records and nothing is evicted. Heartbeats now report bounded pending/blocked counts for the authenticated device; authorized screen detail shows those self-reported counts and their timestamp. Bumped player version to 0.8.0 and updated doc 23.
+**Validation:** `npm test`: 240 tests, 235 passed, five Firestore-emulator tests skipped, zero failures. `npm run build` passed. Queue and maintenance browser suites: 14 passed. Player browser suite: 33 passed and two test-fixture layout assertions failed on the first run; after the inline shield layout fix, both focused sound/YouTube scenarios passed, as did the isolated lost-acknowledgement/reload regression. The player suite was not rerun end-to-end after those final layout-only changes. TypeScript and `git diff --check` passed.
+**Release:** App commit `5299436967f75390cb40a64d09277943ed08e044` was pushed to `codex/gridcast-trust-layer-wp5`. The Firebase rollout command did not start: Firebase CLI authentication had expired. Started Firebase’s official reauthentication flow and opened its page in Codex; rollout is pending Sanan’s one-time sign-in code. No production state was changed.
+**Files:** `app/player/page.tsx`, `lib/player-queue.ts`, `lib/devices.ts`, `components/views/screen-detail.tsx`, `lib/config.ts`, `tests/device-queue.browser.cjs`, `tests/devices.test.cjs`, `tests/player.browser.cjs`, `gridcast-research/23-player-surface-cleanup.md`, `AI-LOG.md`.
+**Commit:** `5299436` (application); this log entry is the follow-up documentation commit.
+**Open:** Deploy and verify the exact pushed SHA after Firebase reauthentication. Physical audible output, Android/WebView playback, real YouTube iframe chrome and caption behavior remain unverified. The unrelated local Claude/research changes were not staged.
