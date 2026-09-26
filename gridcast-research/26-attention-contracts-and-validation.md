@@ -1,6 +1,6 @@
 # A1 attention contracts and A2 validation protocol
 
-**Status (26 September 2026): A1 draft implemented locally; A2 not run; production B–D not started.**
+**Status (26 September 2026): A1 draft and the local A2 harness are implemented; A2 human validation not run; production B–D not started.**
 Source base `c0f039d`. See [25 — production plan](25-attention-production-build-plan.md).
 The code in `lib/vision/contracts-draft.ts` has no application callers. It is an executable design for review,
 not an enabled protocol, a server validator, or authorization to claim accuracy.
@@ -132,9 +132,17 @@ Runtime options for A2:
    profile, or leave attention in the lab. Re-run accuracy and coverage; rate reduction is not automatically
    equivalent. Do not solve a performance failure by replacing COCO inputs or changing camera/billing rules.
 
-The proposed coordinator is not implemented. A2 needs a **local-only combined-load harness** using the actual
-legacy detector alongside the lab worker before selecting the production topology. Testing only the isolated
-lab cannot clear B–D. This evaluation harness may be built under A2 without wiring production ingestion.
+The **local-only A2 combined-load harness** is implemented at `/vision-lab/combined` in development builds.
+It runs separate legacy-only and legacy-plus-attention trials against one camera stream, locks camera, source,
+settings and test context across the pair, keeps the existing COCO-SSD sample mean independent, and schedules
+legacy opportunities with the player's 250 ms ticker and strict wall-clock due predicate; bounded optional worker
+frames yield before those opportunities. Late legacy results are accepted only for the same run, playback
+segment and live camera stream. Hidden-tab stops use the frozen source/context, and repeated exports read open
+stall time without changing the accumulated result. It includes explicit guided calibration and exports bounded
+local aggregates. The route returns 404 in production builds. This is a measurement surface,
+not a production-topology decision or accuracy result; no supervised A2 session has run. A2 still needs the
+documented human scenarios and combined-load evidence before selecting a production topology. Testing only
+the isolated lab cannot clear B–D, and this harness is not wired to production ingestion.
 
 ## 6. A2 human and performance protocol — ready for agreement, not scored
 
