@@ -1,6 +1,6 @@
 # Attention production build plan
 
-**Status:** Planned; not implemented or deployed. **Planning base:** `7d5f085`.
+**Status:** A1 draft contracts built locally; A2 pending; production B–G not implemented or deployed. See [26 — contracts and validation](26-attention-contracts-and-validation.md). **Planning base:** `7d5f085`.
 **Requested by Sanan:** Plan ahead for pairing → model-loading progress/time → quick calibration → ready,
 automatic integration with current Gridcast reporting, and selected visuals from the supplied demo.
 **Relationship to document 24:** §9 is the existing local lab; §10 records the product direction. This

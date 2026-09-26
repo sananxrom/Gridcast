@@ -180,3 +180,26 @@ test('renewal chooses the authorization horizon from the newly rotated media sou
  const result=deviceRoute(f.db,'GET',['playlist','screen1'],{},f.paired.token,{now,playerProtocol:2,playlist:(_s,_d,index=0)=>({items:[{...f.item,asset_id:index%2?undefined:'uploaded',youtube_id:index%2?'abcdefghijk':undefined,creative_id:index%2?'online':'offline'}],config:f.config,config_version:3})});
  assert.equal(result.body.items[0].creative_id,'online');assert.equal(Date.parse(result.body.valid_until)-now,3600000);
 });
+
+// A1 compatibility baseline only: current ingestion ignores optional attention; no new acceptance is installed.
+test('draft attention preparation preserves legacy camera policy billing and receipt retries',()=>{
+ const {prepareDraftEnvelope}=require('./load-lib.cjs')('vision/contracts-draft');
+ const {attention}=require('./attention-contract-fixtures.cjs');
+ for(const policy of ['continue','skip'])for(const measured of [true,false]){
+  let baseline;
+  for(const candidate of ['absent','valid','invalid']){
+   const f=fixture();f.db.device_assignments[0].camera_fail_mode=policy;
+   const original=f.event(measured?{}:{measured:false,avg_persons:null,sample_count:0,model_ver:null});delete original.seq_no;
+   const a=attention({playing_ms:10000,body:[10000,0,0],face:[10000,0,0],attention:[10000,0],expression:[10000,0],presence_person_ms:20000,looking_person_ms:10000,smile_person_ms:0,face_assessable_person_ms:10000,expression_assessable_person_ms:10000,estimated_impressions:2,attentive_impressions:1,tracked_visits:2,right_censored_visits:2,longest_look_ms:10000});
+   const prepared=prepareDraftEnvelope(original,candidate==='absent'?undefined:candidate==='valid'?a:{...a,frames:[]},a.calibration_revision);
+   assert.equal(prepared.outcome,candidate==='valid'?'included':candidate);
+   const body={...prepared.event,seq_no:1},reply=f.call('POST','play',body,f.paired.token);assert.equal(reply.status,200);
+   const snapshot={billable:reply.body.billable,spend:f.db.campaigns[0].accrued_spend,measured:f.db.presence[0].measured,avg_persons:f.db.presence[0].avg_persons,model_ver:f.db.presence[0].model_ver};
+   if(!baseline)baseline=snapshot;else assert.deepEqual(snapshot,baseline);
+   assert.equal(reply.body.billable,measured||policy!=='skip');
+   assert.equal(f.call('POST','play',body,f.paired.token).body.duplicate,true);
+   assert.equal(f.db.plays.length,1);assert.equal(f.db.campaigns[0].accrued_spend,snapshot.spend);
+   if(candidate==='valid'){const changed={...body};delete changed.attention;assert.equal(f.call('POST','play',changed,f.paired.token).status,409);}
+  }
+ }
+});
