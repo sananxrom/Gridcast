@@ -8,21 +8,22 @@ import { BrandLogo } from '@/components/ui/brand-mark';
 import { pendingDiagnostic, saveDiagnostic, flushDiagnostic, reserveDiagnostic, releaseDiagnosticReservation, diagnosticRecordCounts } from '@/lib/player-diagnostics';
 import { cacheMedia, cachedMediaUrl, saveReadySchedule, readySchedule, reserveLocalPlay, clearReadySchedule, beginOnlineAuthorization, authorizeOnlineSchedule } from '@/lib/player-media-cache';
 import { cameraConstraints, cameraError, frameSize } from '@/lib/player-vision';
-import { ATTENTION_PROFILE, validateAttentionCalibration, prepareAttentionAssets, createProductionAttentionWorker, createAttentionMetrics, summaryForReceipt, localCameraRef, localCalibrationKey } from '@/lib/vision/production';
+import { ATTENTION_PROFILE, validateAttentionCalibration, prepareAttentionAssets, createProductionAttentionWorker, createAttentionMetrics, localCameraRef, localCalibrationKey } from '@/lib/vision/production';
 import { validateAttentionSummary, prepareAttentionEnvelope, attentionQueuedEventBytes, ATTENTION_LIMITS } from '@/lib/vision/attention-contracts';
+import { summaryForAttentionMode } from '@/lib/vision/attention-summary';
 import { GazeCalibration } from '@/lib/vision/calibration';
 import type { Observation } from '@/lib/vision/metrics';
 
 declare global { interface Window { YT: any; onYouTubeIframeAPIReady: () => void; cocoSsd: any; tf: any } }
-const APP_VERSION = 'gridcast-web/0.9.0';
+const APP_VERSION = 'gridcast-web/0.9.1';
 const MODEL_VERSION = 'coco-ssd@2.2.3/lite_mobilenet_v2';
 type Credential = { token: string; device_id: string; screen_id: string };
 type Item = { kind?: 'diagnostic' | 'paid' | 'filler'; diagnostic_has_camera?: boolean; assignment_id: string; valid_until: string; campaign_id: string | null; creative_id: string;
-  attention_enabled?:boolean; attention_profile?:string|null; attention_calibration_revision?:string|null;
+  attention_enabled?:boolean; attention_profile?:string|null; attention_mode?:'default'|'guided'; attention_calibration_revision?:string|null;
   max_plays?: number; media_type?: 'video' | 'image'; youtube_id?: string; asset_url?: string; asset_id?: string; asset_sha256?: string; asset_bytes?: number; asset_mime?: string; width?: number; height?: number; duration_s: number };
 type Playlist = { screen: any; config: Record<string, any>; config_version: string | number; server_time: string; items: Item[]; filler_items?: Item[]; scheduling_mode?: string; budget_state?: string; readiness?: {message:string}; diagnostic?: {assignment_id:string;status:string;message:string} | null };
 type Slot = { item: Item; uid: string; started: number; startedPlaying: boolean; accumulated: number; segmentStart: number | null;
-  mediaStart: number; samples: number[]; cameraHealthy: boolean; config: Record<string, any>; version: string | number; offset: number; done: boolean; attentionValid?:boolean; attentionStarted?:boolean; diagnosticRun?: string; decodedWidth?: number; decodedHeight?: number };
+  mediaStart: number; samples: number[]; cameraHealthy: boolean; config: Record<string, any>; version: string | number; offset: number; done: boolean; attentionValid?:boolean; attentionStarted?:boolean; attentionMode?:'default'|'guided'; attentionRevision?:string|null; attentionBindingInvalidated?:boolean; attentionYaw?:number; attentionPitch?:number; diagnosticRun?: string; decodedWidth?: number; decodedHeight?: number };
 function script(src: string, ready: () => boolean) {
   return new Promise<void>((resolve, reject) => {
     if (ready()) { resolve(); return; }
@@ -54,12 +55,12 @@ export default function Player() {
 const [soundBlocked, setSoundBlocked] = useState(false);
   const [attentionStatus,setAttentionStatus]=useState(''),[attentionProgress,setAttentionProgress]=useState<{message:string;phase:'checking'|'downloading'|'verifying'|'initializing';downloaded:number;verified:number;total:number;elapsedSeconds:number;etaSeconds:number|null}|null>(null),[attentionCalibrating,setAttentionCalibrating]=useState(false);
   const [attentionEnabled,setAttentionEnabled]=useState(false),[attentionSetupActive,setAttentionSetupActive]=useState(false);
-  const [attentionModelsReady,setAttentionModelsReady]=useState(false);
+  const [attentionModelsReady,setAttentionModelsReady]=useState(false),[attentionCameraReady,setAttentionCameraReady]=useState(false);
   const operationBusy = useRef(false);
   const settlePlayer = useRef<() => Promise<void>>(async () => {});
   const retryCamera = useRef<() => void>(() => {});
   const recoverSound = useRef<() => Promise<void>>(async () => {});
-  const calibrateAttention = useRef<() => Promise<void>>(async () => {});
+  const calibrateAttention = useRef<(fromBoundary?: boolean) => Promise<void>>(async () => {});
   const retryAttention = useRef<() => void>(() => {}), cancelAttention = useRef<() => void>(() => {});
   const camera = useRef<HTMLVideoElement>(null), canvas = useRef<HTMLCanvasElement>(null), media = useRef<HTMLVideoElement>(null), standbyMedia = useRef<HTMLVideoElement>(null), imageSurface = useRef<HTMLImageElement>(null), youtubeMount = useRef<HTMLDivElement>(null);
   useEffect(() => answerEvidenceProtocol(), []);
@@ -91,7 +92,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
     };
     let yt: any = null, ytReady = false, detector: any = null, stream: MediaStream | null = null, cameraOK = false;
     let attentionWorker:any=null,attentionAbort:AbortController|null=null,attentionMetrics:any=null,attentionCalibration:any=null,attentionCameraRef='',attentionProfile='',attentionRotation:0|90|180|270=0;
-    let activeCalibrator:GazeCalibration|null=null,activeCalibratorToken:string|null=null,calibrationRequested=false,attentionSetupPaused=false;
+    let activeCalibrator:GazeCalibration|null=null,activeCalibratorToken:string|null=null,calibrationRequested=false,calibrationRequestUntil=0,calibrationFeedbackUntil=0,attentionSetupPaused=false;
     let startup = false, pulling = false, flushing = false, heartbeatBusy = false, fatal = true, actualOffset = 0, reservedPlayUid: string | null = null;
     let requestedAudio = true, browserBlockedAudio = false;
     let diagnosticBlockedMessage = '';
@@ -108,8 +109,9 @@ const [soundBlocked, setSoundBlocked] = useState(false);
     function stopAttention(){attentionAbort?.abort();attentionAbort=null;attentionWorker?.close();attentionWorker=null;activeCalibrator=null;activeCalibratorToken=null;attentionProfile='';setAttentionModelsReady(false);setAttentionCalibrating(false);if(currentSlot)currentSlot.attentionValid=false;}
     async function ensureAttention(settings:Playlist){
       const k=settings.config;
-      if(k.attention_enabled!==true||k.attention_profile!==ATTENTION_PROFILE.id){stopAttention();attentionCalibration=null;calibrationRequested=false;attentionSetupPaused=false;setAttentionStatus('Off');setAttentionProgress(null);setAttentionSetupActive(false);return;}
+      if(k.attention_enabled!==true||k.attention_profile!==ATTENTION_PROFILE.id){stopAttention();attentionCalibration=null;calibrationRequested=false;attentionSetupPaused=false;setAttentionCameraReady(false);setAttentionStatus('Off');setAttentionProgress(null);setAttentionSetupActive(false);return;}
       if(attentionSetupPaused)return;
+      attentionMetrics ||= createAttentionMetrics();
       if(attentionWorker&&attentionProfile===k.attention_profile)return;
       stopAttention();setAttentionModelsReady(false); attentionProfile=k.attention_profile;attentionAbort=new AbortController();const controller=attentionAbort;
       setAttentionSetupActive(true);
@@ -122,29 +124,25 @@ const [soundBlocked, setSoundBlocked] = useState(false);
         attentionWorker=await createProductionAttentionWorker(controller.signal,(observation:Observation,context:any)=>{
           if(context?.calibration_id&&context.calibration_id===activeCalibratorToken)activeCalibrator?.observe(observation);
           const s=currentSlot,p=context?.play;
-          if(p&&s&&s.uid===p.uid&&s.segmentStart===p.segment&&s.attentionValid&&s.item.attention_calibration_revision===p.revision)attentionMetrics?.observe(observation);
-        },message=>{if(!disposed){attentionSetupPaused=true;setAttentionModelsReady(false);setAttentionStatus(`Attention unavailable · ${message}`);attentionWorker=null;}});
+          if(p&&s&&s.uid===p.uid&&s.segmentStart===p.segment&&s.attentionValid&&s.attentionMode===p.mode&&s.attentionRevision===p.revision)attentionMetrics?.observe(observation);
+        },message=>{if(!disposed){attentionSetupPaused=true;setAttentionModelsReady(false);setAttentionStatus(`Optional attention unavailable · ${message}; playback continues`);attentionWorker=null;}});
         if(disposed||controller.signal.aborted){attentionWorker?.close();attentionWorker=null;return;}
         const savedCalibration=resolveAttentionCalibration(settings);
         setAttentionModelsReady(true);
-        if(!savedCalibration) calibrationRequested=true;
-        if(calibrationRequested&&!currentSlot) void calibrateAttention.current().catch(()=>{});
-        setAttentionStatus(savedCalibration?'Models ready · calibration loaded':'Models ready · guided calibration required');setAttentionProgress(null);if(savedCalibration)setAttentionSetupActive(false);
-      }catch(error:any){if(error?.name!=='AbortError'&&!disposed){attentionSetupPaused=true;setAttentionModelsReady(false);setAttentionStatus(`Attention unavailable · ${error.message||'model setup failed'}`);setAttentionProgress(null);} }
+        setAttentionStatus(savedCalibration?'Models ready · guided calibration loaded':'Models ready · default zero offsets');setAttentionProgress(null);setAttentionSetupActive(false);
+      }catch(error:any){if(error?.name!=='AbortError'&&!disposed){attentionSetupPaused=true;setAttentionModelsReady(false);setAttentionStatus(`Optional attention unavailable · ${error.message||'model setup failed'}; playback continues`);setAttentionProgress(null);} }
     }
     function resolveAttentionCalibration(settings:Playlist){
-      if(settings.config.attention_enabled!==true||!stream||!cameraSurface)return null;
+      if(settings.config.attention_enabled!==true||!stream||!cameraSurface){attentionCalibration=null;return null;}
       const track=stream.getVideoTracks()[0],width=cameraSurface.videoWidth,height=cameraSurface.videoHeight;
       const rawAngle=Number(window.screen.orientation?.angle||0),rotation:0|90|180|270=([0,90,180,270] as number[]).includes(rawAngle)?rawAngle as 0|90|180|270:0;attentionRotation=rotation;
       attentionCameraRef=localCameraRef(paired.device_id,paired.screen_id,track,width,height,rotation);
       let local:any=null;try{local=JSON.parse(localStorage.getItem(localCalibrationKey(paired.device_id,paired.screen_id))||'null');}catch{}
       const candidate=settings.config.attention_calibration||local;
       const binding={profile:ATTENTION_PROFILE.id,device_id:paired.device_id,screen_id:paired.screen_id,camera_ref:attentionCameraRef,width,height,rotation};
-      if(validateAttentionCalibration(candidate,binding)){attentionCalibration=candidate;setAttentionStatus('Models ready · guided calibration saved');
-        if(currentSlot){currentSlot.attentionValid=currentSlot.item.attention_enabled===true&&currentSlot.item.attention_calibration_revision===candidate.revision;
-          if(currentSlot.attentionValid&&currentSlot.segmentStart!==null&&attentionMetrics){if(!currentSlot.attentionStarted)attentionMetrics.reset();attentionMetrics.boundary(currentSlot.uid,true,performance.now());currentSlot.attentionStarted=true;}}
+      if(validateAttentionCalibration(candidate,binding)){attentionCalibration=candidate;if(!activeCalibratorToken&&Date.now()>calibrationFeedbackUntil)setAttentionStatus('Models ready · guided calibration saved');
         return candidate;}
-      attentionCalibration=null;setAttentionStatus(attentionWorker?'Models ready · guided calibration required':'Preparing attention models');return null;
+      attentionCalibration=null;if(!activeCalibratorToken&&!calibrationRequested&&Date.now()>calibrationFeedbackUntil)setAttentionStatus(attentionWorker?'Models ready · default settings':'Preparing attention models');return null;
     }
     function rejectCredential() {
       if (!isCurrent()) return;
@@ -171,7 +169,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
       if (playing && s.segmentStart === null) {
         if (!s.startedPlaying) { s.started = Date.now(); s.mediaStart = mediaTime(); s.startedPlaying = true; }
         s.segmentStart = performance.now(); state(s.diagnosticRun ? 'Running screen diagnostic · no commercial delivery' : 'Playing');
-        s.attentionValid=!!attentionCalibration&&s.config.attention_enabled===true&&s.item.attention_enabled===true&&s.item.attention_calibration_revision===attentionCalibration.revision;
+        s.attentionValid=s.config.attention_enabled===true&&s.item.attention_enabled===true&&s.item.attention_profile===ATTENTION_PROFILE.id&&!s.attentionBindingInvalidated;
         if(!s.diagnosticRun&&s.attentionValid&&attentionMetrics){if(!s.attentionStarted)attentionMetrics.reset();attentionMetrics.boundary(s.uid,true,s.segmentStart);s.attentionStarted=true;}
         if (!s.diagnosticRun) void authRequest('/nowplaying', { assignment_id: s.item.assignment_id }).catch(() => {});
       } else if (!playing && s.segmentStart !== null) {
@@ -192,11 +190,11 @@ const [soundBlocked, setSoundBlocked] = useState(false);
     }
     function cameraLost() {
       if (disposed || !stream) return;
-      cameraOK = false; if (currentSlot) currentSlot.cameraHealthy = false; clearDetection();
+      cameraOK = false; setAttentionCameraReady(false); if (currentSlot) currentSlot.cameraHealthy = false; clearDetection();
       if (!disposed && !cameraStarting) { setVisionStatus('Camera interrupted. Check the camera, then retry.'); setVisionRetry(true); }
     }
     function cameraRecovered() {
-      cameraOK = cameraHealthyNow();
+      cameraOK = cameraHealthyNow(); setAttentionCameraReady(cameraOK);
       if (!disposed && cameraOK && detector && !detectorBroken && !cameraStarting) {
         setVisionStatus('Ready · counts update during playback'); setVisionRetry(false);
       }
@@ -293,11 +291,12 @@ const [soundBlocked, setSoundBlocked] = useState(false);
         return;
       }
       let firstEnqueueEvent:Record<string,any>=event;
-      if(s.attentionStarted&&attentionMetrics&&s.item.attention_calibration_revision){
+      if(s.attentionStarted&&attentionMetrics&&s.item.attention_enabled===true){
         attentionMetrics.boundary(s.uid,false,performance.now());
         const summary=attentionMetrics.snapshot(performance.now()).current;
-        const candidate=summary?summaryForReceipt(summary,event.playing_duration_ms,s.item.attention_calibration_revision):undefined;
-        const preparedEnvelope=prepareAttentionEnvelope(event,candidate,s.item.attention_calibration_revision);
+        const revision=s.attentionMode==='guided'?s.attentionRevision||null:null;
+        const candidate=summary?summaryForAttentionMode(summary,event.playing_duration_ms,s.attentionMode||'default',revision):undefined;
+        const preparedEnvelope=prepareAttentionEnvelope(event,candidate,revision,s.attentionMode||'default');
         firstEnqueueEvent=preparedEnvelope.event as Record<string,any>;
         if(preparedEnvelope.outcome==='size_limit')setAttentionStatus('This play was too large for the attention allowance. Legacy delivery evidence was saved without optional analytics.');
         else if(preparedEnvelope.outcome==='invalid')setAttentionStatus('Attention data was unavailable or invalid. Legacy delivery evidence was saved; unknown was not counted as zero.');
@@ -441,14 +440,11 @@ const [soundBlocked, setSoundBlocked] = useState(false);
         }
         if (!playlist) { state('Waiting for an authorised playlist'); return; }
         if(playlist.config.attention_enabled!==true)calibrationRequested=false;
+        if (activeCalibratorToken) return;
         if (calibrationRequested) {
-          if (!attentionSetupPaused && !activeCalibratorToken && attentionWorker && cameraHealthyNow()) void calibrateAttention.current().catch(()=>{});
-          return;
-        }
-        if (playlist.config.attention_enabled === true && !attentionCalibration) {
-          calibrationRequested=true; state('Setting up attention calibration before playback');
-          if(!attentionSetupPaused&&!activeCalibratorToken&&attentionWorker&&cameraHealthyNow()) void calibrateAttention.current().catch(()=>{});
-          return;
+          if (!calibrationRequestUntil) calibrationRequestUntil=Date.now()+12000;
+          if (Date.now()>calibrationRequestUntil) { calibrationRequested=false; setAttentionStatus('Calibration could not start yet · continuing with the current offsets'); setAttentionSetupActive(false); }
+          else if (!attentionSetupPaused && !activeCalibratorToken && attentionWorker && cameraHealthyNow()) { void calibrateAttention.current(true).catch(()=>{}); if(!currentSlot)return; }
         }
         if (!(await queueCapacity(paired.device_id, Number(playlist.config.offline_buffer_plays) || 5000))) {
           const stored = await queueStatus(paired.device_id); setQueue(stored);
@@ -486,9 +482,12 @@ const [soundBlocked, setSoundBlocked] = useState(false);
         }
         if (!item.asset_url) await ensureYouTube();
         if (disposed || fatal) return;
+        // A camera or orientation change can invalidate the saved binding while
+        // offline. Recheck it at every play boundary before choosing offsets.
+        if(playlist.config.attention_enabled===true)resolveAttentionCalibration(playlist);
         currentSlot = { item, uid: playUid, started: Date.now(), startedPlaying: false, accumulated: 0, segmentStart: null,
           mediaStart: 0, samples: [], cameraHealthy: cameraHealthyNow() && !!detector && playlist.config.model === 'coco-ssd', config: { ...playlist.config }, version: playlist.config_version, offset: actualOffset, done: false,
-          attentionValid:!!attentionCalibration&&playlist.config.attention_enabled===true&&item.attention_enabled===true&&item.attention_calibration_revision===attentionCalibration.revision,attentionStarted:false };
+          attentionValid:playlist.config.attention_enabled===true&&item.attention_enabled===true&&item.attention_profile===ATTENTION_PROFILE.id,attentionMode:playlist.config.attention_enabled===true&&item.attention_enabled===true&&!!attentionCalibration&&item.attention_calibration_revision===attentionCalibration.revision?'guided':'default',attentionRevision:playlist.config.attention_enabled===true&&item.attention_enabled===true&&!!attentionCalibration&&item.attention_calibration_revision===attentionCalibration.revision?item.attention_calibration_revision:null,attentionYaw:playlist.config.attention_enabled===true&&item.attention_enabled===true&&!!attentionCalibration&&item.attention_calibration_revision===attentionCalibration.revision?attentionCalibration.yaw_tenths/10:0,attentionPitch:playlist.config.attention_enabled===true&&item.attention_enabled===true&&!!attentionCalibration&&item.attention_calibration_revision===attentionCalibration.revision?attentionCalibration.pitch_tenths/10:0,attentionStarted:false };
         reservedUid = null;
         state('Preparing media');
         if (item.asset_url && item.media_type === 'image') {
@@ -532,7 +531,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
     function stopCamera() {
       stopAttention(); attentionCalibration=null; attentionCameraRef='';
       stream?.getTracks().forEach(t => { t.removeEventListener('ended', cameraLost); t.removeEventListener('mute', cameraLost); t.removeEventListener('unmute', cameraRecovered); t.stop(); });
-      stream = null; cameraOK = false; lastCameraFrame = -1;
+      stream = null; cameraOK = false; setAttentionCameraReady(false); lastCameraFrame = -1;
       if (cameraSurface) cameraSurface.srcObject = null;
       clearDetection();
     }
@@ -581,13 +580,13 @@ const [soundBlocked, setSoundBlocked] = useState(false);
       } finally { cameraStarting = false; }
     }
     retryCamera.current = () => { void initCamera(true); };
-    calibrateAttention.current=async()=>{
+    calibrateAttention.current=async(fromBoundary=false)=>{
       if(!playlist||playlist.config.attention_enabled!==true||playlist.config.attention_profile!==ATTENTION_PROFILE.id)throw Error('Attention is not enabled for this screen.');
       if(activeCalibratorToken)return;
       attentionSetupPaused=false;
-      calibrationRequested=true;
-      if(currentSlot){setAttentionStatus('Recalibration is queued for the next safe play boundary.');return;}
-      if(!attentionWorker||!cameraHealthyNow()||!cameraSurface)throw Error('Wait for the camera and attention models to be ready, then retry.');
+      calibrationRequested=true; calibrationRequestUntil=Date.now()+12000;
+      if(currentSlot||(startup&&!fromBoundary)){calibrationRequestUntil=0;setAttentionStatus('Calibration is queued for a safe play boundary. Playback continues.');return;}
+      if(!attentionWorker||!cameraHealthyNow()||!cameraSurface){calibrationRequested=false;setAttentionStatus('Camera or models are not ready · playback continues with current offsets');setAttentionSetupActive(false);throw Error('Calibration is not ready yet. Playback continues with the current offsets.');}
       calibrationRequested=false;
       setAttentionSetupActive(true);
       const token=crypto.randomUUID(),started=performance.now(),calibrator=new GazeCalibration(started);activeCalibrator=calibrator;activeCalibratorToken=token;setAttentionCalibrating(true);setAttentionStatus('Look at the centre marker and hold still for three seconds.');
@@ -602,19 +601,23 @@ const [soundBlocked, setSoundBlocked] = useState(false);
           yaw_spread_tenths:result.yaw_spread_tenths,pitch_spread_tenths:result.pitch_spread_tenths,completed_at:new Date().toISOString()};
         const binding={profile:ATTENTION_PROFILE.id,device_id:paired.device_id,screen_id:paired.screen_id,camera_ref:calibration.camera_ref,width:video.videoWidth,height:video.videoHeight,rotation:attentionRotation};
         if(!validateAttentionCalibration(calibration,binding))throw Error('Calibration geometry changed. Previous calibration kept.');
-        const saved=await authRequest('/attention/calibration',{calibration});
+        const savePromise=authRequest('/attention/calibration',{calibration});
+        void savePromise.then(()=>{if(disposed||activeCalibratorToken!==token)void pull();},()=>{});
+        let saveTimer:ReturnType<typeof setTimeout>|undefined;
+        const saved=await Promise.race([savePromise,new Promise<never>((_,reject)=>{saveTimer=setTimeout(()=>reject(new Error('Calibration save timed out. Playback continues; refresh will reconcile if it was saved.')),10000);})]).finally(()=>{if(saveTimer)clearTimeout(saveTimer);});
+        if(disposed||activeCalibratorToken!==token)return;
         localStorage.setItem(localCalibrationKey(paired.device_id,paired.screen_id),JSON.stringify(calibration));
         attentionCalibration=calibration;
-        setAttentionStatus(`Calibration saved · ${result.samples} stable face readings. Applying it to the next assignment.`);setAttentionCalibrating(false);setAttentionSetupActive(false);await pull();
+        setAttentionStatus(`Calibration saved · ${result.samples} stable face readings. Applying it to the next assignment.`);setAttentionCalibrating(false);setAttentionSetupActive(false);void pull();
         return saved;
-      }catch(error:any){if(activeCalibratorToken!==token)return;calibrationRequested=false;attentionSetupPaused=true;setAttentionSetupActive(!attentionCalibration);setAttentionStatus(`Calibration failed · ${error.message||'Please retry when the camera is ready.'} Previous calibration kept.`);throw error;}
-      finally{if(activeCalibratorToken===token){activeCalibrator=null;activeCalibratorToken=null;}setAttentionCalibrating(false);}
+      }catch(error:any){if(activeCalibratorToken!==token)return;calibrationRequested=false;attentionSetupPaused=false;calibrationFeedbackUntil=Date.now()+30000;setAttentionSetupActive(false);const reason=String(error?.message||'Please retry when the camera is ready.').replace(/\s*Previous calibration kept\.?\s*$/i,'').trim();setAttentionStatus(`Calibration failed · ${reason} Playback continues with ${attentionCalibration?'the saved calibration':'default zero offsets'}.`);throw error;}
+      finally{if(activeCalibratorToken===token){activeCalibrator=null;activeCalibratorToken=null;setAttentionCalibrating(false);}}
     };
     cancelAttention.current=()=>{
-      if(activeCalibratorToken){activeCalibrator=null;activeCalibratorToken=null;calibrationRequested=false;attentionSetupPaused=!attentionCalibration;setAttentionSetupActive(!attentionCalibration);setAttentionCalibrating(false);setAttentionStatus(attentionCalibration?'Calibration cancelled; the saved calibration is still in use.':'Setup paused. Retry attention setup to continue.');return;}
+      if(activeCalibratorToken){activeCalibrator=null;activeCalibratorToken=null;calibrationRequested=false;attentionSetupPaused=false;calibrationFeedbackUntil=Date.now()+15000;setAttentionSetupActive(false);setAttentionCalibrating(false);setAttentionStatus(attentionCalibration?'Calibration cancelled; the saved calibration is still in use.':'Calibration cancelled · playback continues with default zero offsets.');return;}
       if(attentionAbort){attentionSetupPaused=true;calibrationRequested=false;stopAttention();setAttentionProgress(null);setAttentionSetupActive(true);setAttentionStatus('Attention setup cancelled. Saved delivery evidence and any earlier calibration are unchanged.');}
     };
-    retryAttention.current=()=>{attentionSetupPaused=false;if(attentionModelsReady&&attentionWorker&&playlist?.config.attention_enabled===true){calibrationRequested=false;void calibrateAttention.current().catch(()=>{});return;}if(playlist)void ensureAttention(playlist);};
+    retryAttention.current=()=>{attentionSetupPaused=false;if(!cameraHealthyNow()){void initCamera(true);return;}if(attentionModelsReady&&attentionWorker&&playlist?.config.attention_enabled===true){calibrationRequested=false;void calibrateAttention.current().catch(()=>{});return;}if(playlist)void ensureAttention(playlist);};
     async function detect() {
       const v = cameraSurface, c = overlay, target = currentSlot;
       // Never sample an idle, paused or background player. Only one inference may run at once.
@@ -723,9 +726,16 @@ const [soundBlocked, setSoundBlocked] = useState(false);
       const interval=Math.max(500,(Number(currentSlot?.config.sample_interval_s ?? playlist?.config.sample_interval_s)||2)*1000);
       if (Date.now() - lastDetect > interval) { lastDetect = Date.now(); void detect(); }
       else if(currentSlot&&currentSlot.attentionValid&&currentSlot.segmentStart!==null&&!currentSlot.done&&!currentSlot.diagnosticRun&&attentionWorker&&!attentionWorker.busy&&cameraSurface&&cameraHealthyNow()&&!document.hidden&&Date.now()+750<lastDetect+interval){
-        const s=currentSlot,play=s?.attentionValid?{uid:s.uid,segment:s.segmentStart,revision:s.item.attention_calibration_revision}:null;
-        const calibration=attentionCalibration||{yaw_tenths:0,pitch_tenths:0};
-        void attentionWorker.frame(cameraSurface,{yaw:calibration.yaw_tenths/10,pitch:calibration.pitch_tenths/10},{play,calibration_id:activeCalibratorToken});
+        const s=currentSlot;
+        if(s?.attentionMode==='guided'){
+          const track=stream?.getVideoTracks()[0],width=cameraSurface.videoWidth,height=cameraSurface.videoHeight,raw=Number(window.screen.orientation?.angle||0),rotation:0|90|180|270=([0,90,180,270] as number[]).includes(raw)?raw as 0|90|180|270:0;
+          const currentRef=track?localCameraRef(paired.device_id,paired.screen_id,track,width,height,rotation):'';
+          if(!track||currentRef!==attentionCameraRef||width!==attentionCalibration?.width||height!==attentionCalibration?.height||rotation!==attentionCalibration?.rotation||attentionCalibration?.revision!==s.attentionRevision){
+            attentionMetrics?.boundary(s.uid,false,performance.now());s.attentionBindingInvalidated=true;s.attentionValid=false;setAttentionStatus('Camera changed during this play · guided attention paused; playback continues.');
+          }
+        }
+        const play=s?.attentionValid?{uid:s.uid,segment:s.segmentStart,mode:s.attentionMode,revision:s.attentionRevision}:null;
+        if(s?.attentionValid)void attentionWorker.frame(cameraSurface,{yaw:s.attentionYaw||0,pitch:s.attentionPitch||0},{play,calibration_id:activeCalibratorToken});
       }
       if(activeCalibratorToken&&attentionWorker&&!attentionWorker.busy&&cameraSurface&&cameraHealthyNow()&&!document.hidden)
         void attentionWorker.frame(cameraSurface,{yaw:0,pitch:0},{calibration_id:activeCalibratorToken});
@@ -815,7 +825,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
   </div>;
   const commissioning = !rejected && (overlayEnabled || diagnosticActive || attentionSetupActive);
   const attentionPreparing=!!attentionProgress;
-  const attentionReady=attentionModelsReady;
+  const attentionReady=attentionModelsReady&&attentionCameraReady;
   if (!credential) return <div className="grid min-h-screen place-items-center bg-slate-950 p-4">{pairingForm}</div>;
   return <div className="fixed inset-0 cursor-none bg-black text-white" style={{ cursor: 'none' }}>
     <div ref={youtubeMount} className={`absolute inset-0 h-full w-full ${!current || current.asset_url ? 'hidden' : ''}`} />

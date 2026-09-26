@@ -175,6 +175,7 @@ if (process.argv[2] === 'worker') {
     const f=await fixture(), now=Date.now(), deviceId='dev_'+crypto.randomUUID();
     const token='gcp_'+deviceId+'.'+crypto.randomBytes(32).toString('base64url');
     const {ATTENTION_PROFILE,summaryForReceipt}=require('./load-lib.cjs')('vision/production');
+    const {summaryForAttentionMode}=require('./load-lib.cjs')('vision/attention-summary');
     const calibration={schema:'calibration-v1/1',profile:ATTENTION_PROFILE.id,revision:crypto.randomUUID(),device_id:deviceId,screen_id:'sa',camera_ref:'emulatorCameraRef123456789',width:640,height:480,rotation:0,method:'guided-3s',yaw_tenths:10,pitch_tenths:-5,samples:10,span_ms:2700,yaw_spread_tenths:2,pitch_spread_tenths:3,completed_at:new Date(now).toISOString()};
     const settings={attention_enabled:true,attention_profile:ATTENTION_PROFILE.id,camera_source:'builtin',attention_calibration:calibration,model:'coco-ssd',sample_interval_s:2,count_ceiling:50,camera_fail_mode:'continue'};
     const route=(d,method,path,body,options={})=>load('devices').deviceRoute(d,method,path,body,token,{now,playerProtocol:2,playlist:()=>({items:[{campaign_id:'c1',creative_id:'cr1',youtube_id:'abcdefghijk',duration_s:10,rate_type:'per_play',rate_value:1}],config:settings,config_version:d.settings?.config_revision||1}),...options});
@@ -186,12 +187,22 @@ if (process.argv[2] === 'worker') {
       assert.equal((await saveCalibration()).body.duplicate,true,'Idempotent calibration retry is durable');
       const playlist=await f.store.transact({method:'GET',path:['playlist','sa'],deviceId},async()=>{const d=await f.store.read();const result=route(d,'GET',['playlist','sa'],{});if(result.changed)await f.store.write(d);return result;});
       const item=playlist.body.items[0];assert.ok(item?.assignment_id);assert.equal(item.attention_enabled,true);assert.equal(item.attention_calibration_revision,calibration.revision);
-      const eventTime=now-10000,summary=summaryForReceipt({body_observed_s:1,body_saturated_s:0,face_observed_s:1,face_saturated_s:0,attention_observed_s:1,expression_observed_s:1,presence_person_s:1,attention_person_s:1,smile_person_s:0,face_observable_person_s:1,expression_observable_person_s:1,estimated_impressions:1,attentive_impressions:0,tracked_visits:1,right_censored_visits:0,longest_look_s:.5},10000,calibration.revision);
-      const event={assignment_id:item.assignment_id,play_uid:'attention_event_0001',seq_no:1,campaign_id:'c1',creative_id:'cr1',config_version:playlist.body.config_version,started_at_device:new Date(eventTime).toISOString(),ended_at_device:new Date(now).toISOString(),playing_duration_ms:10000,media_started_s:0,media_ended_s:10,ended_reason:'ended',measured:false,avg_persons:null,sample_count:0,model_ver:null,server_clock_offset_ms:0,attention:summary};
-      const receipt=await f.store.transact({method:'POST',path:['play'],deviceId,assignmentId:item.assignment_id,playUid:event.play_uid,seqNo:event.seq_no,startedAtDevice:event.started_at_device},async()=>{const d=await f.store.read();const result=route(d,'POST',['play'],event);if(result.changed)await f.store.write(d);return result;});
-      assert.equal(receipt.body.billable,true);assert.equal(receipt.body.attention_status,'accepted');
-      const persisted=(await f.db.collection('plays').where('play_uid','==',event.play_uid).get()).docs[0].data();assert.equal(persisted.attention_status,'accepted');assert.equal(persisted.attention.calibration_revision,calibration.revision);
-      const day=(await f.db.collection('attention_day').get()).docs.map(doc=>doc.data());assert.equal(day.length,1);assert.equal(day[0].totals.plays,1);assert.equal(day[0].totals.playing_ms,10000);
+      const sample={body_observed_s:1,body_saturated_s:0,face_observed_s:1,face_saturated_s:0,attention_observed_s:1,expression_observed_s:1,presence_person_s:1,attention_person_s:1,smile_person_s:0,face_observable_person_s:1,expression_observable_person_s:1,estimated_impressions:1,attentive_impressions:0,tracked_visits:1,right_censored_visits:0,longest_look_s:.5};
+      const submit=async(seq,mode)=>{
+        const started=now-50000+(seq-1)*15000,revision=mode==='guided'?calibration.revision:null;
+        const event={assignment_id:item.assignment_id,play_uid:`attention_event_000${seq}`,seq_no:seq,campaign_id:'c1',creative_id:'cr1',config_version:playlist.body.config_version,started_at_device:new Date(started).toISOString(),ended_at_device:new Date(started+10000).toISOString(),playing_duration_ms:10000,media_started_s:0,media_ended_s:10,ended_reason:'ended',measured:false,avg_persons:null,sample_count:0,model_ver:null,server_clock_offset_ms:0,attention:mode==='guided'?summaryForReceipt(sample,10000,revision):summaryForAttentionMode(sample,10000,'default',null)};
+        const receipt=await f.store.transact({method:'POST',path:['play'],deviceId,assignmentId:item.assignment_id,playUid:event.play_uid,seqNo:event.seq_no,startedAtDevice:event.started_at_device},async()=>{const d=await f.store.read();const result=route(d,'POST',['play'],event);if(result.changed)await f.store.write(d);return result;});
+        assert.equal(receipt.body.billable,true);assert.equal(receipt.body.attention_status,'accepted');
+        const persisted=(await f.db.collection('plays').where('play_uid','==',event.play_uid).get()).docs[0].data();assert.equal(persisted.attention_status,'accepted');assert.equal(persisted.attention_mode,mode);assert.equal(persisted.attention.calibration_revision,revision);
+        return receipt;
+      };
+      await submit(1,'guided');
+      // A guided frozen assignment may truthfully accept explicit default fallback.
+      // Both default receipts must update the same pre-read same-day attention row.
+      await submit(2,'default');await submit(3,'default');
+      const day=(await f.db.collection('attention_day').get()).docs.map(doc=>doc.data());assert.equal(day.length,2);
+      const guidedDay=day.find(row=>row.attention_mode==='guided'),defaultDay=day.find(row=>row.attention_mode==='default');
+      assert.equal(guidedDay.totals.plays,1);assert.equal(defaultDay.totals.plays,2);assert.equal(defaultDay.totals.playing_ms,20000);
       assert.equal((await f.db.collection('screen_day').get()).size,1,'Attention totals remain outside screen_day');
     }finally{await f.db.terminate();}
   });

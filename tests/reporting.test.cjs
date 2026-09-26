@@ -98,19 +98,19 @@ test('monthly settlement and valid-time per-play rollup agree without merging fl
  assert.equal(settlementPeriod(Date.parse('2026-08-31T18:29:59Z')),'2026-08');
 });
 
-test('attention rollups use separate bounded daily rows by asset, config and calibration provenance',()=>{
+test('attention rollups combine compatible calibration modes while retaining bounded provenance and asset versions',()=>{
  const f=fixture();
- const attention={profile:'attention-v1/mediapipe-1.0.1',manifest_sha256:'manifest1',pipeline_sha256:'pipe1',attention:{calibration_revision:'calA',playing_ms:10000,body:[9000,1000,0],face:[8000,2000,0],attention:[6000,4000],expression:[5000,5000],presence_person_ms:10000,looking_person_ms:5000,face_assessable_person_ms:7000,smile_person_ms:1000,expression_assessable_person_ms:5000,estimated_impressions:1,attentive_impressions:1,tracked_visits:1}};
+ const attention={profile:'attention-v1/mediapipe-1.0.1',manifest_sha256:'manifest1',pipeline_sha256:'pipe1',attention:{playing_ms:10000,body:[9000,1000,0],face:[8000,2000,0],attention:[6000,4000],expression:[5000,5000],presence_person_ms:10000,looking_person_ms:5000,face_assessable_person_ms:7000,smile_person_ms:1000,expression_assessable_person_ms:5000,estimated_impressions:1,attentive_impressions:1,tracked_visits:1}};
  const assignment={...f.assignment,screen_id:'screen',asset_id:'asset1',asset_sha256:'asset-hash-1',config_version:1,attention_profile:attention.profile,attention_manifest_sha256:'manifest1',attention_pipeline_sha256:'pipe1',attention_calibration_revision:'calA'};
- const add=(cal,asset,config,when=at)=>{const a={...assignment,asset_id:asset,asset_sha256:`hash-${asset}`,config_version:config,attention_calibration_revision:cal};const play={...f.play,attention_status:'accepted',attention_profile:attention.profile,attention_manifest_sha256:'manifest1',attention_pipeline_sha256:'pipe1',attention:{...attention.attention,calibration_revision:cal}};accrueScreenDay(f.db,play,a,when,f.presence);};
- add('calA','asset1',1);add('calA','asset1',1,at-1000);add('calB','asset1',2);add('calA','asset2',2);
+ const add=(mode,cal,asset,config,when=at)=>{const a={...assignment,asset_id:asset,asset_sha256:`hash-${asset}`,config_version:config,attention_calibration_revision:mode==='guided'?cal:null};const sample={...attention.attention,attention_mode:mode,calibration_revision:mode==='guided'?cal:null};const play={...f.play,attention_status:'accepted',attention_mode:mode,attention_profile:attention.profile,attention_manifest_sha256:'manifest1',attention_pipeline_sha256:'pipe1',attention:sample,attention_calibration:mode==='guided'?{yaw_tenths:12,pitch_tenths:-5,samples:10,span_ms:2700}:null};accrueScreenDay(f.db,play,a,when,f.presence);};
+ add('guided','calA','asset1',1);add('guided','calA','asset1',1,at-1000);add('guided','calB','asset1',2);add('default',null,'asset2',3);
  assert.equal(f.db.screen_day.length,1,'commercial daily row stays compact and calibration-independent');
- assert.equal(f.db.attention_day.length,3,'asset/config/calibration changes each get a distinct bounded document');
- const series=summarizeReport(f.db.screen_day,{from:'2026-09-23',to:'2026-09-24'},f.db.reporting_coverage,f.db.attention_day).attentionProfiles;
- assert.equal(Object.keys(series).length,3);assert.deepEqual(Object.values(series).map(s=>s.totals.plays).sort(),[1,1,2]);
- const asset2=Object.values(series).find(s=>s.asset_id==='asset2');assert.equal(asset2.totals.looking_person_ms,5000);assert.equal(asset2.asset_sha256,'hash-asset2');
+ assert.equal(f.db.attention_day.length,3,'bounded stored buckets preserve calibration mode/revision and asset/config provenance');
+ const profiles=summarizeReport(f.db.screen_day,{from:'2026-09-23',to:'2026-09-24'},f.db.reporting_coverage,f.db.attention_day).attentionProfiles;
+ assert.equal(Object.keys(profiles).length,1,'normal report combines compatible guided/default metrics');const report=Object.values(profiles)[0];
+ assert.equal(report.totals.plays,4);assert.equal(report.totals.attention_observed_ms,24000);assert.equal(report.byCreative.creative.plays,4);assert.equal(Object.keys(report.byCreativeAsset).length,2);
+ assert.equal(Object.keys(report.provenance).length,3);assert.equal(report.provenance['["default",null]'].totals.plays,1);assert.equal(report.provenance['["guided","calA"]'].totals.plays,2);
 });
-
 
 test('metrics authorization rejects foreign organisation, foreign campaign, foreign screen, and forced-password users',()=>{
  const {authorize}=load('access');const actor={id:'owner',role:'owner',org_id:'a'},db={orgs:[{id:'a'},{id:'b'}],screens:[{id:'sa',org_id:'a'},{id:'sb',org_id:'b'}],campaigns:[{id:'ca',org_id:'a',advertiser_id:'ad'},{id:'cb',org_id:'b',advertiser_id:'other'}]};

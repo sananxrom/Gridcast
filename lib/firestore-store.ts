@@ -317,7 +317,9 @@ export function createFirestoreStore(database: Firestore) {
           const receive = Date.now();
           await referenced(tx,'screen_day',[...(at >= Date.parse(a.issued_at)-60000 && at <= Date.parse(a.valid_until) ? [at] : []),receive-86400000,receive,receive+86400000].map(t => reportingKey(a.screen_id,a.campaign_id,a.creative_id,t)),snapshot.screen_day);
           if(a.attention_enabled===true){const sample={screen_id:a.screen_id,campaign_id:a.campaign_id,creative_id:a.creative_id,attention_profile:a.attention_profile,attention_manifest_sha256:a.attention_manifest_sha256,attention_pipeline_sha256:a.attention_pipeline_sha256};
-            await referenced(tx,'attention_day',[...(at >= Date.parse(a.issued_at)-60000 && at <= Date.parse(a.valid_until) ? [at] : []),receive-86400000,receive,receive+86400000].map(t=>attentionDayKey(sample,a,t)),snapshot.attention_day);}
+            const times=[...(at >= Date.parse(a.issued_at)-60000 && at <= Date.parse(a.valid_until) ? [at] : []),receive-86400000,receive,receive+86400000];
+            const attentionKeys=times.flatMap(t=>[attentionDayKey({...sample,attention_mode:'default'},a,t),attentionDayKey({...sample,attention_mode:'guided'},a,t)]);
+            await referenced(tx,'attention_day',attentionKeys,snapshot.attention_day);}
           snapshot.reporting_coverage = await readDoc(tx,'_meta','reporting');
         }
       }

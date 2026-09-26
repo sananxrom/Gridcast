@@ -24,7 +24,7 @@ const calibrationSource=compile('lib/vision/calibration.ts');
 const attentionSource=compile('lib/vision/attention-contracts.ts'),metricsSource=compile('lib/vision/metrics.ts'),productionSource=compile('lib/vision/production.ts');
 const deviceModule={exports:{}};new Function('require','module','exports',compile('lib/devices.ts'))(name=>name.startsWith('.')?require('./load-lib.cjs')(name.slice(2)):require(name),deviceModule,deviceModule.exports);
 const {issuePairing,deviceRoute}=deviceModule.exports;
-const bundle=()=>`const q={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-queue.ts'))})(q,q.exports);
+const bundle=(options={})=>`window.fixtureAttentionModelFailure=${JSON.stringify(!!options.attentionModelFailure)};window.fixtureAttentionModelDelay=${JSON.stringify(Number(options.attentionModelDelayMs)||0)};const q={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-queue.ts'))})(q,q.exports);
 const cache={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-media-cache.ts'))})(cache,cache.exports);
 const diagnostic={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-diagnostics.ts'))})(diagnostic,diagnostic.exports);
 const vision={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-vision.ts'))})(vision,vision.exports);
@@ -32,9 +32,10 @@ const calibration={exports:{}};new Function('require','module','exports',${JSON.
 const cryptoStub={createHash:()=>({update(){return this;},digest(){return '0'.repeat(64);}})};
 const attention={exports:{}};new Function('require','module','exports',${JSON.stringify(attentionSource)})(name=>name==='node:crypto'?cryptoStub:{},attention,attention.exports);
 const metrics={exports:{}};new Function('require','module','exports',${JSON.stringify(metricsSource)})(()=>({}),metrics,metrics.exports);
-const engine={exports:{createEvaluationWorker:async(_delegate,signal,observe)=>{let busy=false,closed=false;signal.addEventListener('abort',()=>{closed=true;});return{close(){closed=true;},get busy(){return busy;},async frame(video,_pose,context){if(busy||closed||video.paused||video.readyState<2)return;busy=true;await new Promise(resolve=>setTimeout(resolve,15));window.fixtureAttentionFrames=(window.fixtureAttentionFrames||0)+1;const empty=window.fixtureNoFace===true;observe({at:performance.now(),bodies:{ok:true,boxes:empty?[]:[[.35,.05,.65,.9]],saturated:false},faces:{ok:true,faces:empty?[]:[{box:[.4,.1,.6,.4],looking:true,smiling:false}],saturated:false},calibration:{yaw:1,pitch:0}},{delegate:'CPU',latencyMs:15,faceFps:4,personFps:4,dropped:0},context);busy=false;}};}}};
+const engine={exports:{createEvaluationWorker:async(_delegate,signal,observe)=>{let busy=false,closed=false;signal.addEventListener('abort',()=>{closed=true;});return{close(){closed=true;},get busy(){return busy;},async frame(video,_pose,context){window.fixtureAttentionPoses??=[];window.fixtureAttentionPoses.push({..._pose});if(busy||closed||video.paused||video.readyState<2)return;busy=true;await new Promise(resolve=>setTimeout(resolve,15));window.fixtureAttentionFrames=(window.fixtureAttentionFrames||0)+1;const empty=window.fixtureNoFace===true;observe({at:performance.now(),bodies:{ok:true,boxes:empty?[]:[[.35,.05,.65,.9]],saturated:false},faces:{ok:true,faces:empty?[]:[{box:[.4,.1,.6,.4],looking:true,smiling:false}],saturated:false},calibration:{yaw:1,pitch:0}},{delegate:'CPU',latencyMs:15,faceFps:4,personFps:4,dropped:0},context);busy=false;}};}}};
 const production={exports:{}};new Function('require','module','exports',${JSON.stringify(productionSource)})(name=>name==='./attention-contracts'?attention.exports:name==='./engine'?engine.exports:name==='./metrics'?metrics.exports:{},production,production.exports);
-production.exports.prepareAttentionAssets=async(progress,signal)=>{signal.throwIfAborted();progress({message:'Verified fixture attention assets',phase:'verifying',downloaded:1048576,verified:1048576,total:1048576,elapsedSeconds:0,etaSeconds:null});return{version:'fixture',bytes:1048576,downloaded:1048576,verified:1048576,elapsedSeconds:0};};
+production.exports.prepareAttentionAssets=async(progress,signal)=>{signal.throwIfAborted();if(window.fixtureAttentionModelFailure)throw new Error('Fixture attention model unavailable');if(window.fixtureAttentionModelDelay)await new Promise(resolve=>setTimeout(resolve,window.fixtureAttentionModelDelay));progress({message:'Verified fixture attention assets',phase:'verifying',downloaded:1048576,verified:1048576,total:1048576,elapsedSeconds:0,etaSeconds:null});return{version:'fixture',bytes:1048576,downloaded:1048576,verified:1048576,elapsedSeconds:0};};
+const attentionSummary={exports:{}};new Function('require','module','exports',${JSON.stringify(compile('lib/vision/attention-summary.ts'))})(name=>name==='./production'?production.exports:{},attentionSummary,attentionSummary.exports);
 production.exports.createProductionAttentionWorker=async(signal,observe,fail)=>{const handle=await engine.exports.createEvaluationWorker('CPU',signal,(value,_stats,context)=>observe(value,context),fail);return{close:()=>handle.close(),get busy(){return handle.busy;},frame:(video,pose,context)=>handle.frame(video,pose,context)};};
 const evidence={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-evidence-lock.ts'))})(evidence,evidence.exports);
 const player={exports:{}};const fixtureRequire=name=>{
@@ -47,6 +48,7 @@ const player={exports:{}};const fixtureRequire=name=>{
  if(name==='@/lib/vision/calibration')return calibration.exports;
  if(name==='@/lib/vision/attention-contracts')return attention.exports;
  if(name==='@/lib/vision/production')return production.exports;
+ if(name==='@/lib/vision/attention-summary')return attentionSummary.exports;
  if(name==='@/components/ui/brand-mark')return {BrandLogo:()=>React.createElement('span',null,'Gridcast')};
  if(name==='@/components/ui/button')return {Button:props=>React.createElement('button',props)};
  if(name==='@/components/ui/input')return {Input:props=>React.createElement('input',props)};
@@ -79,9 +81,9 @@ async function harness(options={}) {
  if(options.attentionEnabled)db.screens[0].attention_settings={enabled:true,profile:'attention-v1/mediapipe-1.0.1'};
  if(options.partialAllowance){db.campaigns[0].committed_budget=2;db.campaigns.push({...db.campaigns[0],id:'campaign2',advertiser_id:'advertiser2',committed_budget:10000});}
  const overrides=new Map();let configVersion=7;
- const requests=[],bodies=[],replies=[],playlistObservations=[];let failedAck=false,base='',stopItems=false,playlistFailed=false;
+ const requests=[],bodies=[],replies=[],playlistObservations=[];let failedAck=false,base='',stopItems=false,forceItems=false,playlistFailed=false,releaseCalibrationSave=()=>{};
  const config={diagnostics_overlay:true,audio_enabled:true,model:'coco-ssd',sample_interval_s:options.modelWorking?.5:2,loop_length_s:4,slot_duration_s:2,count_ceiling:50,camera_fail_mode:'continue',heartbeat_s:10,sync_interval_min:1,offline_buffer_plays:5000,telemetry_batch:25,telemetry_retry_h:72,...(options.attentionEnabled?{attention_enabled:true,attention_profile:'attention-v1/mediapipe-1.0.1',attention_calibration:null}:{}),...options.config};
- const callback=()=>{if(options.attentionEnabled){config.attention_calibration=db.screens[0].attention_calibration||null;if(db.settings?.config_revision)configVersion=db.settings.config_revision;playlistObservations.push({configVersion,attentionEnabled:config.attention_enabled,calibration:config.attention_calibration?.revision||null,screenCalibration:db.screens[0].attention_calibration?.revision||null});}const p={config,config_version:configVersion,items:[],[options.filler?'filler_items':'items']:(stopItems||options.empty)?[]:[{campaign_id:'campaign1',creative_id:'creative1',creative_name:'Browser fixture',duration_s:2,rate_value:2,rate_type:'per_play',asset_url:options.youtube?undefined:base+(options.image?'/fixture.png':'/fixture.webm'),youtube_id:options.youtube?'abcdefghijk':undefined,media_type:options.image?'image':'video',asset_id:'fixture',asset_mime:options.image?'image/png':'video/webm',width:128,height:72,...(options.offline?{asset_bytes:(options.image?picture:video).length,asset_sha256:crypto.createHash('sha256').update(options.image?picture:video).digest('hex')}:{})}]};if(options.twoFillers&&p.filler_items?.length)p.filler_items.push({...p.filler_items[0],creative_id:'creative2'});if(options.partialAllowance&&p.items.length)p.items.push({...p.items[0],campaign_id:'campaign2',creative_id:'creative2'});return p;};
+ const callback=()=>{if(options.attentionEnabled){config.attention_calibration=db.screens[0].attention_calibration||null;if(db.settings?.config_revision)configVersion=db.settings.config_revision;playlistObservations.push({configVersion,attentionEnabled:config.attention_enabled,calibration:config.attention_calibration?.revision||null,screenCalibration:db.screens[0].attention_calibration?.revision||null});}const p={config,config_version:configVersion,items:[],[options.filler?'filler_items':'items']:(stopItems||options.empty&&!forceItems)?[]:[{campaign_id:'campaign1',creative_id:'creative1',creative_name:'Browser fixture',duration_s:2,rate_value:2,rate_type:'per_play',asset_url:options.youtube?undefined:base+(options.image?'/fixture.png':'/fixture.webm'),youtube_id:options.youtube?'abcdefghijk':undefined,media_type:options.image?'image':'video',asset_id:'fixture',asset_mime:options.image?'image/png':'video/webm',width:128,height:72,...(options.offline?{asset_bytes:(options.image?picture:video).length,asset_sha256:crypto.createHash('sha256').update(options.image?picture:video).digest('hex')}:{})}]};if(options.twoFillers&&p.filler_items?.length)p.filler_items.push({...p.filler_items[0],creative_id:'creative2'});if(options.partialAllowance&&p.items.length)p.items.push({...p.items[0],campaign_id:'campaign2',creative_id:'creative2'});return p;};
  const code=issuePairing(db,db.screens[0]);const paired=deviceRoute(db,'POST',['pair'],{code:code.code},null,{playlist:callback,playerProtocol:2}).body;
  if(options.diagnostic){db.campaigns=[];require('./load-lib.cjs')('diagnostics').requestDiagnostic(db,db.screens[0],{id:'admin'},{config,config_version:7});}
  const server=http.createServer(async(req,res)=>{
@@ -97,6 +99,7 @@ async function harness(options={}) {
   if(u.pathname.startsWith('/api/')){
    let data='';for await(const part of req)data+=part;
    const body=data?JSON.parse(data):{},token=req.headers.authorization?.replace(/^Bearer /,'');
+   if(options.holdCalibrationSave&&u.pathname==='/api/attention/calibration')await new Promise(resolve=>{releaseCalibrationSave=resolve;});
    const result=deviceRoute(db,req.method,u.pathname.slice(5).split('/'),body,token,{playlist:callback,playerProtocol:2});
    if(u.pathname==='/api/diagnostic/result'&&options.loseFirstDiagnosticAck&&!failedAck){failedAck=true;res.writeHead(503,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'Diagnostic accepted; acknowledgement lost'}));return;}
    if(u.pathname==='/api/play'){
@@ -110,7 +113,7 @@ async function harness(options={}) {
   if(u.pathname==='/fixture.webm'){res.writeHead(200,{'Content-Type':'video/webm','Content-Length':video.length});res.end(video);return;}
   if(u.pathname==='/react.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(root,'node_modules/react/umd/react.development.js')));return;}
   if(u.pathname==='/react-dom.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(root,'node_modules/react-dom/umd/react-dom.development.js')));return;}
-  if(u.pathname==='/player.js'){res.setHeader('Content-Type','application/javascript');res.end(bundle());return;}
+  if(u.pathname==='/player.js'){res.setHeader('Content-Type','application/javascript');res.end(bundle(options));return;}
   res.setHeader('Content-Type','text/html');res.end('<!doctype html><html><head><meta charset="utf-8"><title>Gridcast player integration fixture</title><link rel="stylesheet" href="/_next/static/player-fixture.css"></head><body><div id="root"></div><script src="/_next/static/react.js"></script><script src="/_next/static/react-dom.js"></script>'+(options.realModel?'<script src="/tf.js"></script><script src="/coco.js"></script>':'')+'<script src="/_next/static/player.js"></script></body></html>');
  });
  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});base=`http://127.0.0.1:${server.address().port}`;
@@ -128,13 +131,14 @@ async function harness(options={}) {
     const original=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
     navigator.mediaDevices.getUserMedia=async constraints=>{
       window.fixtureCameraStarts=(window.fixtureCameraStarts||0)+1;window.fixtureConstraints=constraints;
+      if(options.cameraDenied)throw new DOMException('Fixture camera denied','NotAllowedError');
       if(options.failFirstCamera&&!window.fixtureCameraFailed){window.fixtureCameraFailed=true;throw new DOMException('Fixture blocked','NotAllowedError');}
       // Capture constraints for assertions; the synthetic camera has no real device ID.
       const result=await original({audio:false,video:{width:640,height:480}});window.fixtureStream=result;return result;
     };
   },{credential:{token:paired.token,device_id:paired.device.id,screen_id:'screen1'},options});
   await Promise.race([pageFailure,(async()=>{await page.goto(base+'/player');if(options.image)await page.waitForFunction(()=>document.querySelector('img')?.naturalWidth>0);else if(options.youtube)await page.waitForFunction(()=>window.fixtureYT?.startedAt>0,{},{timeout:15000});else if(!options.empty&&!options.unpaired&&!options.attentionEnabled)await page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.1;},{},{timeout:15000});})()]);
- return {page,db,requests,bodies,replies,paired,pageErrors,playlistObservations,setConfig:values=>{Object.assign(config,values);configVersion++;if(Object.hasOwn(values,'attention_enabled')||Object.hasOwn(values,'attention_profile')){db.settings||={};db.settings.config_revision=(db.settings.config_revision||0)+1;}},setReply:(path,reply)=>reply?overrides.set(path,reply):overrides.delete(path),cleanup:async()=>{await browser.close();await new Promise(r=>server.close(r));fs.rmSync(temp,{recursive:true,force:true});assert.deepEqual(pageErrors,[],'Player fixture must not have uncaught browser errors');}};
+ return {page,db,requests,bodies,replies,paired,pageErrors,playlistObservations,releaseCalibrationSave:()=>releaseCalibrationSave(),setItemsEnabled:()=>{forceItems=true;},setConfig:values=>{Object.assign(config,values);configVersion++;if(Object.hasOwn(values,'attention_enabled')||Object.hasOwn(values,'attention_profile')){db.settings||={};db.settings.config_revision=(db.settings.config_revision||0)+1;}},setReply:(path,reply)=>reply?overrides.set(path,reply):overrides.delete(path),cleanup:async()=>{await browser.close();await new Promise(r=>server.close(r));fs.rmSync(temp,{recursive:true,force:true});assert.deepEqual(pageErrors,[],'Player fixture must not have uncaught browser errors');}};
  }catch(e){await browser?.close();await new Promise(r=>server.close(r));fs.rmSync(temp,{recursive:true,force:true});throw e;}
 }
 const waitFor=async(fn,ms=15000)=>{const until=Date.now()+ms;while(!fn()){if(Date.now()>until)throw new Error('Timed out waiting for playback report');await new Promise(r=>setTimeout(r,25));}};
@@ -180,33 +184,78 @@ test('fake camera and deterministic detector carry the actual model version and 
  }finally{await h.cleanup();}
 });
 
-test('opted-in empty schedule completes camera calibration before reporting readiness without a play', {skip:!executablePath||!ffmpeg}, async()=>{
- const h=await harness({attentionEnabled:true,modelWorking:true,empty:true,config:{sample_interval_s:2}});try{
-  await waitFor(()=>!!h.db.screens[0].attention_calibration,12000).catch(async error=>{throw new Error(JSON.stringify({message:error.message,body:(await h.page.locator('body').innerText()).slice(0,1000),requests:h.requests.map(x=>x.path),errors:h.pageErrors,device:h.db.devices,assignment:h.db.device_assignments},null,2));});
-  assert.ok(await h.page.evaluate(()=>window.fixtureAttentionFrames>=5),'Calibration must get independent off-slot camera frames');
-  assert.equal(h.bodies.length,0);assert.equal(h.db.plays.length,0);
-  assert.ok(h.requests.some(r=>r.method==='POST'&&r.path==='/api/attention/calibration'));
-  assert.equal(await h.page.getByRole('button',{name:'Calibrate attention · 3 seconds'}).count(),1);
+test('opted-in playback starts with no calibration and records default-mode analytics', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({attentionEnabled:true,modelWorking:true,continuous:true,config:{sample_interval_s:2}});try{
+  await waitFor(()=>h.bodies.length>0,15000);const first=h.bodies[0];assert.equal(h.replies[0].body.attention_status,'accepted',JSON.stringify({reply:h.replies[0],play:h.db.plays[0],assignment:h.db.device_assignments[0],poses:await h.page.evaluate(()=>window.fixtureAttentionPoses),status:await h.page.locator('[data-role=player-status]').innerText()}));
+  assert.equal(h.db.plays[0].attention_mode,'default');assert.equal(h.db.plays[0].attention.calibration_revision,null);assert.equal(h.db.plays[0].attention.attention_mode,'default');assert.equal(h.db.plays[0].billable,true);
+  assert.equal(h.db.screens[0].attention_calibration,undefined,'No guided calibration is fabricated or required');
+  assert.ok(await h.page.evaluate(()=>window.fixtureAttentionFrames>0),'Default-mode attention frames run without guided calibration');
+  const poses=await h.page.evaluate(()=>window.fixtureAttentionPoses);assert.ok(poses.length);assert.ok(poses.every(p=>p.yaw===0&&p.pitch===0),'Default mode freezes explicit zero yaw/pitch offsets');
+  assert.ok(first.playing_duration_ms>=1990&&first.playing_duration_ms<=2010);assert.equal(h.db.campaigns[0].accrued_spend,2);
+  assert.equal(h.requests.filter(r=>r.method==='POST'&&r.path==='/api/attention/calibration').length,0,'Calibration is not automatic');
  }finally{await h.cleanup();}
 });
-
-test('failed or cancelled initial calibration can be retried with the verified worker', {skip:!executablePath||!ffmpeg}, async()=>{
- const h=await harness({attentionEnabled:true,modelWorking:true,empty:true,noFaceInitially:true,config:{sample_interval_s:2}});try{
-  await h.page.getByRole('button',{name:'Cancel calibration'}).waitFor({timeout:12000});
+test('attention model failure and camera denial never block paid playback', {skip:!executablePath||!ffmpeg}, async()=>{
+ for(const options of [{attentionModelFailure:true},{cameraDenied:true}]){const h=await harness({attentionEnabled:true,modelWorking:true,continuous:true,...options});try{
+   await waitFor(()=>h.bodies.length>0,15000);assert.equal(h.db.plays[0].billable,true);assert.equal(h.db.campaigns[0].accrued_spend,2);
+   assert.equal(h.db.screens[0].attention_calibration,undefined);assert.equal(h.db.plays[0].attention_mode,'default');
+   if(options.attentionModelFailure){assert.equal(h.replies[0].body.attention_status,'accepted','Unavailable inference is represented as unknown-time default analytics');}
+   else {assert.equal(h.db.presence[0].measured,false,'Camera denial does not fabricate presence');}
+  }finally{await h.cleanup();}}
+});
+test('slow attention model initialization leaves the first paid play on default settings', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({attentionEnabled:true,modelWorking:true,continuous:true,attentionModelDelayMs:4500,config:{sample_interval_s:2}});try{
+  await waitFor(()=>h.bodies.length>0,5000);const play=h.db.plays[0];assert.equal(play.billable,true);assert.equal(play.attention_status,'accepted');assert.equal(play.attention_mode,'default');
+  assert.equal(play.attention.calibration_revision,null);assert.equal(play.attention.attention[0],0);assert.equal(play.attention.attention[1],play.playing_duration_ms);
+ }finally{await h.cleanup();}
+});
+test('opted-in empty schedule can request optional calibration without starting a paid play', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({attentionEnabled:true,modelWorking:true,empty:true,config:{sample_interval_s:2}});try{
+  await h.page.getByRole('button',{name:'Calibrate attention · 3 seconds'}).waitFor({timeout:12000}).catch(async e=>{throw Error(JSON.stringify({message:e.message,body:(await h.page.locator('body').innerText()).slice(0,1000),requests:h.requests,errors:h.pageErrors,assignments:h.db.device_assignments},null,2));});
+  await h.page.getByText('Ready · counts update during playback').waitFor({timeout:12000});
+  assert.equal(h.db.screens[0].attention_calibration,undefined,'Guided calibration does not start automatically');
+  await h.page.getByRole('button',{name:'Calibrate attention · 3 seconds'}).click();await h.page.getByRole('button',{name:'Cancel calibration'}).waitFor({timeout:3000});
+  await waitFor(()=>!!h.db.screens[0].attention_calibration,12000).catch(async error=>{throw new Error(JSON.stringify({attentionFrames:await h.page.evaluate(()=>window.fixtureAttentionFrames),camera:await h.page.locator('video[data-role=camera]').evaluate(v=>({paused:v.paused,readyState:v.readyState,width:v.videoWidth,height:v.videoHeight})),buttons:await h.page.locator('button').allTextContents(),message:error.message,body:(await h.page.locator('body').innerText()).slice(0,1000),requests:h.requests.map(x=>x.path),errors:h.pageErrors,device:h.db.devices,assignment:h.db.device_assignments},null,2));});
+  assert.ok(await h.page.evaluate(()=>window.fixtureAttentionFrames>=5),'Calibration must get independent off-slot camera frames');
+  assert.equal(h.bodies.length,0);assert.equal(h.db.plays.length,0);assert.ok(h.requests.some(r=>r.method==='POST'&&r.path==='/api/attention/calibration'));
+ }finally{await h.cleanup();}
+});
+test('cancelled optional calibration resumes default-mode ad playback', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({attentionEnabled:true,modelWorking:true,continuous:true,config:{sample_interval_s:2}});try{
+  await h.page.getByRole('button',{name:'Calibrate attention · 3 seconds'}).waitFor({timeout:12000}).catch(async e=>{throw Error(JSON.stringify({message:e.message,body:(await h.page.locator('body').innerText()).slice(0,1000),requests:h.requests,errors:h.pageErrors,assignments:h.db.device_assignments},null,2));});
+  await h.page.getByRole('button',{name:'Calibrate attention · 3 seconds'}).click();
+  await h.page.getByRole('button',{name:'Cancel calibration'}).waitFor({timeout:15000});
   await h.page.getByRole('button',{name:'Cancel calibration'}).click();
-  await h.page.getByRole('button',{name:'Retry calibration'}).waitFor();
-  await h.page.getByRole('button',{name:'Retry calibration'}).click();
-  await h.page.getByText(/Calibration failed ·.*Not enough clear face readings/).waitFor({timeout:6000});
+  await waitFor(()=>h.bodies.length>=2,15000);assert.equal(h.db.screens[0].attention_calibration,undefined);
+  assert.ok(h.db.plays.every(p=>p.billable));assert.ok(h.db.plays.some(p=>p.attention_mode==='default'));
+  assert.equal(h.requests.filter(r=>r.method==='POST'&&r.path==='/api/attention/calibration').length,0);
+ }finally{await h.cleanup();}
+});
+test('cancelling a held calibration save releases ads and ignores its stale local completion', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({attentionEnabled:true,modelWorking:true,continuous:true,holdCalibrationSave:true,config:{sample_interval_s:2}});try{
+  await h.page.getByRole('button',{name:'Calibrate attention · 3 seconds'}).waitFor({timeout:12000});await h.page.getByText('Ready · counts update during playback').waitFor({timeout:12000});
+  await h.page.getByRole('button',{name:'Calibrate attention · 3 seconds'}).click();await waitFor(()=>h.requests.some(r=>r.method==='POST'&&r.path==='/api/attention/calibration'),15000);
+  await h.page.getByRole('button',{name:'Cancel calibration'}).click();await waitFor(()=>h.bodies.length>=2,8000);
+  const before=h.db.plays.length;assert.ok(h.db.plays.slice(0,before).every(p=>p.attention_mode==='default'&&p.billable),'The in-flight assignment retains its default provenance while the save is unresolved');
+  h.releaseCalibrationSave();await waitFor(()=>!!h.db.screens[0].attention_calibration,8000);
+  assert.ok(h.db.plays.every(p=>p.billable));assert.ok(h.db.plays.some(p=>p.attention_mode==='default'));
+ }finally{h.releaseCalibrationSave();await h.cleanup();}
+});
+test('failed optional calibration resumes default ads and can be retried', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({attentionEnabled:true,modelWorking:true,continuous:true,noFaceInitially:true,config:{sample_interval_s:2}});try{
+  await h.page.getByRole('button',{name:'Calibrate attention · 3 seconds'}).waitFor({timeout:12000}).catch(async e=>{throw Error(JSON.stringify({message:e.message,body:(await h.page.locator('body').innerText()).slice(0,1000),requests:h.requests,errors:h.pageErrors,assignments:h.db.device_assignments},null,2));});
+  await h.page.getByRole('button',{name:'Calibrate attention · 3 seconds'}).click();
+  await h.page.getByText(/Calibration failed ·.*Not enough clear face readings/).waitFor({timeout:20000});
+  const failureStatus=await h.page.locator('[data-role="player-status"]').innerText();assert.match(failureStatus,/default zero offsets/);assert.doesNotMatch(failureStatus,/Previous calibration kept/i,'First-time failure must not claim an earlier calibration remains saved');
+  assert.ok(h.db.plays.length>=1);assert.equal(h.db.plays.at(-1).billable,true);assert.equal(h.db.plays.at(-1).attention_mode,'default');
   await h.page.evaluate(()=>{window.fixtureNoFace=false;});
-  await h.page.getByRole('button',{name:'Retry calibration'}).click();
-  await waitFor(()=>!!h.db.screens[0].attention_calibration,7000);
-  assert.equal(h.db.plays.length,0);assert.equal(h.requests.filter(r=>r.method==='POST'&&r.path==='/api/attention/calibration').length,1);
+  await h.page.getByRole('button',{name:'Calibrate attention · 3 seconds'}).click();
+  await waitFor(()=>!!h.db.screens[0].attention_calibration,15000);assert.ok(h.db.plays.every(p=>p.billable));
  }finally{await h.cleanup();}
 });
 
 test('Attention toggles apply at boundaries without restarting the legacy camera or losing billable samples', {skip:!executablePath||!ffmpeg}, async()=>{
  const h=await harness({attentionEnabled:true,modelWorking:true,continuous:true,config:{sample_interval_s:2}});try{
-  await waitFor(()=>!!h.db.screens[0].attention_calibration,12000);
   await h.page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.25;});
   h.db.campaigns[0].committed_budget=100000; // Cover the old immutable reservation while the new config revision is assigned.
   const cameraStarts=await h.page.evaluate(()=>window.fixtureCameraStarts);
@@ -225,7 +274,6 @@ test('Attention toggles apply at boundaries without restarting the legacy camera
 
 test('small-budget Attention config revisions wait for the outstanding immutable allowance without double charging', {skip:!executablePath||!ffmpeg}, async()=>{
  const h=await harness({attentionEnabled:true,modelWorking:true,continuous:true,config:{sample_interval_s:2}});try{
-  await waitFor(()=>!!h.db.screens[0].attention_calibration,12000);
   await h.page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.25;});
   h.setConfig({attention_enabled:false});await h.page.evaluate(()=>window.dispatchEvent(new Event('online')));
   await waitFor(()=>h.db.plays.length===1,10000);
@@ -236,16 +284,36 @@ test('small-budget Attention config revisions wait for the outstanding immutable
  }finally{await h.cleanup();}
 });
 
-test('recalibration requested during a creative begins only after its delivery is finalized', {skip:!executablePath||!ffmpeg}, async()=>{
+test('optional calibration requested during a creative begins only after its delivery is finalized', {skip:!executablePath||!ffmpeg}, async()=>{
  const h=await harness({attentionEnabled:true,modelWorking:true,config:{sample_interval_s:2}});try{
-  await waitFor(()=>!!h.db.screens[0].attention_calibration,12000);const firstRevision=h.db.screens[0].attention_calibration.revision;
-  await h.page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.1;},{timeout:10000}).catch(async error=>{throw new Error(JSON.stringify({message:error.message,body:(await h.page.locator('body').innerText()).slice(0,1000),requests:h.requests.map(x=>x.path),plays:h.db.plays,assignments:h.db.device_assignments.map(a=>({attention:a.attention_enabled,rev:a.attention_calibration_revision})),assignmentSet:h.db.devices[0].assignment_set,campaign:h.db.campaigns[0],playlistObservations:h.playlistObservations,calibration:h.db.screens[0].attention_calibration},null,2));});
+  await h.page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.1;},{timeout:10000});
   await h.page.getByRole('button',{name:'Calibrate attention · 3 seconds'}).click();
   assert.match(await h.page.locator('[data-role="player-status"]').innerText(),/safe play boundary/);
-  await waitFor(()=>h.bodies.length>=1,10000);await waitFor(()=>h.db.screens[0].attention_calibration?.revision!==firstRevision,12000);
-  const playAt=h.requests.findIndex(r=>r.method==='POST'&&r.path==='/api/play'),calibrations=h.requests.map((r,i)=>r.method==='POST'&&r.path==='/api/attention/calibration'?i:-1).filter(i=>i>=0);
-  assert.equal(calibrations.length,2);assert.ok(playAt>calibrations[0]&&calibrations[1]>playAt,JSON.stringify({playAt,calibrations}));
-  assert.equal(h.db.plays.length,1,'Recalibration must pause between paid plays');assert.equal(h.db.plays[0].attention_status,'accepted','The real receipt path accepts the optional summary');assert.ok(h.db.plays[0].attention.playing_ms>0);assert.equal(h.db.plays[0].billable,true);assert.equal(h.db.campaigns[0].accrued_spend,2,'Attention evidence cannot change commercial billing');
+  await waitFor(()=>h.bodies.length>=1,10000);await waitFor(()=>!!h.db.screens[0].attention_calibration,12000);
+  const playAt=h.requests.findIndex(r=>r.method==='POST'&&r.path==='/api/play'),calibrationAt=h.requests.findIndex(r=>r.method==='POST'&&r.path==='/api/attention/calibration');
+  assert.ok(playAt>=0&&calibrationAt>playAt,JSON.stringify({playAt,calibrationAt}));
+  assert.ok(h.db.plays.length>=1);assert.equal(h.db.plays[0].attention_mode,'default','The in-flight play retains default provenance');assert.equal(h.db.plays[0].attention_status,'accepted','The real receipt path accepts the optional summary');assert.equal(h.db.plays[0].billable,true);assert.equal(h.db.campaigns[0].accrued_spend,2,'Attention evidence cannot change commercial billing');
+ }finally{await h.cleanup();}
+});
+
+test('camera rotation invalidates guided attention through pause and the next play defaults offline', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({attentionEnabled:true,modelWorking:true,empty:true,config:{sample_interval_s:2}});try{
+  await h.page.getByRole('button',{name:'Calibrate attention · 3 seconds'}).waitFor({timeout:12000});
+  await h.page.getByRole('button',{name:'Calibrate attention · 3 seconds'}).click();
+  await waitFor(()=>!!h.db.screens[0].attention_calibration,15000);
+  assert.equal(h.db.plays.length,0,'Calibration before the first schedule creates no delivery record');
+  h.setItemsEnabled();await h.page.evaluate(()=>window.dispatchEvent(new Event('online')));
+  await waitFor(()=>h.db.plays.some(p=>p.attention_mode==='guided'),25000);
+  await h.page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.2;});
+  const previousReceipts=h.db.plays.length;
+  await h.page.evaluate(()=>{Object.defineProperty(window.screen.orientation,'angle',{configurable:true,value:90});const v=document.querySelector('video[data-role="creative"][data-active="true"]');v.pause();v.dispatchEvent(new Event('waiting'));});
+  await new Promise(resolve=>setTimeout(resolve,250));await h.page.evaluate(()=>document.querySelector('video[data-role="creative"][data-active="true"]').play());
+  await waitFor(()=>h.db.plays.length>=previousReceipts+2,16000);
+  const invalidated=h.db.plays[previousReceipts],next=h.db.plays[previousReceipts+1];
+  assert.equal(invalidated.attention_mode,'guided','Current play keeps its frozen guided provenance');
+  assert.equal(invalidated.attention_status,'accepted');assert.equal(invalidated.billable,true);
+  assert.equal(next.attention_mode,'default','The next play revalidates camera geometry without needing a network refresh');
+  assert.equal(next.attention.calibration_revision,null);assert.equal(next.attention.attention_mode,'default');assert.equal(next.attention_status,'accepted');assert.equal(next.billable,true);
  }finally{await h.cleanup();}
 });
 

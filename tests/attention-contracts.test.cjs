@@ -66,3 +66,11 @@ test('conservative numeric-width bound includes all coverage combinations within
  const a=upper(f.attention()),event={...f.legacy(),attention:a};
  const bytes=c.draftQueuedEventBytes(event);assert.ok(bytes<=3584);assert.equal(valid(a),false);t.diagnostic(`Conservative numeric-width core envelope: ${bytes} bytes`);
 });
+
+test('default and guided receipts reuse the pinned metric calculation and differ only in truthful provenance',()=>{
+ const p=require('./load-lib.cjs')('vision/production'),mode=require('./load-lib.cjs')('vision/attention-summary');
+ const sample={body_observed_s:8,body_saturated_s:1,face_observed_s:7,face_saturated_s:0,attention_observed_s:5,expression_observed_s:4,presence_person_s:3,attention_person_s:2,smile_person_s:1,face_observable_person_s:2.5,expression_observable_person_s:1.5,estimated_impressions:1,attentive_impressions:1,tracked_visits:1,right_censored_visits:0,longest_look_s:1};
+ const old=p.summaryForReceipt(sample,10000,'realGuidedRevision');
+ assert.deepEqual(mode.summaryForAttentionMode(sample,10000,'guided','realGuidedRevision'),{...old,attention_mode:'guided'});
+ assert.deepEqual(mode.summaryForAttentionMode(sample,10000,'default',null),{...old,attention_mode:'default',calibration_revision:null});
+});

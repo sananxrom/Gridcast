@@ -42,14 +42,31 @@ test('calibration revisions are immutable, assignments freeze full provenance, d
  assert.equal(calibrationForDevice(f.db.screens[0],newDevice,f.config.attention_profile),null,'screen calibration from the revoked device cannot authorize its replacement');
  assert.deepEqual(f.db.attention_calibrations.map(x=>x.id),['calibrationA','calibrationB']);
 });
-test('attention-enabled playlists do not reserve paid allowance before paired-camera calibration',()=>{
- const f=fixture();f.config.attention_enabled=true;f.config.attention_profile='attention-v1/mediapipe-1.0.1';
- f.db.device_assignments=[];delete f.db.devices[0].assignment_set;delete f.db.campaign_budgets;
- const waiting=f.call('GET','playlist/screen1',{},f.paired.token);assert.equal(waiting.body.budget_state,'attention_calibration_required');assert.deepEqual(waiting.body.items,[]);
- assert.equal(f.db.device_assignments.length,0);assert.equal(f.db.campaign_budgets,undefined,'Setup cannot reserve campaign funds before commissioning');
- const calibration={schema:'calibration-v1/1',profile:f.config.attention_profile,revision:'commissionedA',device_id:f.paired.device.id,screen_id:'screen1',camera_ref:'opaqueCameraReference123',width:640,height:480,rotation:0,method:'guided-3s',yaw_tenths:12,pitch_tenths:-5,samples:10,span_ms:2700,yaw_spread_tenths:2,pitch_spread_tenths:3,completed_at:new Date(f.db.devices[0].created_at).toISOString()};
- assert.equal(f.call('POST','attention/calibration',{calibration},f.paired.token).status,200);f.config.attention_calibration=calibration;
- const ready=f.call('GET','playlist/screen1',{},f.paired.token);assert.equal(ready.body.items.length,1);assert.equal(f.db.device_assignments[0].attention_calibration_revision,'commissionedA');assert.equal(f.db.device_assignments[0].attention_calibration.camera_ref,calibration.camera_ref);
+test('attention-enabled playlist and receipts use default offsets without delaying paid playback or changing money',()=>{
+ const off=fixture();off.db.device_assignments=[];delete off.db.devices[0].assignment_set;delete off.db.campaign_budgets;
+ const plain=off.call('GET','playlist/screen1',{},off.paired.token).body.items[0];
+ const on=fixture();on.config.attention_enabled=true;on.config.attention_profile='attention-v1/mediapipe-1.0.1';on.db.device_assignments=[];delete on.db.devices[0].assignment_set;delete on.db.campaign_budgets;
+ const playlist=on.call('GET','playlist/screen1',{},on.paired.token).body,item=playlist.items[0],assignment=on.db.device_assignments[0];
+ assert.equal(playlist.budget_state,'available');assert.equal(item.attention_enabled,true);assert.equal(item.attention_mode,'default');assert.equal(item.attention_calibration_revision,null);
+ assert.equal(item.assignment_id!==undefined,true);assert.equal(assignment.attention_calibration,null);assert.equal(assignment.attention_mode,'default');
+ assert.equal(assignment.max_plays,on.db.device_assignments[0].max_plays);assert.equal(on.db.campaign_budgets[0].spent_paise,off.db.campaign_budgets[0].spent_paise);assert.equal(on.db.campaign_budgets[0].reservations[0].remaining_plays,off.db.campaign_budgets[0].reservations[0].remaining_plays);
+ const event={...on.event(),assignment_id:item.assignment_id,attention:{schema:'attention-v1/1',profile:on.config.attention_profile,attention_mode:'default',calibration_revision:null,playing_ms:10000,body:[8000,2000,0],face:[8000,2000,0],attention:[6000,4000],expression:[6000,4000],presence_person_ms:10000,looking_person_ms:5000,smile_person_ms:1000,face_assessable_person_ms:7000,expression_assessable_person_ms:6000,estimated_impressions:1,attentive_impressions:1,tracked_visits:1,right_censored_visits:0,longest_look_ms:1000}};
+ const accepted=on.call('POST','play',event,on.paired.token);assert.equal(accepted.body.attention_status,'accepted');assert.equal(accepted.body.billable,true);assert.equal(on.db.plays[0].attention_mode,'default');assert.equal(on.db.plays[0].attention_calibration_revision,null);assert.equal(on.db.attention_day[0].attention_mode,'default');assert.equal(on.db.attention_day[0].calibration_revision,null);
+ const offReceipt=off.call('POST','play',{...off.event({assignment_id:plain.assignment_id})},off.paired.token);assert.equal(accepted.body.billable,offReceipt.body.billable);assert.equal(on.db.campaigns[0].accrued_spend,off.db.campaigns[0].accrued_spend);
+});
+
+test('attention profile mismatch still issues paid and filler playback authorizations',()=>{
+ const paid=fixture();paid.config.attention_enabled=true;paid.config.attention_profile='unsupported-profile';paid.db.device_assignments=[];delete paid.db.devices[0].assignment_set;
+ const paidList=paid.call('GET','playlist/screen1',{},paid.paired.token).body;assert.equal(paidList.items.length,1);assert.equal(paidList.budget_state,'available');
+ const filler=fixture();filler.config.attention_enabled=true;filler.config.attention_profile='unsupported-profile';filler.item.kind='filler';filler.item.campaign_id=null;filler.db.device_assignments=[];delete filler.db.devices[0].assignment_set;
+ const fillerList=filler.call('GET','playlist/screen1',{},filler.paired.token).body;assert.equal(fillerList.items.length,0);assert.equal(fillerList.filler_items.length,1);assert.equal(fillerList.filler_items[0].attention_enabled,true);assert.equal(fillerList.filler_items[0].attention_mode,'default');
+});
+test('default fallback under a frozen guided assignment is explicit and legacy offline guided summaries still validate',()=>{
+ const f=fixture();f.config.attention_enabled=true;f.config.attention_profile='attention-v1/mediapipe-1.0.1';f.config.attention_calibration={schema:'calibration-v1/1',profile:f.config.attention_profile,revision:'guidedA',device_id:f.paired.device.id,screen_id:'screen1',camera_ref:'opaqueCameraReference123',width:640,height:480,rotation:0,method:'guided-3s',yaw_tenths:12,pitch_tenths:-5,samples:10,span_ms:2700,yaw_spread_tenths:2,pitch_spread_tenths:3,completed_at:new Date(f.db.devices[0].created_at).toISOString()};
+ f.db.device_assignments=[];delete f.db.devices[0].assignment_set;const item=f.call('GET','playlist/screen1',{},f.paired.token).body.items[0];assert.equal(item.attention_mode,'guided');
+ const base={schema:'attention-v1/1',profile:f.config.attention_profile,playing_ms:10000,body:[8000,2000,0],face:[8000,2000,0],attention:[6000,4000],expression:[6000,4000],presence_person_ms:10000,looking_person_ms:5000,smile_person_ms:1000,face_assessable_person_ms:7000,expression_assessable_person_ms:6000,estimated_impressions:1,attentive_impressions:1,tracked_visits:1,right_censored_visits:0,longest_look_ms:1000};
+ const fallback=f.call('POST','play',{...f.event(),assignment_id:item.assignment_id,attention:{...base,attention_mode:'default',calibration_revision:null}},f.paired.token);assert.equal(fallback.body.attention_status,'accepted');assert.equal(f.db.plays.at(-1).attention_calibration_revision,null);
+ const legacy=f.call('POST','play',{...f.event({seq_no:2}),assignment_id:item.assignment_id,attention:{...base,calibration_revision:'guidedA'}},f.paired.token);assert.equal(legacy.body.attention_status,'accepted');assert.equal(f.db.plays.at(-1).attention_mode,'guided');
 });
 test('one-time pairing uses only stored hash, rotates credential, rejects re-use and legacy code',()=>{
  const f=fixture(),s=f.db.screens[0],old=f.paired.token;
@@ -132,7 +149,7 @@ test('fresh and cached device playlists expose only playback fields while rates 
  assert.notEqual(fresh.assignment_id,f.assignment.assignment_id,'rate changes must invalidate the prior assignment');
  const cached=f.call('GET','playlist/screen1',{},f.paired.token).body.items[0];
  assert.equal(cached.assignment_id,fresh.assignment_id,'second response exercises cached assignments');
- const allowed=['campaign_id','creative_id','youtube_id','duration_s','asset_id','asset_url','width','height','letterbox','assignment_id','valid_until','accept_until','max_plays','media_type','kind','asset_sha256','asset_bytes','asset_mime','attention_enabled','attention_profile','attention_calibration_revision','attention_manifest_sha256','attention_pipeline_sha256'].sort();
+ const allowed=['campaign_id','creative_id','youtube_id','duration_s','asset_id','asset_url','width','height','letterbox','assignment_id','valid_until','accept_until','max_plays','media_type','kind','asset_sha256','asset_bytes','asset_mime','attention_enabled','attention_profile','attention_mode','attention_calibration_revision','attention_manifest_sha256','attention_pipeline_sha256'].sort();
  for(const served of [fresh,cached]){
   assert.deepEqual(Object.keys(served).sort(),allowed);
   assert.equal(served.asset_url,f.item.asset_url);assert.equal(served.youtube_id,'example');

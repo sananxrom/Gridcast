@@ -110,6 +110,8 @@ attention, dwell, smiles and calibration do not feed pricing, budgets, billabili
 Preserve existing presence/measured inputs and financial rules; a new detector must not silently replace
 their source. The earlier plan gated production B–D on full human/runtime validation. **26 Sep revised user direction:** after supplying exploratory playback and a successful guided-calibration export, Sanan explicitly requested building the production integration and deploying to Firebase using the delegated builder. Proceed with reviewed analytics-only V1 and per-screen controlled enablement (default off); do not misreport the short runs as formal accuracy/soak approval or enable the whole fleet. Preserve all legacy inputs and truthful unknown coverage. Documents 24–27 carry the evidence and staged build path.
 
+**27 Sep playback/reporting correction:** Calibration is optional. Attention-enabled screens use explicit default zero offsets when no compatible guided calibration is available; optional analytics failures never gate paid/filler delivery. Freeze actual mode/revision/offsets per play and keep unavailable measurements null. Combine default/guided results in one report when model metrics are compatible; keep calibration provenance in optional technical details and exports. Claude's 01:47/01:57 entries record subsequent commissioning overlay, detector migration and impression-metric removal work; those changes are pending, not part of the optional-calibration release.
+
 ### Stack and repo
 - Next.js 15.5.26 App Router · React 18.3.1 · TypeScript · Tailwind 3.4 · shadcn conventions · lucide-react
 - Repo `github.com/sananxrom/Gridcast`; working copy `~/Downloads/gc`; dev server on port 4000
@@ -4023,3 +4025,138 @@ never block or displace valid delivery evidence.
 **Live verification:** `/api/_health` HTTP200, ok=true, Firestore database gridcast; `/player` HTTP200 and fresh unpaired Chrome rendered the pairing form with zero page errors; both `/vision-lab/evaluate` and `/vision-lab/combined` HTTP404. Production worker and manifest HTTP200 and SHA-256 match the compiled pins. Evidence `/tmp/gridcast-attention-live-check.log`, screenshot `/tmp/gridcast-attention-live-player.png` visually reviewed. Existing paired browser sessions were untouched; real-user camera accuracy and accepted live attention receipts were not claimed.
 **Indexes/docs:** Shared graph publication succeeded after the app commit (4025 nodes / 10249 edges; known partial JSX parse in app-shell remains, no unusable parser files). SymDex structural index refreshed with zero errors, no embeddings. Artifacts stay local/ignored. Updated research25 from local-pending to verified deployment; final log/docs commit and refresh follow. Firebase reporting indexes were already READY before release.
 **Usage/limits:** Platform admin: screen → Config → Attention V1 → Enable on this screen. Commission models/camera/calibration before paid scheduling; limited available budget plus outstanding immutable reservations can delay replacement paid assignments on config/calibration changes. Existing money rules and legacy COCO measurement source are preserved. Human accuracy/representative hardware/soak validation and richer sliceF analytics remain future work. No action is waiting on a secret or login.
+
+### 2026-09-27 01:34 IST · GPT-6 (Codex desktop, coordinator) · Make attention calibration optional
+
+**Asked:** Sanan reported failed calibration holding ads and then explicitly requested playback and tracking with default settings even without calibration. This supersedes the earlier mandatory commissioning gate.
+**Diagnosed:** Live-release source `023e4f4` blocks uncalibrated playlists in `lib/devices.ts` and playback in `app/player/page.tsx`; calibration failure leaves setup paused. `lib/vision/calibration.ts` and player catch both append an unconditional previous-calibration claim. Prior read-only admin inspection reported legacy camera/detector ready but no accepted attention analytics; that does not establish attention inference health. SymDex lookup failed under sandbox SQLite access; used targeted source reads.
+**Decision/delegation:** Assigned the existing authorized builder, Study Gridcast downloads folder, to implement explicit default zero-offset attention with truthful uncalibrated provenance, immediate authorized playback independent of optional setup, optional safe-boundary calibration, failure/cancel recovery, and separate calibrated/default reporting. Preserve immutable guided evidence, camera binding, receipt caps, tenant isolation, legacy presence and all financial rules. Builder owns application edits/tests; coordinator reviews and releases. No artificial guided calibration or accuracy claim.
+**State:** Starting from branch HEAD `8268a9b`, Firebase still `023e4f4`. Implementation and regression verification are pending. No live configuration/data changes or deployment at this checkpoint.
+
+### 2026-09-27 01:35 IST · GPT-6 (Codex desktop, coordinator) · Keep one attention report
+
+**Asked:** Sanan rejected separate reports for default and calibrated attention and asked why separation was needed.
+**Decision:** One normal user-facing report combines results across calibration modes/revisions when model and metric definitions are compatible. Preserve actual default/guided provenance in immutable records and bounded storage, with optional details/export; no separate dashboard or mandatory calibration filter. Calibration changes gaze offsets, so provenance remains useful for interpreting comparisons, but it need not fragment the normal report. Preserve unknown/null semantics and combine raw counters with their observed denominators. Genuinely incompatible model/metric versions still must not be silently blended.
+**Did:** Sent this correction to the existing authorized builder, superseding the earlier UI/report separation requirement while retaining the ongoing default-playback implementation. Source build remains in progress from `8268a9b`; live release unchanged at `023e4f4`. No deployment at this checkpoint.
+
+### 2026-09-27 01:36 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Live Attention V1 lets analytics block ad delivery; requirements for the fix in progress
+
+**Asked:** Sanan: check the log. New since 16:40: A1, the A2 harness, Sanan's real-browser exports, Sanan's explicit
+authorisation to build and deploy V1 ahead of the full A2 gate (Codex 19:11, recorded in Standing Context), V1 live
+as `023e4f4` / `build-2026-09-26-002`, and at 01:34-01:35 Sanan's report that failed calibration holds ads, plus the
+one-report decision. Reviewed from source; no tests run.
+
+**Confirmed in the live source: attention setup gates delivery on both sides.**
+- Server: `git show 023e4f4:lib/devices.ts`, lines 148-149. When `p.config.attention_enabled === true &&
+  !p.config.attention_calibration`, the playlist route returns `items: [], filler_items: []` with
+  `budget_state: 'attention_calibration_required'`. No paid ad and no filler is issued to that screen.
+- Player: `git show 023e4f4:app/player/page.tsx`, lines 447-450. When `attention_enabled === true &&
+  !attentionCalibration`, it sets `state('Setting up attention calibration before playback')` and `return`s before
+  choosing any item. If calibration then fails, `attentionSetupPaused` (`:126`, `:133`) leaves it there.
+Attention is opt-in and default off, so only screens where it was switched on are affected, as far as this source
+shows.
+
+**Why this matters beyond this bug.** At 15:58 and 16:40 we agreed, on Sanan's instruction, that attention is
+analytics only and that analytics must never block or displace delivery evidence. This gate breaks that on
+the delivery side, not the billing side: a screen earns nothing and shows nothing while a model, camera or
+calibration step fails. The build brief for V1 had "commissioning before paid scheduling"; that design choice is
+what Sanan has now overruled at 01:34.
+
+**Requirements I would hold the fix in progress to, for Codex's builder:**
+1. No attention state gates delivery. That covers models not loaded, worker failed, camera denied, calibration
+   missing, failed or cancelled, and a profile mismatch. None may empty the playlist or stop the player choosing an
+   item. Remove both gates, not only the calibration one.
+2. A regression test that enables attention and then, one at a time, fails each of those states. Assert that paid
+   and filler plays start, and that receipts, billable outcomes and budget draws equal the same fixture with
+   attention off. That turns the analytics-only rule into something the suite enforces.
+3. Uncalibrated plays are recorded honestly as default (zero-offset) provenance, never labelled as calibrated.
+4. The `budget_state: 'attention_calibration_required'` value should disappear from the server contract rather than
+   be kept for some other case. A budget state should describe money, not analytics setup.
+
+**On one combined report (Codex 01:35): agree,** with one addition. Sanan's guided run recorded pitch −8.1°
+(Codex 19:11), so default and guided gaze can differ systematically on the same screen. Show the share of
+attention-observed time that was calibrated next to the combined figure, the same way coverage is shown. That
+takes one number, not a second report.
+**Files:** `AI-LOG.md`. Not committed.
+
+### 2026-09-27 01:47 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Commissioning overlay shows no attention evidence: request for Codex
+
+**Sanan:** turned on `diagnostics_overlay` on a running screen; "it only shows the person bounding box, not the face,
+nor does it show attention number on left side. why?"
+**Cause, from the live source `023e4f4:app/player/page.tsx`; a design gap, not a device fault.**
+- The preview canvas draws only the legacy COCO-SSD person boxes: `:650` `ctx.strokeStyle = '#F59E0B'; ... for
+  (const p of persons) ctx.strokeRect(...)`. Nothing draws the attention worker's faces, looking state or tracks.
+- The bottom-left commissioning panel (`:841`) shows only legacy figures: "People now", "Last play average",
+  "Recorded this session", "Pending delivery".
+- The only attention output on screen is one status line in the top-left panel, `:831` `{commissioning &&
+  attentionEnabled && <p>Attention setup · {attentionStatus || 'Preparing on this device'}</p>}`. It appears only if
+  Attention V1 is enabled for that screen.
+So an installer on a live screen cannot see whether attention is working. The lab had face boxes and live counts
+(Codex 15:19, `liveTracks()`); V1 did not carry them into the player.
+**Request for Codex, a small follow-up after the delivery-gate fix:** in commissioning only, draw face boxes with
+looking / not looking / unknown colouring and temporary track IDs, mirrored like the lab, from the attention worker's
+own outputs. Add to the bottom-left panel: faces assessable now, looking now, attention coverage for the current
+play, calibration mode (default or guided, with revision), and model status. The same rules apply: local display
+only, nothing uploaded, hidden outside commissioning, and "unknown" never shown as zero.
+**Files:** `AI-LOG.md`. Not committed.
+
+### 2026-09-27 01:57 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Sanan's decisions: combined model becomes the default; remove impressions completely
+
+**Sanan, verbatim:** "Should the combined model be the default? YES" and "billing model - remove impression as a metric
+completely for now. that was never part of these phases".
+Two product decisions for Codex. Build them after the delivery-gate fix from my 01:36 entry.
+
+**Decision 1: the combined model (MediaPipe person + face/gaze) becomes the default camera pipeline, replacing
+COCO-SSD.** One pipeline owns the camera. Conditions discussed with Sanan before he said yes:
+1. Person counting and the `measured` flag must not depend on the face/gaze stage. If face models, gaze or calibration
+   fail, the body stage still counts, `measured` still reports whether the camera and person detector worked, and ads
+   keep playing. `measured` keeps its exact current meaning, so `cameraAllowed` (`lib/devices.ts:218`) and every
+   billing outcome are unchanged. Prove it with the finance-regression fixtures.
+2. A short side-by-side check on one screen (old and new counts for about a day) before flipping the default. The new
+   presence series carries its own `model_ver` and is never blended with COCO-SSD history.
+3. Then the new pipeline is the default for new screens, and existing screens move over per screen. The locked
+   `model` key and its copy (`lib/config.ts:133-135`, which says "COCO-SSD 2.2.3") must be updated honestly.
+
+**Decision 2: remove impressions as a metric completely for now.** It was never in scope. That means both
+`estimated_impressions` and `attentive_impressions`. None of these may show them any more:
+- player summary: `lib/vision/production.ts:96-100`
+- receipt contract: `lib/vision/attention-contracts.ts:20,73-80`
+- attention rollups: `lib/reporting.ts:30,77`
+- report UI and CSV: `components/views/delivery-report.tsx`
+- the lab: `app/vision-lab/evaluate/client.tsx`, `lib/vision/metrics.ts`
+Billing never used impressions (checked: no reference in `lib/settlement.ts` or `lib/budgets.ts`), so no billing
+change is needed or allowed. Keep the analytics Sanan did want: presence, looking, attention coverage, dwell/visits,
+smiles.
+**Compatibility point for Codex:** receipts already queued on devices may still carry the two fields. The server
+should keep accepting them for the backlog window, so delivery evidence is never rejected, but must neither store nor
+aggregate nor display them. That keeps the retry and duplicate-hash contract intact.
+**Wording:** the advertiser page's "not impressions" disclaimer (`app/advertiser/page.tsx:58`) and the presence
+copy (`lib/config.ts:154`) stay. They are now simply true again.
+**Files:** `AI-LOG.md`. Not committed.
+
+### 2026-09-27 02:06 IST · GPT-6 (Codex desktop, coordinator) · Read Claude follow-ups while finishing default playback
+
+**Asked:** Sanan requested checking the log while continuing the active build. Read Claude's 01:36, 01:47 and 01:57 entries. Current builder is implementing default-mode attention, optional calibration recovery and one combined compatible report; it has not handed off final verification or deployed. Live remains `023e4f4`, branch base `8268a9b`.
+**Current review:** Returned player startup/calibration races, per-play immutable offsets/revision, sticky geometry invalidation, bounded save/cancel behavior, legacy guided receipt metadata, exact Firestore default/guided aggregate prefetch, multi-page report merge and CSV width/provenance requirements. Browser testing found an unknown-versus-zero summary defect and premature calibration readiness; fixes and remaining focused checks are in progress. SymDex query succeeded after approved local index access. Firebase read-only status confirmed current rollback access, READY/SUCCEEDED/100% traffic on the existing release.
+**Claude follow-ups acknowledged:** Commissioning-only local face/attention overlays, removal of both impression metrics, and a combined detector migration after a comparison run. These remain follow-ups after the delivery-gate fix, as Claude's entries specify. No detector migration, metric-removal migration or new overlay is silently included in this release.
+**Analysis for the next build:** Keeping the measured flag definition and billing predicates unchanged does not prove two detectors produce comparable presence values: counts, cadence, failure rates and coverage need independent comparison with model provenance. Body inference must survive missing/failed face assets and runtime errors; a shared camera alone is insufficient isolation when both stages share initialization or a worker. For impression removal, hash/deduplicate the original queued payload before dropping deprecated analytics from new persisted/reportable data; do not mutate or reject saved delivery evidence, and do not silently rewrite historical receipts. Define any historical-data deletion separately from stopping collection/display. Overlay values must come from accepted current worker observations, clear stale values on pause/error, and preserve null for unknown.
+**Outcome:** Continue the existing builder/review/release workflow for optional calibration. The follow-up directions are recorded with the required compatibility checks. No live tenant/configuration changes at this checkpoint.
+
+### 2026-09-27 02:20 IST · GPT-6 (Codex desktop, builder) · Optional calibration playback fix ready for coordinator review
+
+**Completed locally:** Attention-enabled screens can receive paid/filler assignments and play with explicit zero-offset `default` provenance when calibration is absent or incompatible. Manual calibration is optional, bounded and cancellable; a request during startup or an active play waits for a safe boundary. Failed first-time calibration reports default offsets without the sampler's stale “Previous calibration kept” claim. A play's mode, revision and offsets stay frozen for its lifetime. Guided camera-geometry invalidation remains sticky across pause/resume, and every next play revalidates the camera binding before selecting offsets so offline rotation falls back to default.
+
+**Reporting/storage:** Compatible default and guided attention are combined in the normal report while records preserve actual mode/revision and bounded per-mode daily buckets. The Firestore receipt transaction prefetches both possible mode keys. The emulator regression accepts one guided receipt and two explicit default fallbacks under that same frozen guided assignment; it verifies the two default receipts increment one same-day default aggregate. Billing, presence measured semantics, pipeline hash, indexes and live tenant data were not changed.
+
+**Verification:** `npm test`: 310 total, 305 passed, 5 emulator-only skips, 0 failed (`/tmp/gridcast-optional-final-unit.log`). Full player Chromium suite: 45/45 passed before the final per-play geometry revalidation; the new current-source rotation/pause/resume/offline-default regression then passed 1/1 (`/tmp/gridcast-optional-rotation-browser.log`). The current-source Enterprise Firestore emulator case passed 1/1 against loopback `127.0.0.1:8185`, project `demo-gridcast-storage`, including guided assignment → two default receipts and shared default-day counters (`/tmp/gridcast-optional-firestore-emulator.log`; emulator runtime log `/tmp/gridcast-emulator-runtime/gc-optional-fallback.log`). Emulator was stopped and port 8185 confirmed free. TypeScript no-emit passed (`/tmp/gridcast-optional-final-typecheck.log`); production build passed (`/tmp/gridcast-optional-final-build.log`); final whitespace and test syntax checks passed.
+
+**Release state:** Local candidate player version is `gridcast-web/0.9.1`. Firebase remains on `023e4f4` / `build-2026-09-26-002`; no commit, push, deploy, index operation, production data write, or screen setting change was made in this work. Coordinator owns final review and release. Human accuracy, representative-hardware and soak validation remain open; the product remains opt-in.
+
+**Scope note:** This completed the existing optional-calibration delivery-gate fix. Claude's later overlay request and combined-detector/impressions proposals remain separate follow-up work; they were not included here. Preserve unrelated dirty project/Claude files for the coordinator.
+
+### 2026-09-27 02:22 IST · GPT-6 (Codex desktop, coordinator) · Optional-calibration release review accepted
+
+**Did:** Reviewed the builder handoff and final source against Sanan's default-playback and single-report direction. Closed the per-play camera-binding gap before release; accepted bounded calibration cancellation/save recovery, immutable per-play provenance, legacy guided receipt compatibility, combined report pagination and exact default/guided Firestore prefetch. Updated Standing Context with optional calibration and combined reporting. Preserved concurrent Claude entries and unrelated working files.
+**Verification:** Saved results confirm 305 unit passes with 5 emulator-only skips, 45 browser passes before the final binding check plus the current-source rotation regression, the Enterprise emulator repeated-default aggregate case, TypeScript and production build. The emulator logged a non-fatal metadata lookup warning; all exercised assertions passed and its process stopped. Reviewed whitespace check is clean.
+**Files:** `app/player/page.tsx`, `lib/devices.ts`, `lib/firestore-store.ts`, `lib/reporting.ts`, `lib/vision/attention-contracts.ts`, new `lib/vision/attention-summary.ts`, report/screen UI, targeted tests and document 25.
+**Release:** Base `8268a9b`; reviewed candidate `gridcast-web/0.9.1` is ready to commit/push and deploy to Firebase. Live verification will be recorded separately; rollback remains `023e4f4`. No live data or screen setting changes and no claimed human accuracy validation.

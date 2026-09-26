@@ -13,7 +13,7 @@ export const ATTENTION_LIMITS = Object.freeze({ event_bytes: 4096, target_bytes:
 type Coverage = [observed_ms: number, unknown_ms: number];
 type DetectorCoverage = [observed_ms: number, unknown_ms: number, saturated_ms: number];
 export type AttentionSummary = {
-  schema: 'attention-v1/1'; profile: typeof ATTENTION_PROFILE.id; calibration_revision: string;
+  schema: 'attention-v1/1'; profile: typeof ATTENTION_PROFILE.id; attention_mode?: 'default' | 'guided'; calibration_revision: string | null;
   playing_ms: number; body: DetectorCoverage; face: DetectorCoverage; attention: Coverage; expression: Coverage;
   presence_person_ms: number | null; looking_person_ms: number | null; smile_person_ms: number | null;
   face_assessable_person_ms: number | null; expression_assessable_person_ms: number | null;
@@ -46,10 +46,17 @@ export function validateAttentionCalibration(value: unknown, binding: Calibratio
   return (['profile','device_id','screen_id','camera_ref','width','height','rotation'] as const).every(k => v[k] === binding[k]);
 }
 /** Authorized revision/profile lookup remains a future server responsibility, not client self-attestation. */
-export function validateAttentionSummary(value: unknown, playingMs: number, revision: string): value is AttentionSummary {
+export function validateAttentionSummary(value: unknown, playingMs: number, revision: string | null, expectedMode?: 'default' | 'guided'): value is AttentionSummary {
   const v = value as AttentionSummary;
-  if (!fields(v, ['schema','profile','calibration_revision','playing_ms','body','face','attention','expression','presence_person_ms','looking_person_ms','smile_person_ms','face_assessable_person_ms','expression_assessable_person_ms','estimated_impressions','attentive_impressions','tracked_visits','right_censored_visits','longest_look_ms'])) return false;
-  if (v.schema !== 'attention-v1/1' || v.profile !== ATTENTION_PROFILE.id || !identifier(v.calibration_revision) || v.calibration_revision !== revision
+  const legacyFields=['schema','profile','calibration_revision','playing_ms','body','face','attention','expression','presence_person_ms','looking_person_ms','smile_person_ms','face_assessable_person_ms','expression_assessable_person_ms','estimated_impressions','attentive_impressions','tracked_visits','right_censored_visits','longest_look_ms'];
+  const currentFields=['schema','profile','attention_mode',...legacyFields.slice(2)];
+  const current=fields(v,currentFields), legacy=fields(v,legacyFields);
+  if (!current && !legacy) return false;
+  const mode=current?v.attention_mode:'guided';
+  if (current && mode!=='default' && mode!=='guided') return false;
+  if (expectedMode && mode!==expectedMode) return false;
+  const revisionValid=mode==='default' ? v.calibration_revision===null && revision===null : typeof v.calibration_revision==='string' && identifier(v.calibration_revision) && v.calibration_revision===revision;
+  if (v.schema !== 'attention-v1/1' || v.profile !== ATTENTION_PROFILE.id || !revisionValid
     || !integer(playingMs,ATTENTION_LIMITS.playing_ms) || v.playing_ms !== playingMs) return false;
   for (const [key,length] of [['body',3],['face',3],['attention',2],['expression',2]] as const) {
     const c=v[key];
@@ -84,12 +91,12 @@ function freeze<T>(value: T): T {
  * Invalid/oversize analytics return a frozen byte-equivalent copy of the original delivery event.
  * The caller must surface the local reason; there is deliberately no fallback upload or queue here.
  */
-export function prepareAttentionEnvelope(legacy: Record<string, unknown>, attention: unknown, revision: string) {
+export function prepareAttentionEnvelope(legacy: Record<string, unknown>, attention: unknown, revision: string | null, mode: 'default' | 'guided' = revision ? 'guided' : 'default') {
   if ('seq_no' in legacy || 'attention' in legacy) throw new Error('Attention may only be attached to a new, unqueued event');
   const base = JSON.parse(JSON.stringify(legacy)) as Record<string, unknown>;
   if (attentionQueuedEventBytes(base)>ATTENTION_LIMITS.event_bytes) throw new Error('Legacy evidence exceeds queue limit; retain and pause');
   if (attention===undefined) return {event:freeze(base),outcome:'absent' as const};
-  if (!validateAttentionSummary(attention,base.playing_duration_ms as number,revision)) return {event:freeze(base),outcome:'invalid' as const};
+  if (!validateAttentionSummary(attention,base.playing_duration_ms as number,revision,mode)) return {event:freeze(base),outcome:'invalid' as const};
   const event={...base,attention:JSON.parse(JSON.stringify(attention)) as AttentionSummary};
   if (attentionQueuedEventBytes(event)>ATTENTION_LIMITS.target_bytes) return {event:freeze(base),outcome:'size_limit' as const};
   return {event:freeze(event),outcome:'included' as const};

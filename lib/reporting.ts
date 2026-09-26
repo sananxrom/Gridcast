@@ -29,7 +29,9 @@ const attentionCounters = () => ({plays:0,playing_ms:0,body_observed_ms:0,body_u
   attention_observed_ms:0,attention_unknown_ms:0,expression_observed_ms:0,expression_unknown_ms:0,presence_person_ms:0,
   looking_person_ms:0,face_assessable_person_ms:0,smile_person_ms:0,expression_assessable_person_ms:0,estimated_impressions:0,attentive_impressions:0,tracked_visits:0});
 function addAttention(target:any,source:any){for(const k of Object.keys(attentionCounters()))target[k]=(Number(target[k])||0)+(Number(source?.[k])||0);return target;}
-const attentionIdentity=(play:any,assignment:any)=>[play.attention_profile||assignment.attention_profile,play.attention_manifest_sha256||assignment.attention_manifest_sha256,play.attention_pipeline_sha256||assignment.attention_pipeline_sha256,play.attention?.calibration_revision||assignment.attention_calibration_revision,assignment.asset_id||null,assignment.asset_sha256||null,assignment.config_version];
+const attentionMode=(play:any,assignment:any)=>play.attention_mode||play.attention?.attention_mode||(typeof play.attention?.calibration_revision==='string'||assignment.attention_calibration_revision?'guided':'default');
+const attentionRevision=(play:any,assignment:any)=>attentionMode(play,assignment)==='guided'?(play.attention?.calibration_revision??assignment.attention_calibration_revision??null):null;
+const attentionIdentity=(play:any,assignment:any)=>[play.attention_profile||assignment.attention_profile,play.attention_manifest_sha256||assignment.attention_manifest_sha256,play.attention_pipeline_sha256||assignment.attention_pipeline_sha256,attentionMode(play,assignment),attentionRevision(play,assignment),assignment.asset_id||null,assignment.asset_sha256||null,assignment.config_version];
 export function attentionDayKey(play:any,assignment:any,at:number){return reportDay(at)+'__'+createHash('sha256').update(JSON.stringify([play.screen_id||assignment.screen_id,play.campaign_id??assignment.campaign_id??null,play.creative_id||assignment.creative_id,...attentionIdentity(play,assignment)])).digest('hex');}
 /** Called once, after receipt duplicate checks, in the same storage transaction. */
 export function accrueScreenDay(db: any, play: any, assignment: any, playedAt: number, presence: any) {
@@ -67,7 +69,7 @@ export function accrueScreenDay(db: any, play: any, assignment: any, playedAt: n
     db.attention_day ||= [];
     const key=attentionDayKey(play,assignment,at);
     let series=db.attention_day.find((x:any)=>x.id===key);
-    if(!series){series={id:key,date:reportDay(at),org_id:play.org_id,advertiser_id:assignment.advertiser_id||play.advertiser_id||null,screen_id:play.screen_id,campaign_id:play.campaign_id||null,creative_id:play.creative_id,asset_id:assignment.asset_id||null,asset_sha256:assignment.asset_sha256||null,config_version:assignment.config_version,profile:acceptedAttention.profile,manifest_sha256:play.attention_manifest_sha256,pipeline_sha256:play.attention_pipeline_sha256,calibration_revision:acceptedAttention.calibration_revision,calibration:play.attention_calibration||assignment.attention_calibration||null,totals:attentionCounters(),hours:{}};db.attention_day.push(series);}
+    if(!series){series={id:key,date:reportDay(at),org_id:play.org_id,advertiser_id:assignment.advertiser_id||play.advertiser_id||null,screen_id:play.screen_id,campaign_id:play.campaign_id||null,creative_id:play.creative_id,asset_id:assignment.asset_id||null,asset_sha256:assignment.asset_sha256||null,config_version:assignment.config_version,profile:acceptedAttention.profile,manifest_sha256:play.attention_manifest_sha256,pipeline_sha256:play.attention_pipeline_sha256,attention_mode:acceptedAttention.attention_mode||play.attention_mode||(typeof acceptedAttention.calibration_revision==='string'?'guided':'default'),calibration_revision:acceptedAttention.attention_mode==='default'?null:(acceptedAttention.calibration_revision??assignment.attention_calibration_revision??null),calibration:acceptedAttention.attention_mode==='default'?null:(play.attention_calibration||assignment.attention_calibration||null),totals:attentionCounters(),hours:{}};db.attention_day.push(series);}
     const c=attentionCounters(); c.plays=1;c.playing_ms=acceptedAttention.playing_ms;
     c.body_observed_ms=acceptedAttention.body[0];c.body_unknown_ms=acceptedAttention.body[1];c.face_observed_ms=acceptedAttention.face[0];c.face_unknown_ms=acceptedAttention.face[1];
     c.attention_observed_ms=acceptedAttention.attention[0];c.attention_unknown_ms=acceptedAttention.attention[1];c.expression_observed_ms=acceptedAttention.expression[0];c.expression_unknown_ms=acceptedAttention.expression[1];
@@ -108,10 +110,17 @@ export function summarizeReport(rows: any[], range: {from:string,to:string}, cov
     for (const [hour,value] of Object.entries(row.day_hours || {})) add(dayHours,hour,value);
     if (row.last_at && (!last_at || row.last_at > last_at)) last_at = row.last_at;
   }
-  for(const value of attentionRows){const key=createHash('sha256').update(JSON.stringify([value.profile,value.manifest_sha256,value.pipeline_sha256,value.calibration_revision,value.asset_id||null,value.asset_sha256||null,value.config_version])).digest('hex');
-    const profile=attentionProfiles[key] ||= {profile:value.profile,manifest_sha256:value.manifest_sha256,pipeline_sha256:value.pipeline_sha256,calibration_revision:value.calibration_revision,calibration:value.calibration||null,asset_id:value.asset_id||null,asset_sha256:value.asset_sha256||null,config_version:value.config_version,totals:attentionCounters(),byScreen:{},byCampaign:{},byCreative:{},daily:{},hourly:{},dayHours:{}};
+  for(const value of attentionRows){
+    const key=createHash('sha256').update(JSON.stringify([value.profile,value.manifest_sha256,value.pipeline_sha256])).digest('hex');
+    const profile=attentionProfiles[key] ||= {profile:value.profile,manifest_sha256:value.manifest_sha256,pipeline_sha256:value.pipeline_sha256,totals:attentionCounters(),byScreen:{},byCampaign:{},byCreative:{},byCreativeAsset:{},daily:{},hourly:{},dayHours:{},provenance:{}};
     addAttention(profile.totals,value.totals);const addA=(map:any,id:string,c:any)=>{map[id]||=attentionCounters();addAttention(map[id],c);};
-    addA(profile.byScreen,value.screen_id,value.totals);if(value.campaign_id){addA(profile.byCampaign,value.campaign_id,value.totals);addA(profile.byCreative,value.creative_id,value.totals);}addA(profile.daily,value.date,value.totals);
+    addA(profile.byScreen,value.screen_id,value.totals);if(value.campaign_id){addA(profile.byCampaign,value.campaign_id,value.totals);addA(profile.byCreative,value.creative_id,value.totals);}
+    const assetKey=JSON.stringify([value.creative_id,value.asset_id||null,value.asset_sha256||null]);
+    const asset=profile.byCreativeAsset[assetKey] ||= {creative_id:value.creative_id,asset_id:value.asset_id||null,asset_sha256:value.asset_sha256||null,totals:attentionCounters(),daily:{}};addAttention(asset.totals,value.totals);asset.daily[value.date]||=attentionCounters();addAttention(asset.daily[value.date],value.totals);
+    addA(profile.daily,value.date,value.totals);
+    const mode=value.attention_mode|| (value.calibration_revision?'guided':'default'), revision=mode==='guided'?(value.calibration_revision||null):null;
+    const provenanceKey=JSON.stringify([mode,revision]);
+    const provenance=profile.provenance[provenanceKey] ||= {mode,calibration_revision:revision,calibration:mode==='guided'?(value.calibration||null):null,totals:attentionCounters(),daily:{}};addAttention(provenance.totals,value.totals);provenance.daily[value.date]||=attentionCounters();addAttention(provenance.daily[value.date],value.totals);
     for(const [hour,c]of Object.entries<any>(value.hours||{})){addA(profile.hourly,hour,c);addA(profile.dayHours,value.date+'T'+String(hour).padStart(2,'0'),c);}
   }
   // Complete describes writer coverage, not receipt finality: devices can report 72h late.

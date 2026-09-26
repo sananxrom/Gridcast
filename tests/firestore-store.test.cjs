@@ -324,6 +324,10 @@ test('accepted attention series persist in separate provenance buckets atomicall
  const docs=Object.entries(f.database.rows).filter(([k])=>k.startsWith('attention_day/'));assert.equal(docs.length,1);const [path,row]=docs[0];assert.ok(path.includes('attention_day/'));assert.equal(row.asset_sha256,'assetHashA');assert.equal(row.calibration_revision,'calibrationA');assert.equal(row.totals.plays,1);assert.equal(row.totals.attention_unknown_ms,4000);
  const commit=f.database.commits.find(w=>w.some(x=>x[1]===path));assert.ok(commit.some(x=>x[1].startsWith('plays/')));assert.ok(commit.some(x=>x[1].startsWith('screen_day/')));
  const report=await f.store.transact({method:'GET',path:['metrics'],uid:'a_owner',from:row.date,to:row.date,reportScreen:'sa'},()=>f.store.read());assert.equal(report.attention_day.length,1);assert.equal(report.attention_day[0].asset_id,'assetA');assert.ok(f.database.reads.some(q=>typeof q==='object'&&q.collection==='attention_day'&&q.filters.some(x=>x[0]==='org_id'&&x[2]==='a')));
+ const fallback=f.event(11);fallback.attention={...e.attention,attention_mode:'default',calibration_revision:null};const defaultReply=await f.send(fallback);assert.equal(defaultReply.body.attention_status,'accepted');
+ const rows=Object.entries(f.database.rows).filter(([k])=>k.startsWith('attention_day/'));assert.equal(rows.length,2,'fallback uses a separately keyed mode row rather than overwriting guided provenance');
+ const defaultRow=rows.map(([,v])=>v).find(v=>v.attention_mode==='default');assert.equal(defaultRow.calibration_revision,null);assert.equal(defaultRow.totals.plays,1);
+ const guidedRow=rows.map(([,v])=>v).find(v=>v.attention_mode==='guided');assert.equal(guidedRow.totals.plays,1);
 });
 
 test('invalid-clock receipts prefetch the receive-day bucket and update it without making delivered plays',async()=>{

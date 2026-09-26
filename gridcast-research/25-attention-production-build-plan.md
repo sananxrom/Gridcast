@@ -1,6 +1,8 @@
 # Attention production build plan
 
 **Status (2026-09-27):** B–E are reviewed and deployed to Firebase as application commit `023e4f40a98d8efcebeb64ae484146a85ae987cc`, player `gridcast-web/0.9.0`, rollout `build-2026-09-26-002` (READY/SUCCEEDED, 100% traffic). Build/typecheck, 302 standard tests, 40 player browser cases, 25 local Enterprise emulator checks and the real pinned cold/offline inference test passed. Live health/player, model file hashes and both production lab 404s verified. Attention remains off until enabled per screen; no fleet activation or live analytics receipt was manufactured. Sanan authorized advancing beyond the originally proposed A2 gate; this is not an A2 human accuracy, representative-hardware performance or soak pass. Those validations remain open before pilot promotion. See [26 — contracts and validation](26-attention-contracts-and-validation.md). **Planning base:** `7d5f085`.
+
+**Local follow-up:** Optional-calibration playback fix is prepared as player `gridcast-web/0.9.1` and awaits coordinator review. It has not been committed, pushed or deployed.
 **Requested by Sanan:** Plan ahead for pairing → model-loading progress/time → quick calibration → ready,
 automatic integration with current Gridcast reporting, and selected visuals from the supplied demo.
 **Relationship to document 24:** §9 is the existing local lab; §10 records the product direction. This
@@ -103,21 +105,23 @@ paid schedule where possible; broader reservation/configuration lifecycle change
   percentage for a runtime operation that exposes no progress. Record the actual selected delegate.
 - **Permission/camera:** installer starts a visible setup action, chooses camera if needed, and sees a local
   preview. Audio is never requested. Permission/device errors give specific retry instructions.
-- **Calibration:** one person looks at the screen-centre target for three seconds; reject insufficient,
-  unstable, multi-face or out-of-range samples. Retain the last valid revision on failure/cancel. Commissioning
-  and recalibration collect no commercial delivery/attention time.
+- **Calibration:** optional guided setup: one person looks at the screen-centre target for three seconds; reject
+  insufficient, unstable, multi-face or out-of-range samples. Retain a compatible last valid revision on
+  failure/cancel. Without one, explicitly use zero-offset default provenance. Calibration failure, cancellation,
+  camera/model unavailability or profile mismatch never gates paid or filler playback. Commissioning and
+  recalibration collect no commercial delivery/attention time.
 - **Readiness:** independently show assets/runtime ready, camera/body measurements available, calibration
   accepted and schedule/media readiness. An empty scene can still have successful detector observations.
   Do not require a smiling or attentive audience as a readiness condition. No schedule is a distinct
   awaiting-content state, not a repeated pairing or model-download failure.
 - **Restart:** verify profile/camera compatibility, reuse cache and calibration, initialize and resume without
   another setup wizard. An evicted model is reacquired; authorization and saved receipts remain intact.
-- **Recalibration:** enter the existing controlled maintenance lifecycle at a safe playback boundary, save
-  pending evidence, show local setup, commit the new calibration, then resume. Avoid interrupting a paid ad
-  midway solely to show a calibration dialog.
-- **Degradation after commissioning:** preserve the configured camera-failure policy and ordinary playback
-  recovery; report attention unavailable rather than zero. First-time failed commissioning is not Ready.
-  A future playback-only bypass would need an explicit labelled operational policy, not a hidden skip.
+- **Recalibration:** queue an explicitly requested guided calibration for a safe playback boundary, save pending
+  evidence, show local setup and resume ads whether the save succeeds, fails or is cancelled. Avoid interrupting
+  a paid ad midway solely to show a calibration dialog.
+- **Degradation:** report unavailable attention as unknown, keep presence and financial evidence under their
+  existing independent rules, and continue ordinary paid or filler playback. Failed optional setup is not a
+  calibrated-ready state, but does not make the screen unavailable for delivery.
 
 ### Calibration record proposal
 

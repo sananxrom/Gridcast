@@ -21,7 +21,7 @@ function playbackItem(item: any, assignment: any) {
     width: item.width, height: item.height, letterbox: item.letterbox,
     kind: item.kind === 'filler' ? 'filler' : 'paid', media_type: item.media_type || 'video',
     asset_sha256: item.asset_sha256, asset_bytes: item.asset_bytes, asset_mime: item.asset_mime,
-    attention_enabled: assignment.attention_enabled === true, attention_profile: assignment.attention_profile || null,
+    attention_enabled: assignment.attention_enabled === true, attention_profile: assignment.attention_profile || null, attention_mode: assignment.attention_mode || (assignment.attention_calibration_revision ? 'guided' : 'default'),
     attention_calibration_revision: assignment.attention_calibration_revision || null,
     attention_manifest_sha256: assignment.attention_manifest_sha256 || null, attention_pipeline_sha256: assignment.attention_pipeline_sha256 || null,
     assignment_id: assignment.id, valid_until: assignment.valid_until, accept_until: assignment.accept_until, max_plays: assignment.max_plays };
@@ -141,13 +141,8 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
     const assignmentUntil = () => Math.min(now + (p.items.every((i: any) => i.asset_id) ? 24 * 3600e3 : ASSIGNMENT_TTL),
       ...p.items.map((i: any) => Number.isFinite(Date.parse(i.authorization_until)) ? Date.parse(i.authorization_until) : Infinity));
     let until = assignmentUntil();
-    // Do not reserve paid-play allowances before an opted-in player has a calibration
-    // bound to this exact paired device. Calibration changes the playlist signature;
-    // minting here first can strand the old budget reservation while the player is
-    // correctly waiting for setup. Keep the empty response retryable until calibration.
-    if (p.config.attention_enabled === true && !p.config.attention_calibration) {
-      return { changed: false, body: { screen: safeScreen(screen), scheduling_mode: 'continuous', budget_state: 'attention_calibration_required', items: [], filler_items: [], config: p.config, config_version: p.config_version, server_time: iso(now), readiness: playerReadiness(p.readiness), diagnostic: diagnosticOffer(db, screen, device, now), valid_until: iso(now + 60e3) } };
-    }
+    // Calibration is optional. Freeze an available guided calibration into the assignment;
+    // otherwise the opted-in player receives an explicit default-offset assignment.
     db.device_assignments ||= [];
     // Re-issuing identical assignments on every poll is what made the usage ledger unbounded, and an
     // unbounded ledger is one that has to evict — which hands back allowances that were already spent.
@@ -177,6 +172,7 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
         issued_at: iso(now), valid_until: iso(validUntil), accept_until: iso(now + BACKLOG_TTL), config_version: p.config_version,
         camera_fail_mode: p.config.camera_fail_mode || 'continue', model_configured: p.config.model || null, sample_interval_s: Number(p.config.sample_interval_s) || 2, count_ceiling: Number(p.config.count_ceiling) || 50,
         attention_enabled:p.config.attention_enabled === true, attention_profile:p.config.attention_enabled === true ? p.config.attention_profile : null,
+        attention_mode:p.config.attention_enabled===true&&p.config.attention_calibration?'guided':'default',
         attention_calibration_revision:p.config.attention_enabled === true ? p.config.attention_calibration?.revision || null : null,
         attention_calibration:p.config.attention_enabled === true&&p.config.attention_calibration?.device_id===device.id&&p.config.attention_calibration?.screen_id===screen.id?structuredClone(p.config.attention_calibration):null,
         attention_manifest_sha256:p.config.attention_enabled === true ? ATTENTION_PROFILE.manifest_sha256 : null,
@@ -297,11 +293,19 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
   if (body.attention !== undefined) {
     if (!assignment.attention_enabled) attentionStatus='not_enabled';
     else if (assignment.attention_profile !== ATTENTION_PROFILE.id) attentionStatus='profile_mismatch';
-    else if (!assignment.attention_calibration_revision||!assignment.attention_calibration||!validateAttentionCalibration(assignment.attention_calibration,{profile:assignment.attention_profile,device_id:assignment.device_id,screen_id:assignment.screen_id,camera_ref:assignment.attention_calibration.camera_ref,width:assignment.attention_calibration.width,height:assignment.attention_calibration.height,rotation:assignment.attention_calibration.rotation})) attentionStatus='not_calibrated';
     else if (attentionQueuedEventBytes(body) > ATTENTION_LIMITS.target_bytes) attentionStatus='size_limit';
-    else if (!validateAttentionSummary(body.attention,played,assignment.attention_calibration_revision)) attentionStatus='invalid';
-    else { attention=structuredClone(body.attention); attentionStatus='accepted'; }
+    else {
+      const candidate=body.attention, mode=candidate?.attention_mode || (typeof candidate?.calibration_revision==='string'?'guided':null);
+      const binding=assignment.attention_calibration&&{profile:assignment.attention_profile,device_id:assignment.device_id,screen_id:assignment.screen_id,camera_ref:assignment.attention_calibration.camera_ref,width:assignment.attention_calibration.width,height:assignment.attention_calibration.height,rotation:assignment.attention_calibration.rotation};
+      const guidedAllowed=!!assignment.attention_calibration_revision&&!!binding&&validateAttentionCalibration(assignment.attention_calibration,binding)&&candidate?.calibration_revision===assignment.attention_calibration_revision;
+      const validMode=mode==='default'
+        ? candidate?.attention_mode==='default'&&candidate.calibration_revision===null&&validateAttentionSummary(candidate,played,null,'default')
+        : mode==='guided'&&guidedAllowed&&validateAttentionSummary(candidate,played,assignment.attention_calibration_revision,'guided');
+      if(!validMode) attentionStatus='invalid';
+      else { attention=structuredClone(candidate); attentionStatus='accepted'; }
+    }
   }
+  const receiptAttentionMode=attention?.attention_mode||(attention&&typeof attention.calibration_revision==='string'?'guided':null);
   const reasons = [!paid && 'filler', !budgetAllowed && 'budget_allowance_exhausted', !timestampValid && 'clock_or_assignment_window', !durationValid && 'incomplete_playing_duration', !mediaValid && 'incomplete_media_progress', !completed && body.ended_reason, !cameraAllowed && 'camera_required', !withinAssignment && 'assignment_replay_cap', !withinThroughput && 'device_throughput_exceeded'].filter(Boolean);
   const play = { ...economics(assignment), id, play_uid: body.play_uid, seq_no: body.seq_no, device_id: device.id, org_id: screen.org_id, screen_id: screen.id,
     assignment_id: assignment.id, campaign_id: assignment.campaign_id, advertiser_id: assignment.advertiser_id, creative_id: assignment.creative_id, config_version: assignment.config_version,
@@ -312,8 +316,8 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
     decoded_height: image ? body.decoded_height ?? null : null, visible_duration_ms: image ? body.visible_duration_ms ?? null : null, ended_reason: body.ended_reason,
     server_received_at: iso(now), delivery_lag_ms: now - (end + offset), server_clock_offset_ms: claimedOffset, applied_clock_offset_ms: offset,
     timestamp_valid: timestampValid, rendered, clock_offset_difference_ms: Number.isFinite(device.clock_offset_estimate_ms) ? claimedOffset - device.clock_offset_estimate_ms : null, billable, nonbillable_reasons: reasons, payload_hash: payloadHash, source: 'device_report', rate_type: assignment.rate_type, rate_value: assignment.rate_value,
-    ...(assignment.attention_enabled === true ? {attention_profile:assignment.attention_profile,attention_manifest_sha256:assignment.attention_manifest_sha256,
-      attention_pipeline_sha256:assignment.attention_pipeline_sha256,attention_calibration_revision:assignment.attention_calibration_revision || null,attention_calibration:assignment.attention_calibration||null,
+    ...(assignment.attention_enabled === true ? {attention_profile:assignment.attention_profile,attention_mode:receiptAttentionMode,attention_manifest_sha256:assignment.attention_manifest_sha256,
+      attention_pipeline_sha256:assignment.attention_pipeline_sha256,attention_calibration_revision:receiptAttentionMode==='guided'?assignment.attention_calibration_revision||null:null,attention_calibration:receiptAttentionMode==='guided'?assignment.attention_calibration||null:null,
       asset_id:assignment.asset_id||null,asset_sha256:assignment.asset_sha256||null} : {}),
     ...(attention ? {attention,attention_status:attentionStatus} : body.attention !== undefined ? {attention_status:attentionStatus} : {}) };
   db.plays ||= []; db.presence ||= []; db.plays.push(play);
