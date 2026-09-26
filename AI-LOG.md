@@ -3575,3 +3575,10 @@ allowed?; keep "never impressions" or define a new term?; smile inference (recom
 **Files:** `app/player/page.tsx`, `lib/player-queue.ts`, `lib/devices.ts`, `components/views/screen-detail.tsx`, `lib/config.ts`, `tests/device-queue.browser.cjs`, `tests/devices.test.cjs`, `tests/player.browser.cjs`, `gridcast-research/23-player-surface-cleanup.md`, `AI-LOG.md`.
 **Commit:** `5299436` (application); this log entry is the follow-up documentation commit.
 **Open:** Deploy and verify the exact pushed SHA after Firebase reauthentication. Physical audible output, Android/WebView playback, real YouTube iframe chrome and caption behavior remain unverified. The unrelated local Claude/research changes were not staged.
+
+### 2026-09-26 14:23 IST · GPT-6 (Codex desktop) · Gridcast 0.8.0 deployed and live-checked
+
+**Did:** Completed Firebase CLI reauthentication using the one-time code Sanan provided (code not recorded). Created Firebase App Hosting rollout `build-2026-09-26-001` for exact app commit `5299436967f75390cb40a64d09277943ed08e044`.
+**Release verification:** Firebase reports rollout `SUCCEEDED`, build `READY`, and 100% production traffic on `build-2026-09-26-001`. Live `/api/_health` returned 200 with Firestore store `gridcast`; `/player` and `/player/maintenance` returned 200; the live player bundle contains `gridcast-web/0.8.0`. Browser smoke found zero page errors and zero server responses at 500+; maintenance code gate remained present and the unpaired player screen loaded. Screenshot saved under `/tmp/gridcast-release-b-live-player.png`.
+**Still unverified:** Physical Android/WebView playback and audible output from the actual screen, plus real YouTube iframe chrome and caption behavior. The browser smoke does not prove sound is audible on the user's device.
+**Commit:** app `5299436`, log follow-up `1de71ef`; both are pushed to `origin/codex/gridcast-trust-layer-wp5`. This entry records the successful live deployment after the prior entry's pending-auth note.
