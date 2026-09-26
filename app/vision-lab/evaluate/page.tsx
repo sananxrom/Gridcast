@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { BrandLogo } from '@/components/ui/brand-mark';
-import { EvaluationMetrics, type EvaluationSnapshot } from '@/lib/vision/metrics';
+import { EvaluationMetrics, type EvaluationSnapshot, type TrackView } from '@/lib/vision/metrics';
 import { acquireEvaluationLock, assertIsolated, createEvaluationWorker, EVALUATION_PROFILE, prepareEvaluation, type EngineStatus } from '@/lib/vision/engine';
 
 const number = (value: number | null | undefined, digits = 1) => value == null ? '—' : value.toFixed(digits);
@@ -13,6 +13,8 @@ export default function AttentionEvaluation() {
   const run = useRef(0);
   const runMetadata = useRef<{ mode: 'camera'|'simulation'; delegate: 'CPU'|'GPU'; calibration: {yaw:number;pitch:number}; started_at:string; warnings:string[] } | null>(null);
   const alive = useRef(true), mediaURL = useRef<string | null>(null), prepareAbort = useRef<AbortController | null>(null);
+  const [tracks, setTracks] = useState<TrackView[]>([]);
+  const [showOverlay, setShowOverlay] = useState(true), [cameraRatio, setCameraRatio] = useState(4 / 3);
   const [snapshot, setSnapshot] = useState<EvaluationSnapshot | null>(null);
   const [status, setStatus] = useState('Prepare the files, then start a camera test or try a simulation.');
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [ready, setReady] = useState(false);
@@ -30,7 +32,7 @@ export default function AttentionEvaluation() {
     play.current = null;
     creative.current?.pause();
     if (camera.current) camera.current.srcObject = null;
-    if (alive.current) { setSnapshot(metrics.current.snapshot(performance.now())); setMode('idle'); setBusy(false); setPlaying(false); setStatus(message); }
+    if (alive.current) { setSnapshot(metrics.current.snapshot(performance.now())); setMode('idle'); setTracks([]); setBusy(false); setPlaying(false); setStatus(message); }
   };
   useEffect(() => {
     alive.current = true; setOnline(navigator.onLine);
@@ -58,7 +60,8 @@ export default function AttentionEvaluation() {
   const begin = async (simulation: boolean) => {
     const generation = ++run.current;
     const current = () => alive.current && generation === run.current;
-    setError(''); setBusy(true); setStats(null);
+    setError(''); setBusy(true); setStats(null); setTracks([]);
+    if (simulation) setCameraRatio(4 / 3);
     const controller = new AbortController(); let stream: MediaStream | undefined, engine: Awaited<ReturnType<typeof createEvaluationWorker>> | undefined;
     let releaseLock: (() => void) | undefined;
     let raf = 0, ui: ReturnType<typeof setInterval> | undefined, check: ReturnType<typeof setInterval> | undefined, checking = false;
@@ -97,7 +100,7 @@ export default function AttentionEvaluation() {
         } else if (!simulation && camera.current) void engine?.frame(camera.current, calibrationRef.current);
         raf = requestAnimationFrame(tick);
       };
-      tick(); ui = setInterval(() => setSnapshot(metrics.current.snapshot(performance.now())), 250);
+      tick(); ui = setInterval(() => { const now = performance.now(); setSnapshot(metrics.current.snapshot(now)); setTracks(metrics.current.liveTracks(now)); }, 125);
       if (media && creative.current) void creative.current.play().catch(() => { if(current()) setStatus('Press play on the test video to begin timing.'); });
     } catch (e: any) { const active = current(); end(); if (active) { if (e.name !== 'AbortError') { setError(e.message || 'Could not start the evaluation'); setStatus('No measurements are running.'); } setBusy(false); setMode('idle'); } }
   };
@@ -120,7 +123,26 @@ export default function AttentionEvaluation() {
     </div><p className="mt-4 text-sm" role="status">{status}</p>{error && <p className="mt-2 text-sm text-red-700" role="alert">{error}</p>}
       <p className="mt-2 text-xs text-slate-500">{ready ? `Verified cache · ${number((filesBytes || 0)/1e6)} MB including both WASM variants. Test an offline reload separately.` : 'Initial preparation downloads models and their runtime. Starting asks for camera access; audio is never captured.'}</p>
     </section>
-    <div className="grid gap-5 lg:grid-cols-2"><section className="overflow-hidden rounded-xl border bg-slate-950"><div className="flex items-center justify-between p-4 text-sm text-white"><h2>Local camera preview</h2><span>{mode === 'simulation' ? 'Synthetic inputs' : 'Never uploaded'}</span></div><video ref={camera} autoPlay muted playsInline className="aspect-[4/3] w-full object-contain"/><p className="px-4 pb-4 text-xs text-slate-400">Face direction is an estimate, not precise eye tracking. An unresolvable face means unknown attention.</p></section>
+    <div className="grid gap-5 lg:grid-cols-2"><section className="overflow-hidden rounded-xl border bg-slate-950"><div className="flex items-center justify-between p-4 text-sm text-white"><h2>Local camera preview</h2><span>{mode === 'simulation' ? 'Synthetic inputs' : 'Never uploaded'}</span></div><div className="relative w-full overflow-hidden" style={{ aspectRatio: cameraRatio }} data-testid="camera-preview">
+      <video ref={camera} autoPlay muted playsInline className="absolute inset-0 h-full w-full object-contain" onLoadedMetadata={()=>{const v=camera.current;if(v?.videoWidth&&v.videoHeight)setCameraRatio(v.videoWidth/v.videoHeight);}} onResize={()=>{const v=camera.current;if(v?.videoWidth&&v.videoHeight)setCameraRatio(v.videoWidth/v.videoHeight);}}/>
+      {mode === 'simulation' && <span className="absolute left-3 top-3 rounded bg-slate-900/90 px-2 py-1 text-xs text-slate-300">Synthetic scene</span>}
+      {showOverlay && mode !== 'idle' && <div className="pointer-events-none absolute inset-0" aria-label="Local tracking overlay">
+        {tracks.map(track => {
+          const color = track.uncertain || track.looking === null ? '#fbbf24' : track.looking ? '#34d399' : '#60a5fa';
+          const state = track.uncertain ? 'Uncertain match' : track.looking === null ? 'Looking unknown' : track.looking ? 'Looking' : 'Not looking';
+          return <div key={track.key} data-testid="tracking-box" className="absolute border-2" style={{left:`${track.box[0]*100}%`,top:`${track.box[1]*100}%`,width:`${(track.box[2]-track.box[0])*100}%`,height:`${(track.box[3]-track.box[1])*100}%`,borderColor:color,borderStyle:track.uncertain?'dashed':'solid'}}>
+            <span className="absolute left-0 top-0 max-w-full rounded-br bg-slate-950/90 px-1.5 py-1 text-[11px] font-medium leading-tight" style={{color}}>#{track.key} · {state}</span>
+          </div>;
+        })}
+      </div>}
+    </div>
+    <div className="space-y-3 p-4 text-xs text-slate-300">
+      <label className="flex items-center gap-2"><input type="checkbox" checked={showOverlay} onChange={e=>setShowOverlay(e.target.checked)}/>Show tracking boxes</label>
+      <p>Green: looking · Blue: not looking · Amber: unknown or uncertain</p>
+      {mode !== 'idle' && !tracks.length && <p>{snapshot?.live.body_status === 'ok' ? 'No people detected in the current frame.' : 'Waiting for fresh person observations…'}</p>}
+      {mode !== 'idle' && tracks.length > 0 && <ul aria-label="Live track details" className="grid gap-2 sm:grid-cols-2">{tracks.map(track=><li key={track.key} className="rounded border border-slate-700 bg-slate-900 p-2"><span className="font-semibold text-white">Track #{track.key}</span> · {track.uncertain ? 'Association uncertain' : track.looking === null ? 'Looking unknown' : track.looking ? 'Looking toward screen' : 'Not looking toward screen'}<br/>{track.smiling === null ? 'Smile unknown' : track.smiling ? 'Visible smile' : 'No visible smile'} · This ad: {number(track.dwell_s)} s present / {number(track.looking_s)} s looking</li>)}</ul>}
+      <p className="text-slate-400">IDs are temporary for this test, not recognised identities. Boxes and per-person details stay in this preview and are excluded from downloads.</p>
+    </div><p className="px-4 pb-4 text-xs text-slate-400">Face direction is an estimate, not precise eye tracking. An unresolvable face means unknown attention.</p></section>
     <section className="rounded-xl border bg-white p-4"><div className="flex items-center justify-between"><h2 className="font-medium">{label}</h2><span className="text-xs text-slate-500">{playing ? 'Timing active' : 'Timing paused'}</span></div>
       {media ? <video ref={creative} src={media} controls muted playsInline className="my-4 aspect-video w-full bg-black" onPlaying={()=>mediaState(true)} onPause={()=>mediaState(false)} onWaiting={()=>mediaState(false)} onEnded={()=>mediaState(false)} onError={()=>{mediaState(false);setError('The local test video could not play.');}}/> : <div className="my-4 grid aspect-video place-items-center rounded-lg bg-[#A16207] text-white"><div className="text-center"><p className="text-xs uppercase tracking-widest">Gridcast evaluation</p><p className="mt-3 text-3xl font-semibold">{label}</p></div></div>}
       <div className="flex flex-wrap gap-3"><button disabled={mode==='idle'} className="rounded border px-3 py-2 text-sm disabled:opacity-40" onClick={nextPlay}>Next test ad</button><button disabled={mode==='idle'||!!media} className="rounded border px-3 py-2 text-sm disabled:opacity-40" onClick={()=>mediaState(!playing)}>{playing?'Pause timing':'Resume timing'}</button></div>
