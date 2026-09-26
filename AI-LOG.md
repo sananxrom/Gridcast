@@ -110,7 +110,7 @@ attention, dwell, smiles and calibration do not feed pricing, budgets, billabili
 Preserve existing presence/measured inputs and financial rules; a new detector must not silently replace
 their source. The earlier plan gated production B–D on full human/runtime validation. **26 Sep revised user direction:** after supplying exploratory playback and a successful guided-calibration export, Sanan explicitly requested building the production integration and deploying to Firebase using the delegated builder. Proceed with reviewed analytics-only V1 and per-screen controlled enablement (default off); do not misreport the short runs as formal accuracy/soak approval or enable the whole fleet. Preserve all legacy inputs and truthful unknown coverage. Documents 24–27 carry the evidence and staged build path.
 
-**27 Sep playback/reporting correction:** Calibration is optional. Attention-enabled screens use explicit default zero offsets when no compatible guided calibration is available; optional analytics failures never gate paid/filler delivery. Freeze actual mode/revision/offsets per play and keep unavailable measurements null. Combine default/guided results in one report when model metrics are compatible; keep calibration provenance in optional technical details and exports. Claude's 01:47/01:57 entries record subsequent commissioning overlay, detector migration and impression-metric removal work; those changes are pending, not part of the optional-calibration release.
+**27 Sep playback/reporting correction:** Calibration is optional. Attention-enabled screens use explicit default zero offsets when no compatible guided calibration is available; optional analytics failures never gate paid/filler delivery. Freeze actual mode/revision/offsets per play and keep unavailable measurements null. Combine default/guided results in one report when model metrics are compatible; keep calibration provenance in optional technical details and exports. Claude's 02:34 correction supersedes the 01:57 impression-removal instruction: keep estimated and attentive impressions as analytics, never inputs to pricing, budgets, billability, settlement or invoices. Pending follow-ups are commissioning face/attention overlays and headline analytics (02:39), plus controlled detector migration; impression removal is cancelled.
 
 ### Stack and repo
 - Next.js 15.5.26 App Router · React 18.3.1 · TypeScript · Tailwind 3.4 · shadcn conventions · lucide-react
@@ -4168,3 +4168,92 @@ copy (`lib/config.ts:154`) stay. They are now simply true again.
 **Documentation/indexes:** Updated document 25 to the verified release. Shared graph publication succeeded: 4,042 nodes / 10,329 edges, known partial JSX parser coverage at `components/ui/app-shell.tsx:99`, zero unusable files. SymDex structural refresh succeeded: 299 files / 2,876 symbols, zero errors. Generated indexes stay outside Git. Refresh is repeated after these final documentation edits.
 **Failure recorded:** The first documentation update expected a blank line before the Requested heading and stopped before writing any files. Corrected the exact heading boundary; no application or deployment changes were involved.
 **Open:** Claude's local attention overlay, impression-metric removal and controlled combined-detector migration remain follow-ups. Calibration is optional; attention is still per-screen opt-in. Existing budget authorization limits remain unchanged and can independently stop paid ads. No live screen settings, pairing, tenant data or financial rules were altered.
+
+### 2026-09-27 02:32 IST · claude-opus-5.5 (Claude Code desktop, Mac) · 0.9.1 (e6af562) checked against my 01:36 requirements
+
+**Asked:** Sanan: check the log. Optional calibration is live (`build-2026-09-26-003`, player 0.9.1). Reviewed source at
+`d63fbe3`; no tests run; test figures below are Codex's.
+1. **No attention state gates delivery: met, from source.** The server gate is gone: `grep` for
+   `attention_calibration_required` and `attention_enabled === true && !` in `lib/devices.ts` finds nothing. In the
+   player loop (`app/player/page.tsx:441-448`), item selection is paused only while an operator-requested calibration
+   is actively running (`if (activeCalibratorToken) return;`), and a request that cannot start gives up after 12 s
+   and continues (`:445-446`). Requests come only from the manual action (`:587`). Model or worker failure sets
+   `attentionSetupPaused`, which now only affects calibration (`:113`, `:447`). Acceptable: a brief pause the operator
+   chose, not an automatic block.
+2. **Regression proof: partly met.** Tests assert billable plays with attention on in default mode
+   (`tests/devices.test.cjs:48-54`, `tests/player.browser.cjs:190,208,230`). I found no test that fails each attention
+   stage in turn (models, worker, camera denied, calibration failure) and compares receipts and budget draws to the same
+   fixture with attention off. Still worth adding, and it becomes essential for the combined-model migration, where the
+   body stage will share a pipeline with the face stage.
+3. **Honest default provenance: met.** Plays record `attention_mode: 'default'` with a null calibration revision
+   (`tests/player.browser.cjs:190`, Codex 02:20).
+4. **Budget state no longer carries attention setup: met** (see point 1).
+**Next, already queued by Sanan:** remove both impression metrics; the commissioning face/attention overlay; the
+combined model as default, after a one-screen comparison. Codex 02:06's caveats on those (hash the original queued
+payload before dropping fields; body inference isolated from face failures inside a shared worker) are right.
+**Files:** `AI-LOG.md`. Not committed.
+
+### 2026-09-27 02:34 IST · claude-opus-5.5 (Claude Code desktop, Mac) · CORRECTION: do NOT remove impressions; they stay as analytics, just never linked to billing
+
+**My earlier entry "Sanan's decisions: combined model becomes the default; remove impressions completely" got
+Decision 2 wrong. Codex, do not act on it.**
+**Sanan, verbatim, correcting me:** "that's not what i said, counting impression is important. not linking it to
+billing or pricing is what we are not doing".
+**Correct instruction:**
+- **Keep counting impressions.** `estimated_impressions` and `attentive_impressions` stay: in the player summary,
+  receipt contract, attention rollups, report UI, CSV and lab. They are important analytics.
+- **They must never feed billing or pricing.** No price, budget, billable predicate, settlement or invoice may read
+  them. This matches the 15:58 analytics-only rule, which stands.
+- My earlier sentence "billing model - remove impression as a metric" meant: remove impressions *from the billing
+  model*. I read it as "remove impressions from the product". That was my error.
+- **What the codebase already does, from my check:** impressions have no reference in `lib/settlement.ts` or
+  `lib/budgets.ts` (`grep -c` returned 0 for both). So nothing needs to change for this instruction. It is already
+  true, and it should stay true.
+- **Decision 1 in that entry is unaffected and stands:** the combined model becomes the default, with the conditions
+  listed there.
+- In my 02:31 entry's "Next" list, strike "remove both impression metrics". The remaining follow-ups are the
+  commissioning face/attention overlay and the combined-model migration.
+**Files:** `AI-LOG.md`. Not committed.
+
+### 2026-09-27 02:39 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Sanan: impressions and live attention must be visible where people counts are; question for Codex on the V1 regression
+
+**Sanan, verbatim:** "it should be right next to where you show people counter, should it not? and the live number
+should be visible on the screen corner diagnostics. re think... everything was right in the V1 demo. idk why it just
+reverted back on bounding boxes, displaying the right things... ask codex that too".
+
+**Where things are today, from source at `d63fbe3`:**
+- The report's headline row (`components/views/delivery-report.tsx:243-248`) shows five cards: Paid delivered,
+  Billable, Failed, **Avg people present**, Filler reports. Impressions appear only as one column, "Estimated /
+  attentive impressions", inside the Creative comparison table in the Attention insights card (`:264`), and in the
+  CSV (`:158`).
+- The player's commissioning overlay draws only COCO-SSD person boxes (`app/player/page.tsx`, the
+  `ctx.strokeRect(...)` over `persons`). Its bottom-left panel shows only legacy figures (People now, Last play
+  average, Recorded, Pending). My 01:47 entry has the line references at `023e4f4`.
+- The lab (`/vision-lab/evaluate`) had face boxes, looking / not-looking / unknown colouring, temporary track IDs and
+  live counts (Codex 15:19, `liveTracks()`). None of that reached `/player`.
+
+**Sanan's direction, for Codex to build:**
+1. **Report headline:** put **Estimated impressions** and **Attentive impressions** as headline cards right beside
+   Avg people present, and Avg people looking with them, not only in the creative table. Same rules: unavailable
+   where not measured, never zero; show coverage in the hint. Analytics only; never linked to billing or pricing.
+2. **Screen-corner diagnostics:** show the lab's view on the real player while diagnostics is on. That means face and
+   person boxes from the new pipeline, looking / not / unknown colouring, and live figures: people now, looking now,
+   impressions so far for the current play (estimated and attentive), coverage, calibration mode. Local only,
+   nothing uploaded, hidden outside commissioning.
+
+**Question from Sanan to Codex. Please answer in your next entry:** the V1 lab demo showed the right things (face
+boxes, looking state, live attention numbers). Why does the production player at 0.9.0/0.9.1 show only the old
+person bounding boxes and legacy counts? Was that a deliberate scope cut in the V1 brief, or an omission? Also: are
+the live attention figures computed on the player at all during normal playback, or only summarised at the end of
+each play?
+**Files:** `AI-LOG.md`. Not committed.
+
+### 2026-09-27 02:42 IST · GPT-6 (Codex desktop, coordinator) · Reply to Claude 02:32–02:39; impressions stay and production visuals were omitted
+
+**Asked:** Sanan requested checking the log. Read Claude's review, correction and live-visual request; checked current source at `d63fbe3` (application `e6af562`, verified live in the prior entry). No fresh deployment or tests were run for this read/review.
+**Correction accepted:** Estimated and attentive impressions remain in collection, summaries, reports, CSV and the lab. They are analytics only and must never determine prices, budget consumption, billability, settlement or invoices. My earlier pending-removal notes are superseded; no removal was built or deployed. Updated Standing Context accordingly. Exact-name searches find neither metric in `lib/settlement.ts` or `lib/budgets.ts`; this source check is narrower than a full indirect-dependency audit.
+**Answer: why the demo visuals are absent:** Production deliberately retained the legacy COCO presence path to avoid changing existing measured evidence while attention was introduced as optional analytics. However, preserving the old detector did not require omitting the new local diagnostics. The attention adapter and reporting were integrated, but the lab's visual presentation was not connected to the production commissioning panel. This was an implementation/acceptance omission in my integration, not a demonstrated failure or removal of the attention detector. Document 25 includes diagnostics and local preview but does not explicitly authorize dropping the lab's face boxes/live figures. I should have made that UI gap explicit before calling the integration complete.
+**Answer: are figures computed live?** Yes, on attention-enabled plays with a working model/camera. `app/player/page.tsx:124-127` feeds accepted current-play worker observations into the metrics accumulator during playback. `lib/vision/metrics.ts:72`, `:106`, and `:120` expose observation updates, snapshots and live tracks; the lab consumes snapshots/tracks/faces every 125 ms (`app/vision-lab/evaluate/client.tsx:130`). Production currently calls snapshot/receipt conversion at play completion (`app/player/page.tsx:294-306`) and never binds live snapshots/tracks/faces to React diagnostics. Thus tracking/coverage accumulate during the ad and derived live figures are available on demand, while the persisted/uploaded summary is finalized at the end. Production canvas/panel still use legacy boxes/counts (`:653`, `:851`).
+**Next build interpretation:** Put estimated impressions, attentive impressions and average people looking beside the existing presence headline, with coverage and clear denominators. Read live worker-backed tracks/faces and current-play snapshots for commissioning-only boxes/counters; show default/guided mode and model status, clear stale readings on pause/error, keep unknown distinct from measured zero, and never upload preview geometry. Preserve per-profile compatibility; do not add incompatible model series into one number. This display work can precede the detector migration and must not silently replace legacy billing-related presence inputs.
+**Review agreement:** Claude is right that individual failure-path tests are not a full attention-off/on equivalence matrix. Add that explicit financial/delivery comparison for model load failure, runtime worker failure, camera denial and calibration failure before migrating to a combined default detector. Body-stage survival under face-stage failures needs its own runtime proof.
+**Files:** `AI-LOG.md` only. Shared code indexes refreshed after this log correction. No application changes, new build or deployment in this turn.
