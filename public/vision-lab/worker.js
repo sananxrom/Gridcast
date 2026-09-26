@@ -50,6 +50,7 @@ self.onmessage = async ({ data }) => {
             const direction = lm[1].x >= cheekMid ? 1 : -1;
             const iris = eyes.reduce((sum,[a,b,c]) => sum + (lm[c].x - (lm[a].x + lm[b].x) / 2) / Math.max(Math.abs(lm[a].x - lm[b].x), 1e-6), 0) / 2;
             const gaze = direction * Math.abs(yaw) + .7 * 120 * iris;
+            if (r.faceLandmarks.length === 1 && (blinkL + blinkR) / 2 < .55 && Number.isFinite(gaze) && Number.isFinite(pitch)) observation.calibration = { yaw: gaze, pitch };
             looking = (blinkL + blinkR) / 2 < .55 && Math.abs(gaze - data.calibration.yaw) < 22 && Math.abs(pitch - data.calibration.pitch) < 20;
           }
           return { box, looking, unavailable_reason: valid ? undefined : eyePixels < 8 || (box[2] - box[0]) * bitmap.width < 50 ? 'too_small' : 'unclear', smiling: valid && Number.isFinite(smileL) && Number.isFinite(smileR) ? (smileL + smileR) / 2 > .45 : null };

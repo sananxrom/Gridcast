@@ -83,6 +83,7 @@ export async function createEvaluationWorker(delegate: 'CPU' | 'GPU', signal: Ab
       const now = performance.now(), value: Observation = data.observation;
       const stale = now - value.at > 1000;
       if (stale) {
+        value.calibration = null;
         value.at = now;
         if (value.bodies) value.bodies = { ok: false, boxes: [], saturated: false };
         if (value.faces) value.faces = { ok: false, faces: [], saturated: false };

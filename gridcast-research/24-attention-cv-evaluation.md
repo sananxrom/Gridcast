@@ -487,3 +487,19 @@ errors, achieved rates and video playback behavior. Repeat on Brave/Safari befor
 Model execution on synthetic frames establishes integration, not detection or gaze accuracy. Production
 receipt/reporting integration and physical Android/TV rollout remain Builds 3 and 4, with the §8 receipt
 budget and existing measurement/billing separation preserved.
+
+### 9.4 Guided automatic offsets
+
+The lab now offers **Auto-calibrate (3 s)** while stopped. Like the supplied `public.zip`
+`tracker.html:1044–1062`, it asks one person at the normal viewing position to look at the screen centre
+and derives yaw/pitch offsets from median uncorrected face-direction samples. The original selects the
+largest face; this implementation rejects multiple visible faces instead of silently changing subjects.
+Only clear, eyes-open, finite readings qualify; require five distinct samples spanning at least one second
+inside the three-second window, reject unstable direction (central 80% spread above 12° yaw / 10° pitch)
+and offsets outside ±45°. These are explicit evaluation heuristics, not validated accuracy thresholds.
+
+Calibration is a separate camera session with no ad measurement. Success updates offsets for the next test
+in this tab; failure/cancel preserves the prior values. Previous results retain their original calibration
+and performance metadata. Exports record `calibration_method` (`default`, `manual` or `guided-3s`). Per-frame
+calibration samples remain transient and are not exported. Recalibrate after moving the camera or changing
+viewing position; page reload resets this tab's offsets. Manual controls remain an optional override.

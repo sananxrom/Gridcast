@@ -3,6 +3,7 @@ export type Box = [number, number, number, number];
 export type Face = { box: Box; looking: boolean | null; smiling: boolean | null; unavailable_reason?: 'too_small' | 'unclear' };
 export type Observation = {
   at: number;
+  calibration?: {yaw:number;pitch:number} | null;
   bodies?: { ok: boolean; boxes: Box[]; saturated: boolean };
   faces?: { ok: boolean; faces: Face[]; saturated: boolean };
 };
