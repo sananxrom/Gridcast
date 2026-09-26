@@ -1,6 +1,6 @@
 # Full CV replacement and V1 parity
 
-Status: implementation complete for player 0.10.0, focused checks passed, coordinator release in progress. This is not yet a hosted-deployment claim. Source baseline `8ab3aac`; previous hosted application `e6af562` / player 0.9.1.
+Status: deployed and hosted checks passed. Player 0.10.0, application `dada7a1b3431ae8363cfd8a591967b08db6e7ee3`, Firebase rollout `build-2026-09-26-004` (READY / SUCCEEDED, 100% traffic). Previous hosted application was `e6af562` / 0.9.1.
 
 ## User decisions and execution order
 
@@ -67,3 +67,7 @@ The dedicated frame pump removes the old 250 ms dispatch ceiling; initialization
 Selected-screen live cards carry freshness and aggregate counts. Existing profile-aware reports/downloads include impression, dwell, attention, visible-smile and longest-look values; longest look rolls up as a maximum. These analytics do not alter financial rules.
 
 Verification: 63 focused checks, three browser smokes, TypeScript, production build and whitespace check passed. Coordinator inspected the fresh compact/expanded fixture screenshots. The V2 browser smoke uses simulated inference and real receipt validation; it proves integration, not physical-camera accuracy or real-worker throughput. Sanan will test the hosted replacement after the release recorded in AI-LOG.
+
+## Hosted test release
+
+Firebase serves 0.10.0 at https://gridcast-backend--gridcast-508011.asia-southeast1.hosted.app/player. Health confirms Firestore; the hosted V2 manifest/body worker/face worker match their pinned hashes. Fresh unpaired Chrome loads without page errors. Refresh players and enable on-screen diagnostics to inspect the local preview; re-pair if needed. Physical-camera evaluation is Sanan's next hands-on check. See AI-LOG's release entry for the full SHA and rollout evidence.
