@@ -73,10 +73,12 @@ Multi-tenant — screen owners are resellers; Gridcast is `org_id` tenant zero, 
 
 ### Hard rules — do not violate without asking Sanan
 
-- **The metric is presence, never impressions.** A frame is sampled every ~2 s during a play; the play's number
-  is the mean of those samples (`avg_persons`). No tracking, no re-identification, no de-duplication. It is
-  described to users as "average people in front of the screen while your ad played" and is never called
-  impressions, reach, unique viewers or audience.
+- **The existing `avg_persons` metric is presence.** A frame is sampled every ~2 s during a play; the play's
+  number is the mean of those samples. Do not rename those historical averages impressions, reach or unique
+  viewers. The current legacy detector does no tracking or re-identification. **26 Sep attention direction:**
+  Sanan permits face-landmark analysis, temporary visit tracking, separately defined estimated impressions
+  and visible-smile measurement; see the dated scope below and document 24 §7. These new measures must have
+  explicit definitions and provenance rather than being substituted for existing presence.
 - **Unmeasured is null, never zero.** No camera or a failed agent produces `measured: false` with a null count.
   Measured and unmeasured plays are never summed into one figure.
 - **Every number carries its provenance.** `presence.measured`, `screen_rate.exposure_source`,
@@ -88,6 +90,22 @@ Multi-tenant — screen owners are resellers; Gridcast is `org_id` tenant zero, 
   `presence_metric`, `camera_fail_mode`, `upload_frames`, `retain_frames`, `face_recognition`, `reidentify`,
   `demographics`, and the transport keys) may be set **only** from the platform layer, enforced server-side
   with a 403 — never in the UI alone.
+
+### Attention CV direction — user decision, 26 Sep 2026
+
+Sanan explicitly removed the old no-tracking/no-impressions/face-analysis/smile objections as blockers for
+integrating the attention prototype. External model/CDN downloads are acceptable; web inference should run
+locally after model initialization. First evaluation target is his computer browser, chosen directly in this
+chat. This is authorized implementation direction, not a claim that the new pipeline is already built or
+validated. Current source/deployed detector remains COCO-SSD until a reviewed integration is enabled.
+
+Use temporary anonymous visit tracking and separately defined estimated exposure/attention/duration/smile
+metrics. A smile coefficient does not establish happiness, liking or ad-caused emotional response. Preserve
+null for unavailable measurements, version/calibration/coverage provenance, tenant isolation and truthful
+billing. Cross-session identity recognition, biometric templates, camera-frame uploads/retention and
+arbitrary demographics are not part of this requested integration. Do not keep inaccurate person-only
+privacy copy when the face pipeline ships. New reporting metrics do not authorize a settlement/pricing
+change. Document 24 §7 supersedes its original rule-based adoption blockers and gives the staged build path.
 
 ### Stack and repo
 - Next.js 15.5.26 App Router · React 18.3.1 · TypeScript · Tailwind 3.4 · shadcn conventions · lucide-react
@@ -3582,3 +3600,21 @@ allowed?; keep "never impressions" or define a new term?; smile inference (recom
 **Release verification:** Firebase reports rollout `SUCCEEDED`, build `READY`, and 100% production traffic on `build-2026-09-26-001`. Live `/api/_health` returned 200 with Firestore store `gridcast`; `/player` and `/player/maintenance` returned 200; the live player bundle contains `gridcast-web/0.8.0`. Browser smoke found zero page errors and zero server responses at 500+; maintenance code gate remained present and the unpaired player screen loaded. Screenshot saved under `/tmp/gridcast-release-b-live-player.png`.
 **Still unverified:** Physical Android/WebView playback and audible output from the actual screen, plus real YouTube iframe chrome and caption behavior. The browser smoke does not prove sound is audible on the user's device.
 **Commit:** app `5299436`, log follow-up `1de71ef`; both are pushed to `origin/codex/gridcast-trust-layer-wp5`. This entry records the successful live deployment after the prior entry's pending-auth note.
+
+
+### 2026-09-26 14:32 IST · GPT-6 (Codex desktop) · Attention CV review, user decisions and computer-browser implementation plan
+
+**Asked:** Review `24-attention-cv-evaluation.md` and figure out how to implement it. Sanan explicitly said prior objections to tracking, impressions terminology, face analysis and smile detection are not blockers; external model downloads are acceptable. On clarification he chose “Start on my computer browser”. This supersedes the earlier instruction to ignore the CV proposal for the separate 0.8.0 release; it does not ask to redeploy that release.
+
+**Read/verified:** Latest log now records audio 0.7.0 and queue/interaction 0.8.0, application `5299436` / Firebase `build-2026-09-26-001`; earlier handover's B-only/open-queue/audio status is stale. Read document 24 and inspected the three supplied prototype HTML files, extracting them only to `/tmp/gridcast-attention-review`. Inspected Gridcast camera/player integration, device receipt/heartbeat model validation, reporting keys, service-worker cache allowlist and 4,096-byte reserved queue event bound at HEAD `48100d9`. No live deployment check, actual camera use or production mutation this turn.
+
+**Findings and response to Claude:** Downloading a model is not uploading frames and is not a web-platform obstacle; main model hosts report 3,758,596 and 4,602,795 bytes (about 8.36 MB together), plus runtime assets; optional float32 fallback is 13,836,895 bytes. Public pinned JS/WASM URLs responded 200. Separate warmed-offline inference, offline reload and offline authorized ad playback. Sample-average looking is useful but cannot replace anonymous visit/duration tracking. Face landmarks are not recognition, and visible-smile scoring is not proof of emotion/ad effectiveness. The body/face range and accuracy claims remain hypotheses. Existing `screen_day` keys do not partition by model, so provenance requires new aggregation design, not only a receipt field.
+
+**Reproduced prototype defects:** Three extracted pure-logic checks passed by reproducing (1) retained far track plus newly near body counting one person as two, (2) the person-model exception zero-state being accumulated as a valid zero, and (3) a same-second ad change keeping the previous timeline ad ID. Script `/tmp/gridcast-attention-review/checks.cjs`. Also found prototype playback attribution begins before successful video play and is not gated by Gridcast PLAYING intervals; face/body caps and separate near/far metrics need coverage disclosure. These are source/logic findings, not camera accuracy benchmarks.
+
+**Plan delivered:** Appended document 24 §7: worker-based typed engine on the existing camera/player, pinned model manifest with CDN permitted, explicit cache/readiness, canonical body/face association, temporary tracks, independent coverage/null handling, play-interval attention integrals and versioned estimated exposure/attention/smile definitions. First build is a computer-browser evaluation module; then offline/accuracy/performance validation, bounded authenticated receipt/report integration, and later Android testing/per-screen rollout. New metrics remain separate from commercial pricing. Detailed file boundaries, validation invariants and proposed acceptance gates are in the document. Updated its status and Standing Context's legacy metric paragraph plus dated attention-direction section to reflect Sanan's actual decisions; historical log entries remain untouched.
+
+**Tools/limits:** Applied the previously read SymDex search workflow; first non-elevated lookup failed opening SQLite registry, scoped authorized lookup succeeded; guessed `startVision`/`recordDelivery` symbols did not provide the implementation, so used the actual helper outline and targeted source searches. The hosted prototype could not be opened by the web extraction tool; did not claim a new hosted/zip comparison. Checked Google MediaPipe Web guides (synchronous inference/worker recommendation, model output) and MDN storage behavior. No legal conclusion was made; corrected the document's use of an unsupported categorical legal assertion as an implementation blocker. No model warm-up, browser camera test, 24-hour benchmark or accuracy percentage claimed.
+
+**Files/commit:** `gridcast-research/24-attention-cv-evaluation.md`, `AI-LOG.md`; documentation-only review based on `48100d9`. Include Claude's original untracked doc 24 when committing this revised document; preserve unrelated `CLAUDE.md` and other local material. Shared graph/SymDex refresh follows final edits. No application code, pricing, model config, cloud resource, push or deployment change.
+**Next:** Implement the browser evaluation slice from §7.7 when continuing this agreed direction; do not reopen Sanan's already-answered rule/download/hardware questions. Validate observability/association and actual-play timing before introducing advertiser-facing numbers. Claude should review the numbered arguments and test requirements against this new scope, using detailed prose.
