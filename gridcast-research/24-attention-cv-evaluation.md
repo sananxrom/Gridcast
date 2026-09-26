@@ -1,7 +1,7 @@
 # Attention CV prototype — evaluation and integration plan
 
 **Written:** 26 Sep 2026 13:40 IST by Claude Code · **Repo base:** `ca4edea` · **Live app:** `9380162` / `build-2026-09-25-006`
-**Status:** Original assessment retained below. Sanan subsequently accepted face analysis, temporary tracking, impressions terminology, smile measurement and external model downloads; first target is his computer browser. **Read §7 for the revised decisions, source findings and implementation plan.** No CV implementation has been made.
+**Status:** Original assessment retained below. Sanan subsequently accepted face analysis, temporary tracking, impressions terminology, smile measurement and external model downloads; first target is his computer browser. **Read §7 for the revised decisions and §9 for the locally implemented evaluation lab. §10 records the requested production onboarding and proposed reporting integration; neither is implemented yet.**
 **Source reviewed:** `~/Downloads/public.zip` (`index.html`, `tracker.html` 1,201 lines, `viewer.html` 1,426 lines).
 The hosted copy at `https://gridlocal-attention.netlify.app/` is the same code; `diff` shows only Netlify's
 injected comment and HUD script.
@@ -503,3 +503,115 @@ in this tab; failure/cancel preserves the prior values. Previous results retain 
 and performance metadata. Exports record `calibration_method` (`default`, `manual` or `guided-3s`). Per-frame
 calibration samples remain transient and are not exported. Recalibrate after moving the camera or changing
 viewing position; page reload resets this tab's offsets. Manual controls remain an optional override.
+
+## 10. Production onboarding and reporting — recorded request and proposal
+
+**26 September 2026. Status: planning only, no player integration or deployment.** Sanan requested that the
+onboarding flow below be noted for later. Reporting/chart choices below are Codex recommendations for
+review, not permission to implement or claims that the current export already supports them.
+
+### 10.1 User-requested onboarding
+
+**Enter pairing code → loading with time and percentage → quick guided calibration → ready.**
+
+Implementation details to preserve when building:
+
+- Pair once through the existing authenticated pairing flow; persist the issued device identity. A model,
+  camera or calibration retry must not consume another pairing code, revoke the device, or discard receipts.
+- Show distinct preparation stages: downloading, verifying, starting detector, camera permission, calibration.
+  Download percentage should use real received bytes versus known manifest byte totals. Show elapsed time
+  and an explicitly estimated remaining time from observed throughput; if it cannot be estimated, say so.
+  Verification/model initialization do not have reliable byte-based completion percentages. Download 100%
+  is not overall Ready; show their actual stage and elapsed time without a fabricated countdown.
+- Reuse verified cached assets and explain a fast cached start. Retry incomplete files; do not redownload
+  the entire package or claim offline readiness before verification. Progress implementation must account
+  for service-worker cache paths, not just direct fetch paths.
+- Camera permission and guided calibration need clear, user-initiated controls. Place one person at the
+  normal viewing location, look at the centre dot, collect quality-gated readings, offer retry/cancel on
+  unclear or multiple faces. Verify fresh measurement and playback readiness before the final Ready state.
+- Unlike the lab's tab-only offsets, production needs a versioned calibration record scoped to the paired
+  installation/camera and compatible pipeline profile, with completion time and method. Preserve it across
+  ordinary restarts; rerun on camera/profile changes and offer an explicit recalibration action after a
+  physical move. Do not imply the browser reliably detects every physical camera movement.
+- Model download errors or rejected permission are actionable setup states. Existing playback recovery must
+  preserve evidence. Explicitly define commissioning versus an already commissioned screen's degraded
+  measurement state; an unavailable camera must never become measured zero or invented attention delivery.
+- A successful setup is commissioning, not a guarantee of accurate gaze or uninterrupted future operation.
+
+### 10.2 How results should enter Gridcast
+
+The lab JSON download is a **local evaluation/debug artifact**. It is not uploaded today and is not an
+accounting record. The main product should not require operators to download a file and upload it elsewhere.
+
+Proposed production path:
+
+`actual creative playback → bounded attention summary for that exact play → existing durable offline queue
+→ authenticated device receipt → validated, deduplicated storage → attention reporting → optional export`
+
+1. Bind the accumulator to immutable play/assignment identity and actual media PLAYING intervals. Exclude
+   buffering, pauses, hidden state and calibration. A repeated creative has a new play identity; retries of
+   one completed play keep its identity. Per-play exposures are not deduplicated reach across ads/screens.
+2. Freeze pipeline, threshold/config and calibration versions with each measurement. Preserve independent
+   body/face/attention/expression validity, observation denominators and saturation. Send compact aggregates;
+   never camera frames, landmarks or persistent person IDs. The current lab JSON envelope is not the
+   proposed wire payload and should not be copied wholesale into a receipt.
+3. Extend the existing server's allowlisted contracts and device authorization, then atomically update
+   reporting after duplicate checks. Offline replays must count once; late reporting remains explicit.
+   Invalid-clock evidence must not become a precise delivery-hour chart. Keep paid/filler reporting separate.
+4. Add a versioned attention read model/profile dimension. `lib/reporting.ts:reportingKey` currently keys by
+   IST day, screen, campaign and creative, without a measurement profile. Its existing `presence_sum /
+   presence_n` is a mean of per-play means and must not silently become a time-weighted attention statistic.
+   New rates use summed numerators/denominators; preserve the legacy presence definition and coverage start.
+5. Use existing organisation/campaign/screen/date filters and role boundaries: platform view, operator's
+   receiving screens, advertiser's own campaigns across operators. Display how much data was observable,
+   unavailable or still waiting to sync, alongside the estimates. Tenant isolation remains server-enforced.
+6. Optional CSV/report downloads come from the same authorized reporting data powering the UI. Keep lab
+   exports explicitly separate; importing a lab file must never create paid delivery. Pricing and settlement
+   stay unchanged by this reporting integration.
+
+**Payload constraint:** `lib/player-queue.ts` reserves at most 4,096 bytes per event. Design and test the
+worst-case whole receipt (including existing fields) before selecting curve/histogram resolution. If it
+cannot fit, use a smaller declared summary or an explicitly versioned queue/reservation design; do not
+silently trim evidence or start a second unprotected bulk upload queue.
+
+### 10.3 Demo visuals to adapt
+
+Reviewed the actual supplied `public/viewer.html`: `renderTimeline`, `renderHeat`, `renderFunnel`,
+`renderAdTable`, `renderCurve`, `renderMoments`, `renderWear`, distributions and printable brand report.
+The current production UI already has dated delivery/hourly-presence charts and campaign/screen reuse via
+`components/views/delivery-report.tsx`. Extend that experience rather than adding a disconnected file viewer.
+
+| Visual | Purpose / placement | Data work and interpretation |
+|---|---|---|
+| Presence versus looking over time | Screen/operator view: when people were present and when their faces indicated looking | Begin with explicit hourly buckets, not a false live second-by-second trace reconstructed from play totals. Carry separate observation denominators and gaps. A finer timeline needs bounded additional time buckets. |
+| Day × hour attention heatmap | Campaign/screen view: useful time slots | Use a defined looking share among face-assessable person-time, with volume and coverage in tooltips. Show unavailable cells differently from measured zero; do not infer screen uptime from missing plays. |
+| Creative comparison | Campaign/advertiser view: compare delivered plays, estimated exposures, looking seconds, coverage | The first useful reporting addition. Normalize with comparable denominators; screen/time/pipeline mix can explain differences. No automatic claim that rotation is a controlled A/B experiment. |
+| Attention curve across the ad | Creative detail: where observed looking rises or falls | High priority for creative analysis, but needs new bounded bins aligned to actual media position, not wall time. Combine additive presence/looking/observability values per bin. Keep asset version/duration distinct after a creative edit. Label it as an aggregate curve, not the same viewers retained throughout. |
+| Look-duration distribution | Campaign/creative view: brief versus sustained observed looks | Add fixed-size histograms, defined intervals and right-censoring treatment. Current total/longest-look summaries cannot reconstruct the distribution. |
+| Exposure-to-attention funnel | Secondary campaign summary | All stages must use the same per-play-visit population and explicit thresholds; keep unassessable separate from known non-looking. Current live people/face counts and cumulative per-play impressions cannot simply be stacked as one funnel. Requires matching subset counters. |
+| Brand moments | Later, alongside a creative's curve | Let a user mark logo/offer/call-to-action time ranges on a versioned asset. Needs those annotations plus time-aligned observations; no inference that the moment caused attention. |
+
+**What to defer/change:** The demo's automatic “creative is wearing out” verdict compares days and can
+confound screen/time/audience/coverage changes; call it an attention trend until a defensible comparison
+exists. Approximate distance/zone charts need additional measured/calibrated inputs, so do not fill them
+from today's totals. Individual-visit timelines can remain a local debug concept; do not make per-person
+histories an advertiser feature. Do not copy demo eCPM/media-value calculations into Gridcast billing.
+
+**Current data limit:** The lab exports bounded per-ad aggregates (most recent 20 completed test ads).
+It does not export a second-by-second history, creative-position bins, duration histograms, first-look
+histograms or brand-moment annotations. Those graphs cannot be faithfully recreated by styling the current
+JSON. Reuse chart presentation patterns, but specify/collect their necessary aggregate inputs first.
+
+### 10.4 Suggested delivery order
+
+1. Finish the controlled computer-browser evaluation and agree measurement/coverage definitions.
+2. Implement the requested onboarding with persistent versioned calibration, plus the bounded production
+   measurement/receipt/reporting contract; roll out to one selected screen with commercial rules unchanged.
+3. Add campaign creative comparison, screen/hour trends and the day/hour heatmap to existing reporting.
+4. Add bounded creative-position curves and look-duration histograms once their storage/receipt budgets
+   are proven; then brand-moment annotations and a printable advertiser report.
+
+During design, a chart preview may use explicitly synthetic data or clearly labelled local lab summaries.
+It must never fabricate missing dimensions or appear as production evidence. Before any production deploy,
+resolve Claude's 15:30 review point about access to the standalone lab; it currently has a public route.
+That access decision is distinct from production player commissioning and advertiser report permissions.
