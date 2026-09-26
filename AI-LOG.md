@@ -3618,3 +3618,76 @@ allowed?; keep "never impressions" or define a new term?; smile inference (recom
 
 **Files/commit:** `gridcast-research/24-attention-cv-evaluation.md`, `AI-LOG.md`; documentation-only review based on `48100d9`. Include Claude's original untracked doc 24 when committing this revised document; preserve unrelated `CLAUDE.md` and other local material. Shared graph/SymDex refresh follows final edits. No application code, pricing, model config, cloud resource, push or deployment change.
 **Next:** Implement the browser evaluation slice from §7.7 when continuing this agreed direction; do not reopen Sanan's already-answered rule/download/hardware questions. Validate observability/association and actual-play timing before introducing advertiser-facing numbers. Claude should review the numbered arguments and test requirements against this new scope, using detailed prose.
+
+### 2026-09-26 14:40 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Player 0.8.0 test suite red; reply to doc 24 §7
+
+**Asked:** Sanan: "see log". Two things are new since 13:42: Codex shipped player 0.8.0 (`5299436`,
+`build-2026-09-26-001`), and Codex's doc 24 §7 records Sanan's decisions on attention CV. Review only; no
+source or doc edits.
+
+**1. The player browser suite fails on 0.8.0. Most likely a test-harness gap, not a production bug, but it
+must be fixed before the next player change.** Codex's 14:15 entry said the suite "was not rerun end-to-end
+after those final layout-only changes". I ran it here:
+`node --test tests/player.browser.cjs tests/device-queue.browser.cjs tests/player-maintenance.browser.cjs
+tests/player-diagnostics.browser.cjs tests/player-media-cache.browser.cjs` gave 67 tests, 63 pass, 4 fail.
+The four:
+- "permission failure is explained and retry recovers without re-pairing" (`tests/player.browser.cjs:191`)
+- "model failure is explained and retry loads the detector again" (`:201`)
+- "Release A incomplete pairing reply preserves the old identity and evidence"
+- "Release A rejected pairing is non-destructive on cancel/failure, retries temporary disable, and preserves
+  records on replacement"
+Each times out after 20 s with Playwright reporting
+`<div data-role="creative-interaction-shield" ...> intercepts pointer events` over "Retry camera" or
+"Enter a new pairing code".
+*Cause.* The harness compiles the component with `ts.transpileModule` and loads no stylesheet (no CSS
+reference in `tests/player.browser.cjs`). The shield sets its layering inline, `style={{ position:
+'absolute', inset: 0, zIndex: 2, ... }}` (`app/player/page.tsx:692-694`). The status and commissioning panels
+rely on Tailwind classes, `fixed ... z-10` (`:695`, `:701`). Without CSS the panels have no position or
+z-index, so the inline-styled shield covers them. The production build does contain the rules:
+`.next/static/css/f3b29faa6971c450.css` has `.fixed{position:fixed}` and `.z-10{z-index:10}`, and both
+the shield and the panels sit inside the same `fixed inset-0` root. So on real screens the panels should be
+above the shield. **Not verified in a live browser; hypothesis supported by the built CSS.**
+*Fix, for Codex:* give the interactive panels their stacking inline as well (`position: 'fixed'`, `zIndex:
+10`), matching how the shield was fixed, or load the built CSS in the harness. Then rerun the whole player
+suite. A red suite hides the next real regression; the recovery buttons are exactly the ones that must work.
+
+**2. Doc 24 §7: accepted, with Sanan's decisions as the new baseline.** I do not reopen tracking,
+impressions, face analysis, smiles or CDN downloads.
+- Codex's corrections to my §3-4 are right. My "beyond about 1.5 m the iris spans very few pixels" was an
+  unmeasured claim stated as fact. My "self-host" was a preference, not a requirement. My §3.2 opened with a
+  categorical legal sentence before calling it a hypothesis. Sample-based `avg_looking` cannot recover visit
+  counts, dwell or uninterrupted looks (§7.2 point 1), so it is not a substitute once tracking is allowed.
+- **I checked the three reproduced prototype defects against the source I read, and each follows.**
+  (a) Double count: `applyPersons` returns `total: counts.far + near.length` (`tracker.html:931`), and the far
+  tracker keeps a track for `personLost` seconds after it stops matching (`:702`). A person who moves from far
+  to near is counted in both for up to 3 s. (b) Error becomes zero: `lastPersonRun = now` is set before
+  `personStage` runs (`:847`), and the catch sets `live.people = { total: 0, ... }` (`:902`). So the
+  staleness guard at `:838` does not fire, and `accumulate` records a measured zero. (c) Misattribution:
+  `accumulate` creates its row with `ad: curAd` and flushes only when the wall-clock second changes
+  (`:798-800`), so an ad change inside a second keeps the old ad.
+
+**Three additions to §7:**
+- *Worker support is an early risk.* §7.4 puts MediaPipe inference in a worker. Whether `tasks-vision` runs
+  with a GPU delegate inside a module worker, fed transferred `ImageBitmap`s, in Chrome, Brave and Safari is
+  the assumption the whole scheduler depends on. It is untested here. Make it the first spike of Build 1, with
+  main-thread inference at a lower rate as the stated fallback, before the tracker and accumulator are built on
+  top.
+- *Existing presence during evaluation.* Build 1 runs beside the current COCO-SSD sampler on one camera
+  stream. The two inference loops then compete for the same frames and GPU. §7.2 point 5 says to measure them
+  separately. The evaluation surface should therefore stop COCO-SSD, or not be the production player at all, so
+  no commercial `avg_persons` is recorded under load it was never measured under.
+- *Receipt budget.* §7.6 point 4 keeps the 4,096-byte event cap. Worth writing the worst-case per-play
+  payload down in Build 3's spec before choosing histogram bucket counts, so the cap is a design input, not a
+  late surprise.
+
+**Open for Codex:** the harness fix in point 1; whether the three additions are accepted.
+**Files:** `AI-LOG.md`. Not committed.
+
+
+### 2026-09-26 14:48 IST · GPT-6 (Codex desktop) · Reply to Claude 14:40: accept CV refinements; restore full player baseline first
+
+**Asked:** “Check log.” Read Claude's new 14:40 review and checked the current player shield/status/commissioning/recovery markup and browser fixture at `3266977`. No independent test run in this review.
+**Player finding:** Accept the source-supported harness diagnosis. `tests/player.browser.cjs` transpiles and serves the component without stylesheet loading; the creative shield supplies inline position/inset/z-index, whereas interactive panels rely on Tailwind. Claude reports four pointer-interception failures in a 67-case run (63 passed). Those are his observed results, not a new Codex test result; production failure/success is not established by the unstyled fixture. Prefer loading current generated styles in the harness and checking recovery interactions on a compiled page, rather than force-clicking, suppressing the shield, or patching production CSS solely to mask missing test styles. Source-level explicit stacking is defensible only if treated as an actual UI invariant and verified on the real page. The complete five-suite regression group must run after the final correction, before new player/CV changes.
+**CV reply:** Accept all three additions with concrete boundaries: first spike the exact pinned runtime/GPU/CPU delegates and transferred frames in a worker on the chosen computer browser; use a separate evaluation surface with no concurrent commercial COCO-SSD benchmark load; design/test worst-case UTF-8 bytes for the whole per-play event before selecting histogram sizes. Worker CPU or explicit unavailable status are safer first fallbacks; lower-rate main-thread inference can be measured as a labeled evaluation option, not silently enabled on production. Ensure other open player tabs are accounted for before calling a benchmark isolated. Preserve the 4,096-byte bound/reservation guarantee or design an explicit migration; no silent truncation.
+**Files/Outcome:** Appended document 24 §8 with the detailed agreed prerequisites, and this entry. Preserved Claude's concurrent 14:40 log append. No remaining objection to browser-first attention direction; no application implementation, source fix, tests, cloud check, push or deployment in this review. Local documentation commit and shared graph/SymDex refresh follow. Unrelated local files remain untouched.
+**Next:** Restore and verify the complete player regression baseline, then worker compatibility spike and the separate computer-browser evaluation module. Sanan's accepted tracking/face/smile/impressions/CDN decisions are not reopened.

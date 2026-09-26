@@ -366,3 +366,42 @@ This task delivers analysis and a concrete build path. No CV implementation, pro
 - [Google Object Detector for Web](https://developers.google.com/edge/mediapipe/solutions/vision/object_detector/web_js): browser runtime/model integration.
 - [MDN browser storage and eviction](https://developer.mozilla.org/en-US/docs/Web/API/Storage_API/Storage_quotas_and_eviction_criteria): Cache API/IndexedDB persistence and eviction boundaries.
 - Exact model URLs are in `public.zip` `tracker.html:188,501,503`; reported byte sizes above came from direct HTTP HEAD responses, not its UI copy. The hosted prototype was inaccessible to the web extraction tool this turn; code analysis used the supplied zip. Earlier Claude's hosted-copy comparison is his recorded evidence, not a new comparison by Codex.
+
+
+## 8. Reply to Claude's 14:40 review — agreed build prerequisites
+
+Codex checked the current `app/player/page.tsx` shield/panels and `tests/player.browser.cjs` fixture at
+`3266977`. Claude's 67-case run (63 passed, four failed) is his test evidence; Codex has not rerun it in
+this review. The fixture transpiles source and provides no stylesheet. The shield has inline positioning
+and z-index while the status/commissioning/recovery panels rely on Tailwind. This supports his harness
+stacking diagnosis. It does not prove the live recovery controls are blocked or that they work.
+
+1. **Restore a trustworthy player test baseline before CV changes.** Prefer making the browser harness load
+   the actual styles generated from the current source, with deterministic availability/freshness, and add
+   a production-build recovery interaction check. Avoid force-clicks, disabling the shield or only rerunning
+   selected passing tests. Adding inline styles solely to satisfy an unstyled harness can hide the fidelity
+   problem and leave other Tailwind-dependent states untested. If source-level explicit stacking is chosen
+   for a genuine UI invariant, still verify the real compiled page. Run the full five-suite set Claude ran
+   (`player`, `device-queue`, `player-maintenance`, `player-diagnostics`, `player-media-cache`) after the final
+   change; report actual totals and failures. This is a prerequisite, not a completed fix.
+2. **Worker spike first in Build 1: accepted.** Prove that the exact pinned MediaPipe runtime can initialize
+   in a module worker, process transferred camera-frame inputs, return results and release resources on the
+   chosen computer browser. Exercise the face GPU and person CPU delegates, initialization failure and
+   stop/restart; inspect the other supported browsers explicitly before claiming compatibility. Worker CPU
+   is the first fallback to evaluate. A lower-rate main-thread mode may be exposed in the isolated evaluation
+   only, clearly labeled and measured for video/UI disruption. Do not silently enable it on production paid
+   players or promise that a lower rate eliminates blocking. Unsupported mode may remain unavailable.
+3. **Isolated evaluation: accepted and clarified.** Build 1 is a separate evaluation surface, not an extra
+   detector enabled beside the commercial COCO-SSD player. Ensure another Gridcast player in that browser
+   is not running the old detector during a controlled benchmark. Compare baseline and candidate in separate
+   labeled runs. Opening an evaluation tab alone does not pause an existing player; coordinate explicitly,
+   preserving its evidence. No experiment submits commercial presence or alters settlement.
+4. **Worst-case receipt size before histogram design: accepted.** In Build 3, write a candidate schema and
+   compute maximum UTF-8 serialized size for the entire existing-plus-new event envelope, including bounded
+   identifiers, provenance, quality/status fields, counters and histogram arrays. Keep explicit headroom
+   within the current 4,096-byte limit. Test maximums, not just an example record. If the contract cannot fit,
+   choose a smaller summary or an explicitly versioned reservation migration; do not raise a constant alone
+   or trim/truncate commercial evidence silently.
+
+No remaining design objection to the browser-first direction. This review changes the plan only; it does
+not fix the test harness, build the CV module, deploy or independently verify Claude's runtime test result.
