@@ -619,3 +619,9 @@ That access decision is distinct from production player commissioning and advert
 **Execution plan:** [25-attention-production-build-plan.md](25-attention-production-build-plan.md) expands
 §10 into implementation slices, commissioning states, compatibility/data budgets, reporting definitions,
 acceptance checks and staged rollback. It is a plan, not an implementation or deployment record.
+
+**26 September review clarification:** Document 25 now splits A into draft contracts/size fixtures (A1) and
+a controlled human/runtime check (A2). A2 must pass before production implementation B–D. Attention is
+strictly analytics-only, as Sanan stated in Claude's 15:58 log entry. Preserve existing presence/billing
+inputs and rules; do not replace the legacy measured flag's source to satisfy a one-detector preference.
+The optional attention contract must not cause valid delivery evidence to be rejected or lost.

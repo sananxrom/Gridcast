@@ -12,15 +12,18 @@ accepted temporary tracking, face analysis, impressions terminology, visible smi
 A newly paired player guides its installer through preparation and calibration. Normal restarts reuse
 verified assets and a compatible calibration. Each actual ad play produces bounded attention evidence
 that follows Gridcast's existing durable receipt path. Operators and advertisers see scoped reports without
-moving JSON files. Lab downloads remain evaluation artifacts. New analytics do not introduce audience-based
-pricing or change settlement rules.
+moving JSON files. Lab downloads remain evaluation artifacts. Attention is analytics only, per Sanan's instruction recorded by Claude at 15:58 IST on 26 September: impressions, looking, dwell,
+calibration and smiles must not feed pricing, budgets, billability, settlement or invoices.
 
 Production continues to distinguish: rendered, measured, billable, observable attention and unknown.
 Faces/landmarks/images/temporary person IDs stay on the device. A visitor seen during multiple ads can
 contribute a separate exposure to each play; that is not deduplicated reach or a count of unique people.
 
 **Proposed rollout defaults:** opt-in per selected screen; legacy screens remain on their current pipeline;
-no simultaneous COCO-SSD and attention loops in the production adapter; CPU face delegate initially, with
+existing COCO presence fields retain their current meaning and source. The analytics runtime topology
+must be established in slice A, preserving the legacy path and proving the combined workload if extra
+inference is required. One camera lifecycle owner and a bounded scheduler remain necessary; the previous
+blanket one-detector recommendation must not force substitution of billing inputs. CPU face delegate initially, with
 GPU enabled only after a measured device profile. The standalone lab should be disabled on production by
 default and explicitly enabled in local/preview environments. The paired production commissioning UI is
 separate from that experiment. These are implementation defaults for review, not changes made by this file.
@@ -29,7 +32,7 @@ separate from that experiment. These are implementation defaults for review, not
 
 | Existing surface | What it does today | Required change |
 |---|---|---|
-| `app/player/page.tsx` | Owns pairing, playback segments, sampled COCO presence, heartbeat and queued receipts | Add a single selected measurement adapter and commissioning state machine without breaking playback/evidence lifecycle. |
+| `app/player/page.tsx` | Owns pairing, playback segments, sampled COCO presence, heartbeat and queued receipts | Add a coordinated legacy-presence and optional-analytics lifecycle and commissioning state machine without breaking playback/evidence lifecycle. |
 | `lib/devices.ts` | Accepts only COCO-SSD in heartbeat/presence validation; assignments freeze config and economics | Add an explicit versioned pipeline contract, capability negotiation and bounded validation. No free-form model acceptance. |
 | `lib/config.ts` | Model/sample keys are locked, with legacy person-only explanatory copy | Introduce platform-controlled profiles; preserve locks, honest legacy definitions and privacy restrictions. Update face-analysis copy before exposure. |
 | `lib/vision/*` and lab worker | Local typed accumulator, worker, calibration and aggregate export; full-frame zone | Extract reusable runtime interfaces, add production zone/count/profile support and calibration persistence. Keep lab-only data separate. |
@@ -38,32 +41,44 @@ separate from that experiment. These are implementation defaults for review, not
 | `lib/reporting.ts`, `lib/firestore-store.ts` | Transactional IST delivery summaries; legacy presence mean; no profile key | Add profile-aware attention summaries and corresponding indexed scoped queries. Never blend incompatible measurements silently. |
 | `components/views/delivery-report.tsx`, campaign/screen pages | Scoped dated reports, sparse tables, explanations and CSV | Add an Attention view with coverage-aware charts; retain Delivery and existing definitions. |
 
-**Important billing interaction:** `lib/devices.ts` currently derives camera eligibility from legacy
-`body.measured` or assignment camera-failure policy. A new body pipeline cannot simply set legacy measured
-false and hope that eligibility is unchanged. The contract slice must specify an equivalent validated
-body-measurement predicate for the selected profile, with replay fixtures proving the same camera policy.
-Face failure, calibration failure and low attention must never become new billing predicates. This is an
-explicit compatibility gate, not an invitation to alter campaign economics.
+**Analytics-only compatibility boundary — not a billing workstream.** `lib/devices.ts` currently derives
+camera eligibility from legacy `body.measured` or assignment camera-failure policy. Those existing rules
+and the meaning/source of their inputs must stay unchanged. Do not populate the legacy measured flag from
+attention availability, face quality or calibration success. A separate optional attention block does not
+by itself guarantee this if the underlying legacy detector is replaced or its scheduling changes.
+
+Slice A must select a runtime design that preserves the legacy presence collector. Any additional workload
+needs a representative local performance/accuracy check; the isolated lab's result alone is not proof that
+a combined workload is viable. If preserving the legacy path cannot meet performance targets, keep attention
+in diagnostic/evaluation mode and resolve the architecture before B–D. Do not fix that conflict by editing
+financial rules or silently changing the source of existing fields. Contract design must also prevent
+optional analytics rejection or excess payload from blocking an otherwise valid delivery record: define
+explicit unavailable/rejected analytics outcomes, preserve retry identity, and keep commercial evidence's
+reserved capacity. These are compatibility checks, not new attention-dependent billing behavior.
 
 ## 3. Implementation slices and dependencies
 
 | Slice | Deliverable | Depends on | Exit gate |
 |---|---|---|---|
-| A — Baseline and contract | Human evaluation protocol, profile definitions, versioned event/calibration schema, byte budget, compatibility decision | Existing lab | Definitions reviewed; maximum-size fixtures designed; body/billing compatibility resolved before paid pilot. |
-| B — Server and storage support | Disabled-by-default acceptance, assignment capabilities, calibration revisions, attention rollups and scoped reads | A | Old clients/receipts still pass; new validation, deduplication, tenancy and transactional aggregation tested. |
-| C — Player preparation and onboarding | Honest loader, cache verification, persisted calibration, retry/restart/recalibration | A; B for persistence/assignment acknowledgement | Cold/warm/offline setup and all failure paths preserve device identity and evidence. |
-| D — Production measurement adapter | Exact play attribution, body/face stages, offline summaries, heartbeat and diagnostics | B + C | Real player integration tests pass; no competing detector, invented measurements or financial regression. |
+| A1 — Draft contracts | Profile/event/calibration schemas, byte budget and legacy-source invariants | Existing lab | Drafts and maximum-size fixtures reviewed; runtime options identified. |
+| A2 — Human and runtime check | Controlled looking/counting session, agreed thresholds, proposed runtime under representative load | A1 and existing lab | Results recorded against thresholds set beforehand; chosen pipeline/calibration/runtime judged viable before B–D. |
+| B — Server and storage support | Disabled-by-default acceptance, assignment capabilities, calibration revisions, attention rollups and scoped reads | A1 + passed A2 | Old clients/receipts still pass; new validation, deduplication, tenancy and transactional aggregation tested. |
+| C — Player preparation and onboarding | Honest loader, cache verification, persisted calibration, retry/restart/recalibration | A1 + passed A2; B for persistence/assignment acknowledgement | Cold/warm/offline setup and all failure paths preserve device identity and evidence. |
+| D — Production measurement adapter | Exact play attribution, body/face stages, offline summaries, heartbeat and diagnostics | B + C | Real player integration tests pass; no uncoordinated inference, altered legacy inputs, invented measurements or financial regression. |
 | E — First reporting release | Creative comparison, hourly screen trends, day/hour heatmap, same-data CSV | D | Numerators, denominators, unknowns, tenant scopes and profile separation verified end-to-end. |
 | F — Creative analysis | Bounded ad-position curves, observed-look histograms, later brand moments/printable report | A budget design; D + E | Position alignment/censoring/size tests pass; historical missing dimensions shown unavailable. |
 | G — Pilot and hardware rollout | One-screen acceptance followed by explicit expansion | B–E; F optional | Human accuracy/coverage and playback/performance gates pass on selected equipment; rollback demonstrated. |
 
-B's server work and C's local UI/cache work may proceed independently after A, with one shared contract.
+B's server work and C's local UI/cache work may proceed independently only after A2 passes, with one shared
+contract. Draft schemas and size fixtures in A1 can proceed while the human session is scheduled. B–D wait
+for the human/runtime result; failure triggers local pipeline/calibration revision and re-evaluation first.
 Codex should implement bounded slices; Claude should review source and the reported test evidence. Do not
 run competing resource-heavy camera/browser suites while Sanan is manually evaluating the player.
 
 **Mapping to document 24:** A includes Build 2 validation; B–F make Build 3 concrete; G includes Build 4.
-Engineering can proceed on schemas/fixtures while the human session is scheduled. No pilot enablement should
-be described as validated before that session is complete.
+The human gate applies before production implementation B–D, not merely before pilot promotion. It is
+not safe to assume a failed looking test would change only thresholds: camera geometry, model choice,
+observable states or runtime design may also change.
 
 ## 4. Commissioning state machine
 
@@ -146,10 +161,11 @@ must remain byte-canonically equivalent for the existing duplicate hash contract
   for unsupported attention configuration while preserving already authorized old evidence.
 - Keep accepting old queue/assignment schemas for their defined backlog window, including after rollback.
   Never reinterpret a historical COCO receipt as an attention receipt or fabricate historical calibration.
-- The new pipeline gets a separate measurement definition; do not put a time-weighted body average into the
-  old mean-of-samples metric and claim continuity. Specify legacy-field handling explicitly in A/B.
+- Attention has a separate optional measurement block. Keep the current legacy collector, cadence and
+  fields intact; do not put a time-weighted body average or new detector result into its mean-of-samples
+  metric or measured flag. Prove that optional-analytics failure does not invalidate valid playback evidence.
 - Pipeline changes apply at new assignments/play boundaries after any current play is safely finalized.
-  Only one pipeline owns camera sampling at a time. Preserve the player’s zone, count ceiling, privacy,
+  One lifecycle owner coordinates camera use and scheduling. Preserve the player’s zone, count ceiling, privacy,
   visibility, maintenance, device-revocation and reservation rules.
 - Extend both in-memory and Firestore paths, heartbeat status and diagnostic result validation. Updating
   only the visible player would leave real server ingestion broken.
@@ -215,16 +231,17 @@ not a smoothed curve that implies observations between samples.
 | Visuals/export | Correct weighted formulas and bin alignment, sparse/partial/capped states, accessible interactions, mobile layout, same-data CSV, explicit absent historical dimensions. |
 | Finance regression | Same playback/budget/camera-policy fixtures retain established billing outcomes. Changing attention, smiles or calibration success cannot create a new price, settlement entry or billing criterion. |
 
-Human accuracy/performance thresholds are not invented in this document. Record the agreed thresholds and
-observed results before pilot approval; implementation can proceed on deterministic contracts/tests now.
+Human accuracy/performance thresholds are not invented in this document. Record agreed thresholds before
+the session and observed results before B–D; only draft contracts/size fixtures and local evaluation work
+can proceed before that gate.
 
 Rollout order: disabled server support and indexes → backward-compatible player capability → one explicitly
 selected pilot screen → review its human/performance/offline results → small cohort → broader opt-in. A
 successful computer-browser pilot does not establish Android/TV stability; repeat on that hardware before
 expansion. Health checks must identify the actual deployed Firebase revision and applied screen profile.
 
-Rollback disables the new profile for future assignments, finishes/preserves current evidence, releases the
-new worker and starts the compatible legacy adapter. Retain old/new ingestion compatibility through their
+Rollback disables the new profile for future assignments, finishes/preserves current evidence, releases optional
+attention work while preserving the existing legacy presence collector and financial inputs. Retain old/new ingestion compatibility through their
 backlog windows, accepted calibration revisions, reporting history and queued records. Never clear browser
 storage to make rollback appear successful. Verify rollback under offline/backlog conditions before pilot.
 
@@ -242,7 +259,7 @@ size fixtures, make legacy/billing compatibility explicit, and write the one-scr
 those concrete artifacts before wiring the player or designing charts around fields we do not collect.
 The existing local lab remains available for that validation.
 
-**Only user-dependent inputs before pilot:** which real screen/computer/camera is the pilot, and availability
-for the short controlled human session. If no physical device is selected, continue computer-browser
-engineering but make no Android or unattended-installation claim. No additional decisions are required to
+**User-dependent inputs before A2 and production implementation B–D:** which real screen/computer/camera is the pilot, and availability
+for the short controlled human session. Use Sanan's chosen computer browser first; confirm the camera/placement and schedule the short session.
+A physical-screen/Android claim needs its own hardware check later. A1 drafts can proceed meanwhile. No additional decisions are required to
 finish this planning task. No application work or deployment is authorized by the plan document itself.
