@@ -4600,3 +4600,10 @@ finish Google's verification in the Brave tab Codex left open (session 909E8). L
 **Source / next step:** Rechecked WebKit bug254071 comment5: OffscreenCanvas WebGL on Safari requires macOS Sonoma (https://bugs.webkit.org/show_bug.cgi?id=254071#c5). Actual iMac macOS/Safari versions remain unknown. Recommend opening the same Firebase player in Chrome or Brave on that iMac, allowing its camera and pairing that browser if needed, then checking counting. Treat this as a compatibility test, not guaranteed support: OS and GPU still matter. If unavailable there too, obtain its macOS/browser versions and actual worker report before choosing a fallback that retains both full models.
 **Outcome:** Diagnosis updated, no application edit or additional deployment. Existing 0.10.3 release `9fd738a` remains deployed. No queue or pairing reset performed by this agent.
 **Files / commit:** `AI-LOG.md`; base `6351c72`. Log commit/push and index refresh follow.
+
+
+### 2026-09-27 13:47 IST · GPT-6 (Codex desktop, coordinator) · Old iMac CV working in Chrome, per Sanan
+
+**Evidence:** Sanan confirms CV is now working in Chrome on the old iMac, paired as **Demo Mohali Retail Media 2**. This is user-confirmed physical-device success; no independent inspection or duration/accuracy claim in this checkpoint. Do not confuse this new pairing with the earlier Safari failure under Demo Tricity Screens 3 or the laptop's Demo Mohali Retail Media 1.
+**Conclusion:** Chrome is a working route for this iMac with the deployed full body-and-face system. The earlier worker WebGL 2 failure is specific to the Safari environment tested, not evidence that this iMac cannot run the models. Use Chrome on this machine for current testing; no compatibility fallback or detector replacement is needed to unblock it. Safari on the iMac remains unsupported by the current worker path; its exact OS/browser versions are still unknown.
+**Outcome / files:** Logged the confirmed workaround in `AI-LOG.md`; no application changes or redeploy. Firebase application remains `9fd738a` / 0.10.3, rollout `build-2026-09-27-003`. Log commit/push and index refresh follow.
