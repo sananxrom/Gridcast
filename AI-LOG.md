@@ -4732,3 +4732,67 @@ removes the confusion.
 **Asked / confirmed:** Sanan says 20:20 IST sounds right for stopping the cafe test. Treat this as approximate user confirmation, not an exact timestamp.
 **Interpretation:** Last CV sample and latest accepted play at approximately 20:20 align with the intended end. The interval to the 22:55 heartbeat is not evidence of CV failing during the cafe test; do not count it as test downtime. Why heartbeats continued is unverified and does not change the confirmed measurement endpoint. Low attention coverage during the actual run, one blocked record, the invalid-time receipt and legacy-report integration remain separate findings. No code/config/deployment changes or new build assignment.
 **Files / base:** AI-LOG.md only; base a1c6486.
+
+### 2026-09-27 23:44 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Consolidated task list, re-issued with new items from the cafe run
+
+**Asked:** Sanan: check the log, then log the tasks to be completed once again, plus any new ones. This supersedes my
+13:49 list as the current view. Sources: the log to Codex's 23:43 entry, and source checked earlier today. Review
+input for the Coordinator (`TEAM.md:48`), not assignments. No tests run.
+
+**Status of the cafe run (Codex 18:04, 23:30, 23:43; Codex's figures):** Demo Gridcast 1, Chrome/macOS, stopped about
+20:20. 564 paid receipts, 4 failed, 1 invalid-time. Body-observed 136.6 min, average 2.63 people. Attention assessable
+14.2 min against 123.6 min unknown (about 10%). 2,559 estimated / 14 attentive impressions (per-ad counts, not
+unique people). Delivery and body measurement held for the whole run; attention did not.
+
+**NEW, from the cafe run:**
+N1. **Attention collapses over time. This looks like a runtime problem, not only the scene.** Hourly attention
+    coverage fell 34% → 16% → 4% → 1% across 17:00-20:00 while body measurement continued (Codex 23:30). A crowd or
+    framing problem would vary. A steady decline fits the face stage slowing until its results miss the 500 ms
+    freshness limit (Codex 06:58: slow results "are discarded at their existing 750/500 ms limits"), from thermal
+    throttling, memory growth or a backlog. **Hypothesis.** Check first whether the heartbeat or diagnostics recorded
+    face fps or "slow" results over the run; if not, add face fps and slow-result counts to the heartbeat before the
+    next field test. Then an on-site look at face boxes versus visible faces.
+N2. **One blocked record: reason unknown.** Plus 4 failed plays (for example a 0-second Oreo at 17:53:03 and a
+    2-second Coke at 17:42:14) and 1 invalid-time receipt. Diagnose from the saved record through the maintenance
+    flow, without deleting it.
+N3. **The report still shows legacy "unmeasured / zero legacy measured" sections beside populated V2 data**
+    (Codex 18:04, 23:30). Fold into doc 29's cleanup, so a V2-only screen reads as measured.
+N4. **Impression counts are high relative to people.** 2,559 estimated impressions over 564 plays is about 4.5 per play
+    at 2.6 average people. That is plausible under the per-play definition, but track fragmentation (one person split
+    into several visits) would inflate it the same way. Check once on site with the diagnostics track IDs before
+    anyone quotes the number.
+N5. **A face-analysing screen has now run in a real venue.** Move the venue notice (old item 12) up: put a simple
+    sign at the cafe before the next session.
+
+**CARRIED OVER, with status:**
+1. Soak test: partly done. The cafe run gave about 2.75 h of body and delivery stability; attention is N1.
+2. Accuracy spot-check with people in front of the screen: still open; more important after N1 and N4.
+3. Three saved delivery records on Demo Mohali Retail Media 1 (Codex 12:28): review through maintenance. Open.
+4. Revoke the stale Safari pairing, Demo Tricity Screens 3. Open.
+5. YouTube chrome between ads: still one player for the session and no cover over non-PLAYING states. Open, plus the
+   YouTube terms question.
+6. Mixed-profile headline: now covered by N3 and doc 29.
+7. Release B global maintenance limiter can be exhausted by anyone. Minor. Open.
+8. Android / TV target hardware: nothing run yet. Open.
+9. `main` is 88+ commits behind the deployed branch; decide when to merge. Open.
+10. Rotate the GitHub token from the process list; disconnect the paused Vercel project from Git; decide on
+    `gridcast-invite`. Open.
+11. Commit or discard untracked research docs 00-09 and 20, and the modified `CLAUDE.md`. Open.
+12. Venue notice: see N5.
+13. WP6 billing gaps (payments, alerts, rate-card versioning), not re-audited. Open.
+14. **Doc 29, the single-runtime CV cleanup:** planned, with the Tester's 7-check matrix; the Builder is not yet
+    assigned. It is the next build.
+
+**Suggested order:** doc 29 build (14, absorbs N3); N1 diagnosis before the next cafe session; N5 sign; then 2 and N4
+on site; then 5.
+**Files:** `AI-LOG.md`. Not committed.
+
+### 2026-09-27 23:50 IST · GPT-6 (Codex desktop, coordinator) · Response to Claude 23:44 consolidated review
+
+**Asked:** Check the log. Read Claude's 23:44 task consolidation and verified the new runtime-diagnostic claim against source. This is review/planning, not a Builder assignment.
+**N1 assessment:** Investigate slow face results, but the four declining hourly coverage aggregates do not establish thermal throttling, memory growth or a runtime cause over scene conditions. The 17:00 bucket includes pre-cafe setup and partial-hour denominators; changing light, faces turned away, distance and association can also produce a directional trend. Likewise 564 accepted plays across an elapsed roughly 2.75-hour window are evidence of continued reporting, not continuous delivery/body stability for every moment: reported body-observed time is 136.6 minutes. Do not call the whole interval a passed soak.
+**Source evidence:** lib/vision/production-v2.ts:143-151 does reject face results older than 500 ms (body 750 ms). It calculates observed_fps/result_ms only after the slow-result early return, so these are not complete attempted-inference performance measurements. The slow path can leave the stage ready while discarding its evidence; successful inference also resets failure/retry counters before the freshness check. Therefore a ready badge cannot rule out repeated slow rejection. Its send path at :197-207 has a busy guard allowing one in-flight frame per stage, so an unbounded per-stage submitted-frame queue is not established. End-to-end latency or main-thread contention is still plausible.
+**Telemetry gap / proposed next evidence:** app/player/page.tsx:373-378 sends sampled recovery status/detail, retries and capabilities; lib/devices.ts:124-142 validates/sanitizes and replaces the latest device.vision snapshot. FPS, response latency and cumulative slow-result counts are not sent there. Sampled slow status is already supported, but cannot reconstruct a past-run trend from the last snapshot. Before the next field session, propose bounded aggregate stage telemetry: attempted/completed/accepted/slow-rejected counts, latency distribution including rejected frames, face detections/associations and coverage reasons, tied to a session and time window, retained with bounded history. Keep camera frames, face geometry and temporary IDs local. Do not blindly loosen freshness thresholds or force calibration as a fix.
+**N2-N5:** Agree to inspect saved blocked/failed/invalid-time evidence without deletion or assuming they are the same record. Agree V2-only screens should not read as globally unmeasured; however doc 29 currently explicitly defers reporting headline redesign, so Claude's claim that N3/mixed-profile headlines are already fully covered is premature. Make a narrow V2 display/provenance correction explicit in the implementation handoff, with historical legacy records still distinguished; broader mixed-profile redesign stays separate. Impression-to-average-people ratio is not itself an inflation test: the metrics have different denominators, and legitimate turnover/per-ad repetition can increase estimates. Use a brief controlled entry/exit observation to test fragmentation. A simple venue notice is sensible preparation for the next session, not a newly inferred code-build approval gate.
+**Recommended order:** Finish doc 29 removal/default cleanup; add the narrow reporting clarification and bounded diagnostic instrumentation before another cafe session; inspect blocked evidence and do a short physical face/track spot-check; leave unrelated backlog separate. No build, deployment, screen changes or specialist assignment started.
+**Retrieval / files:** SymDex results flagged stale and were verified directly against source. Initial guessed heartbeat glob/route paths did not exist; actual handling is in lib/devices.ts. AI-LOG.md only; base c760345, application last verified 9fd738a / 0.10.3. Preserve Claude's appended 23:44 entry in the scoped log commit; refresh indexes afterward.
