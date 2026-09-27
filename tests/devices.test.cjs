@@ -7,6 +7,8 @@ const path = require('node:path');
 const moduleObject = { exports: {} };
 new Function('require','module','exports', ts.transpileModule(fs.readFileSync(path.join(__dirname, '../lib/devices.ts'), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText)(name=>name.startsWith('.')?require('./load-lib.cjs')(name.slice(2)):require(name),moduleObject,moduleObject.exports);
 const { issuePairing, pairingCodeHash, deviceIdFromToken, deviceRoute, revokeDevices, playRecordId, calibrationForDevice } = moduleObject.exports;
+const { validatePresenceBinding } = require('./load-lib.cjs')('vision/measurement-binding-v2');
+const canonical = value => Array.isArray(value) ? `[${value.map(canonical).join(',')}]` : value && typeof value === 'object' ? `{${Object.keys(value).sort().map(key=>`${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}` : JSON.stringify(value);
 const MODEL = 'coco-ssd@2.2.3/lite_mobilenet_v2';
 function fixture(protocol=2) {
   let now = Date.parse('2026-09-24T00:00:00.000Z');
@@ -53,6 +55,30 @@ test('attention-enabled playlist and receipts use default offsets without delayi
  const event={...on.event(),assignment_id:item.assignment_id,attention:{schema:'attention-v1/1',profile:on.config.attention_profile,attention_mode:'default',calibration_revision:null,playing_ms:10000,body:[8000,2000,0],face:[8000,2000,0],attention:[6000,4000],expression:[6000,4000],presence_person_ms:10000,looking_person_ms:5000,smile_person_ms:1000,face_assessable_person_ms:7000,expression_assessable_person_ms:6000,estimated_impressions:1,attentive_impressions:1,tracked_visits:1,right_censored_visits:0,longest_look_ms:1000}};
  const accepted=on.call('POST','play',event,on.paired.token);assert.equal(accepted.body.attention_status,'accepted');assert.equal(accepted.body.billable,true);assert.equal(on.db.plays[0].attention_mode,'default');assert.equal(on.db.plays[0].attention_calibration_revision,null);assert.equal(on.db.attention_day[0].attention_mode,'default');assert.equal(on.db.attention_day[0].calibration_revision,null);
  const offReceipt=off.call('POST','play',{...off.event({assignment_id:plain.assignment_id})},off.paired.token);assert.equal(accepted.body.billable,offReceipt.body.billable);assert.equal(on.db.campaigns[0].accrued_spend,off.db.campaigns[0].accrued_spend);
+});
+
+test('V2 playlist upgrades an existing assignment to a new pipeline binding without collision or losing old receipts',()=>{
+ const f=fixture(3),oldBinding=f.db.measurement_bindings[0],assignment=f.db.device_assignments.find(a=>a.id===oldBinding.assignment_id);
+ assert.ok(oldBinding&&assignment);
+ const previousPipeline='7d8e7edd31110372295e909b8ba8b75c91b2bbd9a83a5862771189eed1c96016';
+ const oldId='measurement_'+crypto.createHash('sha256').update(canonical([assignment.id,oldBinding.config.profile,oldBinding.config,oldBinding.config.calibration_revision])).digest('hex');
+ const provenanceId=pipeline=>`measurement_${crypto.createHash('sha256').update(canonical([assignment.id,oldBinding.config.profile,oldBinding.config,oldBinding.config.calibration_revision,oldBinding.manifest_sha256,pipeline,oldBinding.model_versions.body,oldBinding.model_versions.face,oldBinding.model_versions.runtime])).digest('hex')}`;
+ const currentPipeline=require('./load-lib.cjs')('vision/presence-v2-profile').PRESENCE_V2_PROFILE.pipeline_sha256;
+ oldBinding.id=oldId;oldBinding.pipeline_sha256=previousPipeline;
+ const budgetBefore=f.db.campaigns[0].committed_budget,assignmentCount=f.db.device_assignments.length;
+ assert.equal(validatePresenceBinding(oldBinding,assignment,f.db.devices[0],f.db.screens[0],oldId),true,'Already issued bindings and queued receipts from 0.10.0 stay valid');
+ const modelVersions=oldBinding.model_versions;delete oldBinding.model_versions;assert.equal(validatePresenceBinding(oldBinding,assignment,f.db.devices[0],f.db.screens[0],oldId),false,'Malformed persisted provenance fails closed instead of throwing');oldBinding.model_versions=modelVersions;
+ oldBinding.pipeline_sha256=currentPipeline;
+ assert.equal(validatePresenceBinding(oldBinding,assignment,f.db.devices[0],f.db.screens[0],oldId),true,'Legacy-ID bindings issued by 0.10.1 remain valid even though their pin is current');
+ oldBinding.id=provenanceId(previousPipeline);oldBinding.pipeline_sha256=previousPipeline;
+ assert.equal(validatePresenceBinding(oldBinding,assignment,f.db.devices[0],f.db.screens[0],oldBinding.id),true,'New provenance-scoped IDs reconstruct from their stored approved pin after a later pin update');
+ oldBinding.pipeline_sha256='unapproved-pipeline-pin';assert.equal(validatePresenceBinding(oldBinding,assignment,f.db.devices[0],f.db.screens[0],oldBinding.id),false,'Unknown historical pins are not accepted');
+ oldBinding.id=oldId;oldBinding.pipeline_sha256=currentPipeline;f.db.devices[0].assignment_set.binding_ids=[oldId];
+ const upgraded=f.call('GET','playlist/screen1',{},f.paired.token),newItem=upgraded.body.items[0],newBinding=f.db.measurement_bindings.find(b=>b.id===newItem.measurement_binding_id);
+ assert.equal(upgraded.status,200);assert.equal(newItem.assignment_id,assignment.id,'The paid assignment itself is preserved');assert.notEqual(newItem.measurement_binding_id,oldId,'The changed pipeline receives a provenance-scoped binding ID');
+ assert.equal(newBinding.pipeline_sha256,require('./load-lib.cjs')('vision/presence-v2-profile').PRESENCE_V2_PROFILE.pipeline_sha256);assert.ok(validatePresenceBinding(newBinding,assignment,f.db.devices[0],f.db.screens[0],newItem.measurement_binding_id));
+ assert.equal(f.db.measurement_bindings.find(b=>b.id===oldId).pipeline_sha256,currentPipeline,'The original immutable binding is retained');assert.equal(f.db.measurement_bindings.length,2);
+ assert.equal(f.db.device_assignments.length,assignmentCount);assert.equal(f.db.campaigns[0].committed_budget,budgetBefore,'Refreshing the binding does not reserve money or replace the assignment');
 });
 
 test('attention profile mismatch still issues paid and filler playback authorizations',()=>{

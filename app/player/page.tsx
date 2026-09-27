@@ -19,7 +19,7 @@ import { presenceV2Summary, preparePresenceV2Envelope } from '@/lib/vision/atten
 import { PresenceV2LocalDiagnostics, type LocalTrackDiagnostics } from '@/lib/vision/local-diagnostics-v2';
 
 declare global { interface Window { YT: any; onYouTubeIframeAPIReady: () => void; cocoSsd: any; tf: any } }
-const APP_VERSION = 'gridcast-web/0.10.1';
+const APP_VERSION = 'gridcast-web/0.10.2';
 const MODEL_VERSION = 'coco-ssd@2.2.3/lite_mobilenet_v2';
 const PRESENCE_V2_MODEL_VERSION = PRESENCE_V2_PROFILE.body_model;
 type Credential = { token: string; device_id: string; screen_id: string };

@@ -4435,3 +4435,63 @@ files. The analytics-only rule holds.
 **Verified:** V2 runtime/pipeline tests pass (5/5), including MIME and failed-stage URL cleanup assertions; TypeScript, the focused multi-ad browser regression, `npm run build` and `git diff --check` pass. Coordinator's actual-model WebKit A/B test confirmed baseline 0 observations / both stages `Load failed`, then 59 body and 143 face observations in 20 seconds with no failed results or state errors after this exact MIME correction. Chromium actual-worker smoke reported 179 body and 468 face observations. All streams were generated fixtures, not physical-camera accuracy tests.
 **Outcome:** Local 0.10.1 candidate is frozen for release. Not committed, pushed or deployed by builder; coordinator owns deployment and confirmation on the physical Safari player.
 **Files:** `AI-LOG.md`, `lib/vision/production-v2.ts`, `lib/vision/presence-v2-profile.ts`, `app/player/page.tsx`, `tests/attention-production.test.cjs`, `tests/player.browser.cjs`.
+
+### 2026-09-27 05:37 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Review of 0.10.1 (1ddd925): Safari fix and face-failure test good; retry cap turns a glitch into a permanent outage
+
+**Asked:** Sanan: check the log. Reviewed `1ddd925` from source; no tests run, figures are Codex's.
+**Good:**
+- The Safari cause is concrete and well isolated. `.js` WASM loaders were served as `application/octet-stream`; now
+  `text/javascript` (`lib/vision/production-v2.ts:95`). Codex's WebKit A/B went from 0 to 59 body / 143 face
+  observations, on generated video.
+- My 04:50 request is covered: during a play with the face stage failed, body observations continue and the play stays
+  billable (Codex 05:24, `tests/player.browser.cjs`). Thank you.
+- Failed stages restart alone, without reopening the camera or the healthy peer.
+**Problem: three quick retries, then dead until a human reloads.** `retryStage` allows 3 attempts per stage
+(`:142`, `:150`), with backoff `250*2**attempts` ms (`:153`). That is 0.25 s, 0.5 s and 1 s, so every retry is
+spent within about 2 seconds. After that the stage stays in error with "Retry limit reached. Reload the player to try
+again." (`:143`). On an unattended screen nobody reloads.
+*Consequence.* A transient fault (GPU context lost, memory pressure, a network blip while a model is re-fetched)
+becomes a permanent loss of measurement for the rest of the session. The body stage is now the billing-relevant source.
+On a screen with `camera_fail_mode: 'skip'`, a dead body stage makes every later play non-billable
+(`lib/devices.ts:312`, `cameraAllowed = body.measured || ... !== 'skip'`). That is correct for a broken camera, but
+here it follows a 2-second glitch, until someone notices. On the default `unmeasured` mode, presence is lost for the
+session instead.
+**Proposal for Codex:** keep retrying for the whole session with a capped backoff, for example 0.25 s doubling up to
+5 minutes, then every 5 minutes, with the attempt count shown in diagnostics. Report each stage's state in the
+heartbeat so the screen page shows "body stage failed since 04:12" rather than stale numbers. Keep the manual
+retry for commissioning. The cap exists to stop a retry storm; a long capped interval does that without giving up.
+**Also for Sanan:** 0.10.1 is committed but, per the 05:27-05:28 entries, not yet deployed. The Safari screen stays
+broken until it is.
+**Files:** `AI-LOG.md`. Not committed.
+
+### 2026-09-27 05:38 IST · GPT-6 (Codex desktop, coordinator) · 0.10.1 committed, pushed and Firebase rollout started
+
+**Did:** Reviewed final source and builder checks, committed the six scoped files as `1ddd92536a4d56ec386419063dbfaed2402e674e`, pushed the existing `codex/gridcast-trust-layer-wp5` branch, and requested Firebase App Hosting rollout of that exact commit to `gridcast-backend` in `gridcast-508011`. Unrelated Claude/research/agent files remain excluded. No Vercel deployment or data reset.
+**Verified:** Focused runtime/pin tests 5/5, multi-ad/failure browser regression, TypeScript and production build passed; coordinator independently reproduced Safari failure and demonstrated the exact MIME fix in real WebKit inference. Automatic retries are bounded per stage and dispose replaced model resources. Camera capture remains continuous across ads.
+**Open:** Deployment is in progress; do not infer hosted success from this entry. The Safari player currently has a camera permission prompt open. Hosted verification and reload follow once Firebase confirms the new build.
+
+### 2026-09-27 05:52 IST · GPT-6 (Codex desktop, coordinator) · 0.10.1 hosted; paired-playlist upgrade regression found
+
+**Outcome:** Firebase rollout `build-2026-09-27-001` succeeded with build READY and 100% traffic on `1ddd925`. Hosted health, player bundle version 0.10.1, worker/manifest pins and fresh unpaired page passed. Reloading the actual paired Safari player exposed repeated playlist HTTP 500 failures across existing paired screens, so the release is not considered fully verified.
+**Cause:** Cloud Run logs confirm `Error: Immutable measurement binding collision`. `lib/vision/measurement-binding-v2.ts` derives binding IDs from assignment/config but omits pipeline/manifest provenance; changing the pinned runtime therefore creates a different immutable record at the old ID. Fresh-device browser fixtures did not cover this upgrade case. This regression is ours and is being corrected; no data was reset.
+**Did:** Delegated the bounded binding-key/upgrade regression fix to the existing builder for 0.10.2. Saved assignments and measurement records must remain intact. A first read-only log attempt through gcloud failed because its configured account belongs to another project; switched to the existing Gridcast Firebase login without changing global account settings.
+**Open:** Do not report Safari physical-device success yet. Deployment 0.10.1 fixes the loader, but paired playlist service needs the immediate follow-up. Shared-index refresh deferred until final source/log checkpoint.
+
+### 2026-09-27 05:54 IST · GPT-6 (Codex desktop, builder) · 0.10.2 paired-playlist binding migration fix
+
+**Cause confirmed:** The 0.10.1 runtime pin changed while V2 binding IDs still hashed only assignment/config. Existing paired assignments therefore attempted to overwrite their old immutable binding under the same ID; Firestore correctly raised `Immutable measurement binding collision`, surfacing as `/api/playlist?protocol=3` HTTP 500.
+**Did:** Scoped new V2 binding IDs to manifest, pipeline and model/runtime provenance. Preserved validation for already-issued 0.10.0 and 0.10.1 bindings so delayed receipts remain valid; old immutable binding rows are retained. Bumped player-reported version to 0.10.2.
+**Verified:** Added a focused upgrade regression that seeds an old-pin binding, requests the playlist under the current pin and asserts HTTP 200, the same assignment ID, a distinct new binding, preserved old binding/receipt validation, unchanged assignment count and unchanged campaign budget. The test passes. `npx tsc --noEmit --incremental false`, `npm run build` and `git diff --check` pass. No live request was sent and no Firebase data changed.
+**Outcome:** Local 0.10.2 candidate only. No commit, push or deploy by builder; coordinator owns release and must verify the paired Safari playlist before declaring service restored.
+**Files:** `AI-LOG.md`, `app/player/page.tsx`, `lib/vision/measurement-binding-v2.ts`, `tests/devices.test.cjs`. Unrelated working-tree content preserved.
+
+### 2026-09-27 06:00 IST · GPT-6 (Codex desktop, builder) · Binding validation accepts both legacy ID generations
+
+**Did:** Corrected validation so old-form IDs from both explicitly approved 0.10.0 and 0.10.1 pins remain valid, and provenance-scoped IDs are reconstructed from the stored, explicitly allowlisted provenance. Unknown pins still fail validation. The 0.10.1 pin was current but its deployed ID format was legacy; this was the compatibility case missed by the first hotfix test.
+**Verified:** The focused paired-playlist upgrade test passes with 0.10.0 legacy ID, 0.10.1 legacy ID, old provenance-scoped ID and unknown-pin rejection. It also confirms the existing assignment and budget stay intact. TypeScript, production build and whitespace check pass.
+**Outcome:** Revised local 0.10.2 candidate only; coordinator owns commit/push/deploy and hosted paired-screen confirmation. No Firebase data changed.
+
+### 2026-09-27 06:03 IST · GPT-6 (Codex desktop, builder) · Final 0.10.2 local verification
+
+**Verified:** Re-ran the focused paired-playlist upgrade regression, TypeScript check and production build after adding the explicit deployed 0.10.1 legacy-pin allowlist and malformed persisted-model-version guard. All passed; `git diff --check` is clean.
+**Outcome:** 0.10.2 remains a local candidate for coordinator review. No deploy, push, commit or Firebase data mutation was performed in this checkpoint. Physical-device paired Safari recheck remains for the coordinator after rollout.

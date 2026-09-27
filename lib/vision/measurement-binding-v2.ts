@@ -23,6 +23,23 @@ export type PresenceBindingConfig = {
 const canonical = (value: any): string => Array.isArray(value) ? `[${value.map(canonical).join(',')}]`
   : value && typeof value === 'object' ? `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${canonical(value[k])}`).join(',')}}` : JSON.stringify(value);
 const digest = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex');
+// Explicitly approved 0.10.0 / 0.10.1 provenance remains valid for issued bindings and
+// queued receipts. Add each released pin here before a future runtime pin is deployed.
+const APPROVED_BINDING_PROVENANCE = [
+  { manifest_sha256:PRESENCE_V2_PROFILE.manifest_sha256, pipeline_sha256:PRESENCE_V2_PROFILE.pipeline_sha256,
+    model_versions:{body:PRESENCE_V2_PROFILE.body_model,face:PRESENCE_V2_PROFILE.face_model,runtime:PRESENCE_V2_PROFILE.runtime}, legacy_id:true }, // current 0.10.2
+  { manifest_sha256:PRESENCE_V2_PROFILE.manifest_sha256, pipeline_sha256:'906b881633dd9a5fcf7347790fd18ce81f0d768255f63198cab21334ae335d77',
+    model_versions:{body:PRESENCE_V2_PROFILE.body_model,face:PRESENCE_V2_PROFILE.face_model,runtime:PRESENCE_V2_PROFILE.runtime}, legacy_id:true }, // 0.10.1, retained after future pin changes
+  { manifest_sha256:PRESENCE_V2_PROFILE.manifest_sha256, pipeline_sha256:'7d8e7edd31110372295e909b8ba8b75c91b2bbd9a83a5862771189eed1c96016',
+    model_versions:{body:PRESENCE_V2_PROFILE.body_model,face:PRESENCE_V2_PROFILE.face_model,runtime:PRESENCE_V2_PROFILE.runtime}, legacy_id:true }, // 0.10.0
+];
+function legacyPresenceBindingId(assignmentId:string, config:PresenceBindingConfig) {
+  return `measurement_${digest([assignmentId, config.profile, config, config.calibration_revision])}`;
+}
+function provenancePresenceBindingId(assignmentId:string,config:PresenceBindingConfig,provenance:{manifest_sha256:string;pipeline_sha256:string;model_versions:{body:string;face:string;runtime:string}}) {
+  return `measurement_${digest([assignmentId,config.profile,config,config.calibration_revision,provenance.manifest_sha256,provenance.pipeline_sha256,
+    provenance.model_versions.body,provenance.model_versions.face,provenance.model_versions.runtime])}`;
+}
 
 export function presenceBindingConfig(configVersion: string | number, countCeiling?: number, confidence?: number, calibration?: any): PresenceBindingConfig {
   const confidenceValue = Number(confidence);
@@ -47,7 +64,8 @@ export function presenceBindingConfig(configVersion: string | number, countCeili
 }
 
 export function presenceBindingId(assignmentId: string, config: PresenceBindingConfig): string {
-  return `measurement_${digest([assignmentId, config.profile, config, config.calibration_revision])}`;
+  return provenancePresenceBindingId(assignmentId,config,{manifest_sha256:PRESENCE_V2_PROFILE.manifest_sha256,pipeline_sha256:PRESENCE_V2_PROFILE.pipeline_sha256,
+    model_versions:{body:PRESENCE_V2_PROFILE.body_model,face:PRESENCE_V2_PROFILE.face_model,runtime:PRESENCE_V2_PROFILE.runtime}});
 }
 
 export function makePresenceBinding(assignment: any, device: any, screen: any, config: PresenceBindingConfig, now: string) {
@@ -73,9 +91,13 @@ export function validatePresenceBinding(binding: any, assignment: any, device: a
   const config = binding.config;
   if (!config || config.profile !== PRESENCE_V2_PROFILE.id || config.metrics !== PRESENCE_V2_PROFILE.metric_schema || config.config_version !== assignment?.config_version) return false;
   if (config.calibration_revision === null ? config.calibration !== null : !config.calibration || !Number.isFinite(config.calibration.yaw) || !Number.isFinite(config.calibration.pitch)) return false;
-  if (binding.model_versions?.body !== PRESENCE_V2_PROFILE.body_model || binding.model_versions?.face !== PRESENCE_V2_PROFILE.face_model || binding.model_versions?.runtime !== PRESENCE_V2_PROFILE.runtime) return false;
-  if(binding.manifest_sha256!==PRESENCE_V2_PROFILE.manifest_sha256||binding.pipeline_sha256!==PRESENCE_V2_PROFILE.pipeline_sha256)return false;
-  return binding.id === presenceBindingId(assignment.id, config);
+  const versions=binding.model_versions;
+  if(!versions||typeof versions.body!=='string'||typeof versions.face!=='string'||typeof versions.runtime!=='string')return false;
+  const provenance=APPROVED_BINDING_PROVENANCE.find(p=>p.manifest_sha256===binding.manifest_sha256&&p.pipeline_sha256===binding.pipeline_sha256
+    &&p.model_versions.body===versions.body&&p.model_versions.face===versions.face&&p.model_versions.runtime===versions.runtime);
+  if(!provenance)return false;
+  return binding.id===provenancePresenceBindingId(assignment.id,config,provenance)
+    || provenance.legacy_id&&binding.id===legacyPresenceBindingId(assignment.id,config);
 }
 
 export function sameBinding(a: any, b: any): boolean {
