@@ -138,6 +138,7 @@ test('attention pagination does not double first-page totals and keeps unavailab
  const csv=lib.dailyReportCsv({...result,daily:[],hourly:[],coverage:{started_at:'2026-01-01T00:00:00Z',complete:true}},{from:'2026-01-02',to:'2026-01-02'}).split('\r\n');
  const header=csv[0].split(',').map(x=>x.slice(1,-1)),row=csv.at(-1).split(',').map(x=>x.slice(1,-1));assert.equal(row[header.indexOf('asset_versions')],'1');assert.equal(row[header.indexOf('calibration_provenance')],'default|guided:calA');assert.equal(row[header.indexOf('calibrated_attention_observed_share')],'0.8');
  assert.equal(row[header.indexOf('looking_person_ms')],'20000');assert.equal(row[header.indexOf('estimated_impressions')],'10');assert.equal(row[header.indexOf('attentive_impressions')],'10');assert.equal(row.length,header.length);assert.equal(csv[1].split(',').length,header.length,'paid-delivery CSV row has the same width as the header');
+ assert.equal(row[header.indexOf('presence_person_ms')],'30000');assert.equal(row[header.indexOf('mean_people_per_body_observed_ms')],'0.375','selected-profile body average is reproducible from the exported profile numerator and observed-time denominator');
 });
 
 test('attention export follows one selected compatible profile and keeps known zero distinct from no coverage',()=>{

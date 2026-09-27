@@ -18,19 +18,6 @@ import { reasonLabel } from '@/lib/readiness';
 import { ScreenDiagnostics } from './screen-diagnostics';
 import { ScreenMaintenance } from './screen-maintenance';
 
-function AttentionV1Setting({ screen, onChanged }: { screen:any; onChanged:()=>Promise<unknown> }) {
-  const [busy,setBusy]=useState(false),[error,setError]=useState('');
-  const enabled=screen.attention_settings?.enabled===true;
-  const save=async(value:boolean)=>{setBusy(true);setError('');try{await api(`/screen/${screen.id}/attention`,{enabled:value,profile:'attention-v1/mediapipe-1.0.1'});await onChanged();}catch(e){setError((e as Error).message);}finally{setBusy(false);}};
-  return <Card className="mb-4 space-y-3 p-4" aria-label="Attention analytics settings">
-    <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold">Legacy Attention V1 compatibility</h3>
-      <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">Updated camera-enabled players use the pinned combined body and face profile automatically. This opt-in preserves the historical Attention V1 behavior on older players. Analysis stays on the player; frames are discarded and never uploaded. Reports keep model profiles separate, and analytics never change billing or settlement. Model files download on first setup and are cached for offline restarts.</p></div>
-      <Button disabled={busy} variant={enabled?'outline':'default'} onClick={()=>void save(!enabled)}>{busy?'Saving…':enabled?'Disable legacy profile':'Enable for older players'}</Button></div>
-    <p className="text-xs text-muted-foreground">Status: {enabled?'Legacy V1 analytics are enabled for compatible older players. Updated camera players use the combined V2 profile.':'Legacy V1 is off. Updated camera players still use the combined V2 profile.'}{enabled&&screen.attention_calibration?.completed_at?` · Calibration last saved ${new Date(screen.attention_calibration.completed_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})} IST.`:enabled?' · Using default settings; guided calibration is optional.':''}</p>
-    {error&&<p role="alert" className="text-sm text-destructive">{error}</p>}
-  </Card>;
-}
-
 export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: string) => void; onChanged: () => void }) {
   const [d, setD] = useState<any>(null);
   const currentId = useRef(id); currentId.current = id;
@@ -113,7 +100,7 @@ export function ScreenDetail({ id, onGo, onChanged }: { id: string; onGo: (g: st
         ))}
       </div>
 
-      {tab === 'config' && mayEdit && <>{caps.includes('platform')&&<AttentionV1Setting screen={s} onChanged={load}/>}<ScreenConfig screenId={id} d={d} onChanged={load} /></>}
+      {tab === 'config' && mayEdit && <ScreenConfig screenId={id} d={d} onChanged={load} />}
       {tab === 'live' && (<>
 
       {edit && mayEdit && (

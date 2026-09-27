@@ -125,21 +125,11 @@ export const SETTINGS: Setting[] = [
   T('camera_device_id', 'Camera device', 'measurement', 'text', '', {
     info: 'Populated by the paired player. Leave empty to use the first camera found.' }),
   T('camera_url', 'IP camera URL', 'measurement', 'text', '', { info: 'RTSP or HTTP, when the source is an IP camera.' }),
-  T('inference_res', 'Inference resolution', 'measurement', 'select', '640x480', { common: true, options: ['320x240', '640x480', '1280x720'],
-    info: 'Frames are downscaled before detection. Higher is not better — it is slower, and people far from the screen are not the audience.' }),
-  T('sample_interval_s', 'Sample interval', 'measurement', 'number', 2, { common: true, unit: 's', locked: true,
-    lockReason: 'Measurement consistency — screens must be comparable',
-    info: 'How often a frame is sampled during a play. Every presence figure on the platform assumes this value.' }),
-  T('model', 'Detection model', 'measurement', 'select', 'coco-ssd', { common: true, options: ['coco-ssd'], locked: true,
-    lockReason: 'Recorded against every measurement as model_ver',
-    info: 'Legacy player setting: COCO-SSD 2.2.3 lite_mobilenet_v2. Updated camera-enabled players use the independently pinned combined V2 profile; actual model provenance is recorded with each play.' }),
+  // Detector, cadence, and region are pinned in the V2 profile. Legacy values
+  // stay on saved assignments and receipts for historical validation.
   T('confidence_min', 'Confidence floor', 'measurement', 'number', 0.45, { locked: true,
     lockReason: 'Moves every number on the platform',
     info: 'Detections below this confidence are discarded.' }),
-  T('min_box_px', 'Minimum subject size', 'measurement', 'number', 24, { unit: 'px',
-    info: 'Ignores people far in the background who could not read the screen.' }),
-  T('detection_zone', 'Detection zone', 'measurement', 'rect', { x: 0, y: 0, w: 100, h: 100 }, { common: true,
-    info: 'The part of the frame that counts as in front of the screen. The gap between this and the whole frame is the adjustment factor.' }),
   T('count_ceiling', 'Count ceiling', 'measurement', 'number', 50, {
     info: 'Caps absurd readings from a crowd surge or a mirror facing the camera.' }),
   T('measure_during_play_only', 'Measure only during a play', 'measurement', 'toggle', true, { locked: true,
@@ -152,11 +142,6 @@ export const SETTINGS: Setting[] = [
   T('presence_metric', 'Metric', 'measurement', 'derived', 'avg_persons', { locked: true,
     lockReason: 'Phase 1 metric',
     info: 'Mean of per-sample counts across one play. Not reach, not impressions, not unique people.' }),
-  T('attention_enabled', 'Legacy attention analytics', 'measurement', 'toggle', false, { locked: true,
-    lockReason: 'Enabled per screen by a platform administrator; never changes presence or billing',
-    info: 'Optional V1 compatibility for older players. Updated camera-enabled players use the pinned V2 body/face profile; calibration remains optional.' }),
-  T('attention_profile', 'Legacy attention profile', 'measurement', 'select', 'attention-v1/mediapipe-1.0.1', { locked: true,
-    lockReason: 'Versioned profile assigned by the platform', options: ['attention-v1/mediapipe-1.0.1'] }),
 
   // ----------------------------------------------------------------- privacy
   T('upload_frames', 'Frames leave the device', 'privacy', 'derived', 'never', { common: true, locked: true,

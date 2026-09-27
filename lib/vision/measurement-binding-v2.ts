@@ -27,7 +27,9 @@ const digest = (value: unknown) => createHash('sha256').update(canonical(value))
 // queued receipts. Add each released pin here before a future runtime pin is deployed.
 const APPROVED_BINDING_PROVENANCE = [
   { manifest_sha256:PRESENCE_V2_PROFILE.manifest_sha256, pipeline_sha256:PRESENCE_V2_PROFILE.pipeline_sha256,
-    model_versions:{body:PRESENCE_V2_PROFILE.body_model,face:PRESENCE_V2_PROFILE.face_model,runtime:PRESENCE_V2_PROFILE.runtime}, legacy_id:true }, // current 0.10.3
+    model_versions:{body:PRESENCE_V2_PROFILE.body_model,face:PRESENCE_V2_PROFILE.face_model,runtime:PRESENCE_V2_PROFILE.runtime} }, // current candidate 0.10.4
+  { manifest_sha256:PRESENCE_V2_PROFILE.manifest_sha256, pipeline_sha256:'a6de272583e9697e5e9577c9f724567b6acfaac2eb5d1d3648dfa5caa8ac0def',
+    model_versions:{body:PRESENCE_V2_PROFILE.body_model,face:PRESENCE_V2_PROFILE.face_model,runtime:PRESENCE_V2_PROFILE.runtime}, legacy_id:true }, // deployed 0.10.3
   { manifest_sha256:PRESENCE_V2_PROFILE.manifest_sha256, pipeline_sha256:'906b881633dd9a5fcf7347790fd18ce81f0d768255f63198cab21334ae335d77',
     model_versions:{body:PRESENCE_V2_PROFILE.body_model,face:PRESENCE_V2_PROFILE.face_model,runtime:PRESENCE_V2_PROFILE.runtime}, legacy_id:true }, // deployed 0.10.1/0.10.2 receipt provenance
   { manifest_sha256:PRESENCE_V2_PROFILE.manifest_sha256, pipeline_sha256:'7d8e7edd31110372295e909b8ba8b75c91b2bbd9a83a5862771189eed1c96016',
@@ -97,7 +99,7 @@ export function validatePresenceBinding(binding: any, assignment: any, device: a
     &&p.model_versions.body===versions.body&&p.model_versions.face===versions.face&&p.model_versions.runtime===versions.runtime);
   if(!provenance)return false;
   return binding.id===provenancePresenceBindingId(assignment.id,config,provenance)
-    || provenance.legacy_id&&binding.id===legacyPresenceBindingId(assignment.id,config);
+    || (provenance.legacy_id===true&&binding.id===legacyPresenceBindingId(assignment.id,config));
 }
 
 export function sameBinding(a: any, b: any): boolean {

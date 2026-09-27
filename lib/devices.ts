@@ -7,6 +7,7 @@ import { deviceDiagnosticRoute, diagnosticOffer, DiagnosticError } from './diagn
 import { ATTENTION_PROFILE, validateAttentionCalibration, validateAttentionSummary, attentionQueuedEventBytes, ATTENTION_LIMITS, type AttentionCalibration, type CalibrationBinding } from './vision/attention-contracts';
 import { PRESENCE_V2_PROFILE, makePresenceBinding, presenceBindingConfig, sameBinding, validatePresenceBinding } from './vision/measurement-binding-v2';
 import { validatePresenceV2Summary } from './vision/attention-v2-contracts';
+import { sanitizePresenceDiagnostic, upsertPresenceDiagnosticHistory } from './vision/performance-telemetry';
 const PAIR_TTL = 10 * 60e3, BACKLOG_TTL = 72 * 3600e3, ASSIGNMENT_TTL = 3600e3;
 const hash = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 const iso = (n: number) => new Date(n).toISOString();
@@ -89,6 +90,7 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
   const { screen, device } = auth;
   if ((body.screen_id && body.screen_id !== screen.id) || (body.org_id && body.org_id !== screen.org_id) || (seg[0] === 'playlist' && seg[1] !== screen.id)) return fail(404, 'Not found');
   if (path.startsWith('diagnostic/')) {
+    if (path === 'diagnostic/start' && (options.playerProtocol || body.player_protocol || 0) < 3) return fail(426, 'Player update required. Reload this page before starting a screen test.');
     try { return deviceDiagnosticRoute(db, path, body, screen, device, now, path === 'diagnostic/start' ? options.playlist(screen, device).config_version : undefined, options.playerProtocol || body.player_protocol || 0); }
     catch (e) { if (e instanceof DiagnosticError) return fail(e.status, e.message); throw e; }
   }
@@ -128,6 +130,8 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
       const cleanStage=(x:any)=>({status:x.status,attempts:x.attempts,retry_after_ms:x.retry_after_ms,detail:x.detail,
         worker_offscreen_canvas:typeof x.worker_offscreen_canvas==='boolean'?x.worker_offscreen_canvas:null,worker_webgl:typeof x.worker_webgl==='boolean'?x.worker_webgl:null,worker_webgl2:typeof x.worker_webgl2==='boolean'?x.worker_webgl2:null});
       const runtime=v.runtime,cap=runtime?.capabilities;
+      const diagnostics=v.diagnostics===undefined?null:sanitizePresenceDiagnostic(v.diagnostics,now);
+      if(v.diagnostics!==undefined&&!diagnostics)return fail(400,'Invalid aggregate model diagnostics');
       if(v.recovery!==undefined&&(!v.recovery||!stageReport(v.recovery.body)||!stageReport(v.recovery.face)))return fail(400,'Invalid stage recovery status');
       if(runtime!==undefined&&(!runtime||!['Safari','Chrome','Firefox','Edge','Other'].includes(runtime.browser)||!Number.isSafeInteger(runtime.browser_major)||runtime.browser_major<0||runtime.browser_major>999
         ||!['macOS','iOS','Windows','Android','Linux','Other'].includes(runtime.os)||!cap||['worker','offscreen_canvas','create_image_bitmap','webgl','webgl2','secure_context'].some(k=>typeof cap[k]!=='boolean')))return fail(400,'Invalid player runtime status');
@@ -137,9 +141,11 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
         if(v.presence_profile_id!==PRESENCE_V2_PROFILE.id||v.model_ver!==null&&v.model_ver!==PRESENCE_V2_PROFILE.body_model
           ||!validatePresenceBinding(binding,a,device,screen,v.measurement_binding_id))return fail(400,'Heartbeat does not match an issued measurement binding');
       }else if(v.model_ver===PRESENCE_V2_PROFILE.body_model)return fail(400,'New model status needs its issued measurement binding');
+      if(diagnostics)device.vision_diagnostics=upsertPresenceDiagnosticHistory(device.vision_diagnostics,diagnostics);
       device.vision = { camera_state: v.camera_state, model_state: v.model_state, model_ver: v.model_ver, presence_profile_id:v.presence_profile_id||null,
         measurement_binding_id:v.measurement_binding_id||null,assignment_id:v.assignment_id||null,last_sample_at: v.last_sample_at,
-        ...(v.recovery?{recovery:{body:cleanStage(v.recovery.body),face:cleanStage(v.recovery.face)}}:{}),...(runtime?{runtime:{browser:runtime.browser,browser_major:runtime.browser_major,os:runtime.os,capabilities:{worker:cap.worker,offscreen_canvas:cap.offscreen_canvas,create_image_bitmap:cap.create_image_bitmap,webgl:cap.webgl,webgl2:cap.webgl2,secure_context:cap.secure_context}}}:{}),reported_at: iso(now), source: 'device_report' };
+        ...(v.recovery?{recovery:{body:cleanStage(v.recovery.body),face:cleanStage(v.recovery.face)}}:{}),...(runtime?{runtime:{browser:runtime.browser,browser_major:runtime.browser_major,os:runtime.os,capabilities:{worker:cap.worker,offscreen_canvas:cap.offscreen_canvas,create_image_bitmap:cap.create_image_bitmap,webgl:cap.webgl,webgl2:cap.webgl2,secure_context:cap.secure_context}}}:{}),
+        ...(device.vision_diagnostics?{diagnostics_history:device.vision_diagnostics}:{}),reported_at: iso(now), source: 'device_report' };
     }
     if(body.live_attention!==undefined){
       const live=body.live_attention, binding=(db.measurement_bindings||[]).find((row:any)=>row.id===live?.measurement_binding_id),assignment=(db.device_assignments||[]).find((row:any)=>row.id===live?.assignment_id&&row.device_id===device.id&&row.screen_id===screen.id);
@@ -170,7 +176,7 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
     return { changed: true, body: { ok: true, server_time: iso(now), config_version: options.playlist(screen, device).config_version } };
   }
   if (seg[0] === 'playlist') {
-    if ((options.playerProtocol || 0) < 2) return {changed:false,body:{screen:safeScreen(screen),items:[],filler_items:[],reload_required:true,server_time:iso(now)}};
+    if ((options.playerProtocol || 0) < 3) return {status:426,body:{error:'Player update required. Reload this page to install the current camera measurement protocol.',reload_required:true,items:[]},changed:false};
     const held = device.assignment_set;
     const heldIndex = Number.isSafeInteger(held?.rotation_index) && held.rotation_index >= 0 ? held.rotation_index : 0;
     let rotationIndex = heldIndex;
@@ -185,22 +191,49 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
     // Re-issuing identical assignments on every poll is what made the usage ledger unbounded, and an
     // unbounded ledger is one that has to evict — which hands back allowances that were already spent.
     // The same playlist under the same config keeps the same assignments until they expire.
-    // The signature must cover everything the assignment row freezes — media identity, the rate it will be
-    // billed at, and the measurement settings it was issued under — not just which campaign and creative.
-    // Anything omitted here is a field where the playlist we serve and the evidence we keep can disagree.
-    const playlistSignature = (playlist: Playlist, calibrationOverride?: any) => {
-      const p = playlist;
-      const signatureCalibration = calibrationOverride === undefined ? p.config.attention_calibration : calibrationOverride;
-      const frozen = p.items.map((item: any) => {
+    // Sign current grants only on fields that still govern playback or the frozen allowance.
+    // COCO/V1 settings were removed from the player config, so retaining them here would rotate
+    // otherwise valid old grants on reload. Their old signature is reconstructed below from the
+    // immutable assignment rows once, then the held set is rebased to this current signature.
+    const frozenItem = (p:Playlist,item:any) => {
       const c = db.campaigns.find((x: any) => x.id === item.campaign_id);
       return [item.campaign_id, c?.advertiser_id || null, item.creative_id, item.youtube_id || null, item.asset_id || null,
         economics(item), item.duration_s, item.media_type || 'video', item.width || null, item.height || null, item.kind || 'paid', item.asset_sha256 || null, item.rate_type ?? c?.rate_type ?? 'flat', Number(item.rate_value ?? c?.rate_value) || 0, c?.committed_budget ?? null,
-        p.config_version, p.config.camera_fail_mode || 'continue', p.config.model || null,
-        Number(p.config.sample_interval_s) || 2, Number(p.config.count_ceiling) || 50,
-        p.config.attention_enabled === true, p.config.attention_profile || null, signatureCalibration?.revision || null,signatureCalibration||null,
-        p.config.attention_enabled === true ? ATTENTION_PROFILE.manifest_sha256 : null,p.config.attention_enabled === true ? ATTENTION_PROFILE.pipeline_sha256 : null];
-    });
-      return hash(JSON.stringify({ frozen, config_version: p.config_version, rotation_version: p.rotation_version ?? null }));
+        p.config_version, p.config.camera_fail_mode || 'continue', Number(p.config.count_ceiling) || 50];
+    };
+    const playlistSignature = (playlist: Playlist) => hash(JSON.stringify({frozen:playlist.items.map(item=>frozenItem(playlist,item)),config_version:playlist.config_version,rotation_version:playlist.rotation_version??null}));
+    const historicalPlaylistSignatures = (playlist:Playlist,rows:any[]) => {
+      // Held assignments are only the successfully funded subset of the signed playlist.
+      // Check that each one still maps to a current item, but rebuild the signature over
+      // every current item (including entries that previously could not be funded).
+      const identity=(item:any)=>JSON.stringify([item?.campaign_id??null,item?.creative_id,item?.kind||'paid']);
+      const unmatched=playlist.items.map(identity);
+      for(const row of rows){const index=unmatched.indexOf(identity(row));if(!row||index<0)return null;unmatched.splice(index,1);}
+      // The retired settings were resolved from platform defaults. For protocol-3 grants,
+      // model_configured records EfficientDet, but the old signature still used config.model
+      // (COCO); attention_profile was also included even while attention was disabled.
+      // Reconstruct only known removed defaults plus values still frozen on the grant.
+      const signatures:string[]=[];
+      const unique=(values:any[])=>values.filter((value,index,array)=>array.indexOf(value)===index);
+      const models=unique([playlist.config.model||'coco-ssd',...rows.map(a=>a.model_configured||null)]);
+      const intervals=unique([Number(playlist.config.sample_interval_s)||2,...rows.map(a=>Number(a.sample_interval_s)||2)]);
+      const profiles=unique([playlist.config.attention_profile||'attention-v1/mediapipe-1.0.1',...rows.map(a=>a.attention_profile||null)]);
+      const enabledValues=unique([playlist.config.attention_enabled===true,rows.some(a=>a.attention_enabled===true)]);
+      const calibrationBinding=(calibration:any,profile:any,deviceId:string,screenId:string)=>profile===ATTENTION_PROFILE.id&&calibration&&validateAttentionCalibration(calibration,{profile:ATTENTION_PROFILE.id,device_id:deviceId,screen_id:screenId,camera_ref:calibration.camera_ref,width:calibration.width,height:calibration.height,rotation:calibration.rotation})?calibration:null;
+      const currentCalibration=calibrationBinding(playlist.config.attention_calibration,playlist.config.attention_profile||ATTENTION_PROFILE.id,device.id,screen.id);
+      const calibrations=unique([currentCalibration,...rows.map(a=>calibrationBinding(a.attention_calibration,a.attention_profile,a.device_id,a.screen_id))].filter(Boolean));
+      // The deployed signature could use the current screen calibration (when no override
+      // was supplied) or a valid calibration frozen on a held grant. Keep the null variant
+      // too: the deployed held-set path explicitly passed null when no grant had one.
+      calibrations.unshift(null);
+      for(const model of models)for(const interval of intervals)for(const profile of profiles)for(const enabled of enabledValues)for(const calibration of calibrations){
+        const frozen=playlist.items.map((item:any,index:number)=>{
+          return [...frozenItem(playlist,item).slice(0,15),playlist.config_version,playlist.config.camera_fail_mode||'continue',model,interval,Number(playlist.config.count_ceiling)||50,
+            enabled,profile,calibration?.revision||null,calibration,enabled?ATTENTION_PROFILE.manifest_sha256:null,enabled?ATTENTION_PROFILE.pipeline_sha256:null];
+        });
+        signatures.push(hash(JSON.stringify({frozen,config_version:playlist.config_version,rotation_version:playlist.rotation_version??null})));
+      }
+      return signatures;
     };
     const grantItem = (item: any, validUntil: number) => {
       const c = db.campaigns.find((c: any) => c.id === item.campaign_id);
@@ -223,7 +256,7 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
     };
     const bindItems = (items: any[]) => items.map(item => {
       const assignment = db.device_assignments.find((a: any) => a.id === item.assignment_id);
-      if (!assignment || (options.playerProtocol || 0) < 3 || !screen.has_camera || p.config.camera_source === 'ip') return item;
+      if (!assignment || (options.playerProtocol || 0) < 3 || assignment.model_configured !== PRESENCE_V2_PROFILE.body_model || !screen.has_camera || p.config.camera_source === 'ip') return item;
       const measurementConfig = presenceBindingConfig(assignment.config_version, assignment.count_ceiling, p.config.confidence_min, p.config.attention_calibration);
       const binding = makePresenceBinding(assignment, device, screen, measurementConfig, iso(now));
       db.measurement_bindings ||= [];
@@ -235,8 +268,8 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
     });
     let signature = playlistSignature(p);
     const heldRows=(held?.ids||[]).map((id:string)=>db.device_assignments.find((a:any)=>a.id===id)).filter(Boolean);
-    const heldCalibration=heldRows.find((a:any)=>a.attention_calibration)?.attention_calibration||null;
-    const heldSignatureMatches=!!held&&(held.signature===signature||((options.playerProtocol||0)>=3&&held.signature===playlistSignature(p,heldCalibration)));
+    const historicalSignatures=(options.playerProtocol||0)>=3?historicalPlaylistSignatures(p,heldRows)||[]:[];
+    const heldSignatureMatches=!!held&&(held.signature===signature||historicalSignatures.includes(held.signature));
     if (held && heldSignatureMatches && Date.parse(held.valid_until) > now + 60e3
       && Array.isArray(held.ids)
       && (!held.ids.some((id: string) => db.device_assignments.find((a: any) => a.id === id)?.kind !== 'filler')

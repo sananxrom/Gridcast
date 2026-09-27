@@ -497,17 +497,6 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     const assignment = seg[4] === 'revoke' ? revokeDiagnostic(db,screen,seg[3],actor) : requestDiagnostic(db,screen,actor,{config:cfg.flatten(resolveFor(screen)),config_version:db.settings?.config_revision || 1});
     await save(); return {body:assignment};
   }
-  if (method === 'POST' && seg[0] === 'screen' && seg[1] && seg[2] === 'attention') {
-    if (!isAdmin) throw new AccessError(403,'Only a platform administrator can enable attention analytics');
-    const s = db.screens.find((x: any) => x.id === seg[1]);
-    if (!s) return { status: 404, body: { error: 'not found' } };
-    if (Object.keys(body).some(k => !['enabled','profile'].includes(k)) || typeof body.enabled !== 'boolean')
-      throw new AccessError(400,'Choose whether Attention V1 is enabled for this screen');
-    if (body.profile !== ATTENTION_PROFILE.id) throw new AccessError(400,'Unsupported attention profile');
-    s.attention_settings = { enabled:body.enabled, profile:ATTENTION_PROFILE.id, updated_at:nowISO(), updated_by:actor.id };
-    bumpConfig(); await save();
-    return { body:{ ok:true, attention_settings:s.attention_settings, config_version:db.settings.config_revision } };
-  }
   if (method === 'POST' && seg[0] === 'screen' && seg[1] && seg[2] === 'exclusions') {
     const s = db.screens.find((x: any) => x.id === seg[1]);
     if (!s) return { status: 404, body: { error: 'not found' } };

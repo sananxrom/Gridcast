@@ -35,7 +35,7 @@ changing a screen's quote does not rewrite past campaign agreements.
 ## Measurement and delivery
 
 The browser runs COCO-SSD `2.2.3/lite_mobilenet_v2` with TensorFlow.js `4.22.0`.
-Model files are served from `public/models/coco-ssd`, with source and SHA-256 records.
+The player measures eligible local-camera screens with the pinned V2 body and face models. Historical COCO receipts remain validated as legacy records; the retired COCO model is no longer shipped or loaded.
 The applied confidence setting and two-second sampling interval govern counting.
 
 Presence means average people in front of the screen while an ad plays. It is not

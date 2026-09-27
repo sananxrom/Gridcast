@@ -18,7 +18,7 @@ async function fixture(role='platform_admin',withCoverage=true){
   else if(url.pathname==='/api/metrics'){
    calls.push(url);const second=!!url.searchParams.get('after');
    const counters=withCoverage?{...zero(),plays_rendered:second?100:20,plays_billable:second?80:20,presence_n:second?40:10,presence_sum:second?120:20}:zero();
-   result={totals:counters,byScreen:withCoverage?{screen1:counters}:{},byCampaign:{},byCreative:{},daily:withCoverage?{[date]:counters}:{},hourly:withCoverage?{'12':counters}:{},coverage:{started_at:withCoverage?date+'T01:00:00Z':null,complete:false},last_at:withCoverage?date+'T06:30:00Z':null,rows:withCoverage?1:0,has_more:withCoverage&&!second,next_cursor:withCoverage&&!second?'page2':null};
+   result={totals:counters,byScreen:withCoverage?{screen1:counters}:{},byCampaign:{},byCreative:{},daily:withCoverage?{[date]:counters}:{},hourly:withCoverage?{'12':counters}:{},attentionProfiles:{},attention_page:{has_more:false,next_cursor:null},coverage:{started_at:withCoverage?date+'T01:00:00Z':null,complete:false},last_at:withCoverage?date+'T06:30:00Z':null,rows:withCoverage?1:0,has_more:withCoverage&&!second,next_cursor:withCoverage&&!second?'page2':null};
   }
   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(result)});
  });

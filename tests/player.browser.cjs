@@ -20,7 +20,7 @@ function currentPlayerStyles() {
  return stylesheet;
 }
 const compile = file=>ts.transpileModule(fs.readFileSync(path.join(root,file),'utf8'),{fileName:file,compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,jsx:ts.JsxEmit.React,esModuleInterop:true}}).outputText;
-const calibrationSource=compile('lib/vision/calibration.ts'),localDiagnosticsSource=compile('lib/vision/local-diagnostics-v2.ts'),attentionV2Source=compile('lib/vision/attention-v2-contracts.ts');
+const calibrationSource=compile('lib/vision/calibration.ts'),cameraCalibrationSource=compile('lib/vision/camera-calibration.ts'),localDiagnosticsSource=compile('lib/vision/local-diagnostics-v2.ts'),attentionV2Source=compile('lib/vision/attention-v2-contracts.ts');
 const attentionSource=compile('lib/vision/attention-contracts.ts'),metricsSource=compile('lib/vision/metrics.ts'),productionSource=compile('lib/vision/production.ts');
 const deviceModule={exports:{}};new Function('require','module','exports',compile('lib/devices.ts'))(name=>name.startsWith('.')?require('./load-lib.cjs')(name.slice(2)):require(name),deviceModule,deviceModule.exports);
 const {issuePairing,deviceRoute}=deviceModule.exports;
@@ -30,6 +30,7 @@ const cache={exports:{}};new Function('module','exports',${JSON.stringify(compil
 const diagnostic={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-diagnostics.ts'))})(diagnostic,diagnostic.exports);
 const vision={exports:{}};new Function('module','exports',${JSON.stringify(compile('lib/player-vision.ts'))})(vision,vision.exports);
 const calibration={exports:{}};new Function('require','module','exports',${JSON.stringify(calibrationSource)})(()=>({}),calibration,calibration.exports);
+const cameraCalibration={exports:{}};new Function('module','exports',${JSON.stringify(cameraCalibrationSource)})(cameraCalibration,cameraCalibration.exports);
 const cryptoStub={createHash:()=>({update(){return this;},digest(){return '0'.repeat(64);}})};
 const attention={exports:{}};new Function('require','module','exports',${JSON.stringify(attentionSource)})(name=>name==='node:crypto'?cryptoStub:{},attention,attention.exports);
 const metrics={exports:{}};new Function('require','module','exports',${JSON.stringify(metricsSource)})(()=>({}),metrics,metrics.exports);
@@ -59,6 +60,8 @@ const player={exports:{}};const fixtureRequire=name=>{
  if(name==='@/lib/player-diagnostics')return diagnostic.exports;
  if(name==='@/lib/player-vision')return vision.exports;
  if(name==='@/lib/vision/calibration')return calibration.exports;
+ if(name==='@/lib/vision/camera-calibration')return cameraCalibration.exports;
+ if(name==='@/lib/vision/metrics')return metrics.exports;
  if(name==='@/lib/vision/attention-contracts')return attention.exports;
  if(name==='@/lib/vision/production')return production.exports;
  if(name==='@/lib/vision/attention-summary')return attentionSummary.exports;
@@ -110,7 +113,8 @@ async function harness(options={}) {
   if(u.pathname==='/player-sw.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(root,'public/player-sw.js')));return;}
   if(u.pathname==='/vision-lab/worker-attention-v1.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(root,'public/vision-lab/worker-attention-v1.js')));return;}
   if(u.pathname==='/vision-lab/attention-v1-assets.json'){res.setHeader('Content-Type','application/json');res.end(fs.readFileSync(path.join(root,'public/vision-lab/attention-v1-assets.json')));return;}
-  if(u.pathname.startsWith('/api/playlist/')&&options.failFirstPlaylist&&!playlistFailed){playlistFailed=true;res.writeHead(503,{'Content-Type':'application/json'});res.end('{"error":"Fixture connection failed"}');return;}
+  if(u.pathname==='/fixture-seed'){res.writeHead(200,{'Content-Type':'text/html'});res.end('<!doctype html><html><body>storage seed</body></html>');return;}
+  if(u.pathname.startsWith('/api/playlist/')&&(options.failAllPlaylists||options.failFirstPlaylist&&!playlistFailed)){playlistFailed=true;res.writeHead(503,{'Content-Type':'application/json'});res.end('{"error":"Fixture connection failed"}');return;}
   if(u.pathname.startsWith('/models/coco-ssd/')){res.setHeader('Content-Type',u.pathname.endsWith('.json')?'application/json':'application/octet-stream');res.end(fs.readFileSync(path.join(root,'public',u.pathname)));return;}
   if(u.pathname==='/tf.js'||u.pathname==='/coco.js'){res.setHeader('Content-Type','application/javascript');res.end(fs.readFileSync(path.join(root,u.pathname==='/tf.js'?'node_modules/@tensorflow/tfjs/dist/tf.min.js':'node_modules/@tensorflow-models/coco-ssd/dist/coco-ssd.min.js')));return;}
   if(overrides.has(u.pathname)){const o=overrides.get(u.pathname);res.writeHead(o.status,{'Content-Type':'application/json'});res.end(JSON.stringify(o.body));return;}
@@ -156,6 +160,17 @@ async function harness(options={}) {
       const result=await original({audio:false,video:{width:640,height:480}});window.fixtureStream=result;return result;
     };
   },{credential:{token:paired.token,device_id:paired.device.id,screen_id:'screen1'},options});
+  if(options.legacyCachedSchedule){
+   await page.goto(base+'/fixture-seed');
+   await page.evaluate(async deviceId=>{
+    const open=indexedDB.open('gridcast-media-v1',1);open.onupgradeneeded=()=>{for(const name of ['media','schedules','allowances'])open.result.createObjectStore(name,{keyPath:'key'});};
+    const database=await new Promise((resolve,reject)=>{open.onsuccess=()=>resolve(open.result);open.onerror=()=>reject(open.error);});
+    const validUntil=new Date(Date.now()+60000).toISOString(),key='cached-asset:'+'a'.repeat(64),transaction=database.transaction(['media','schedules'],'readwrite');
+    transaction.objectStore('media').put({key,blob:new Blob(['offline media'],{type:'video/webm'})});
+    transaction.objectStore('schedules').put({key:deviceId,revision:1,sourceTime:Date.now(),playlist:{screen:{has_camera:true},config:{camera_source:'usb',camera_device_id:'',audio_enabled:true},config_version:7,server_time:new Date().toISOString(),items:[{assignment_id:'old-legacy-grant',valid_until:validUntil,duration_s:10,max_plays:1,kind:'paid',campaign_id:'campaign1',creative_id:'legacy-creative',asset_id:'cached-asset',asset_sha256:'a'.repeat(64),asset_url:'/fixture.webm',asset_bytes:13,asset_mime:'video/webm',media_type:'video'}],filler_items:[]},offset:0,until:Date.now()+60000,saved:Date.now()});
+    await new Promise((resolve,reject)=>{transaction.oncomplete=resolve;transaction.onerror=()=>reject(transaction.error);});database.close();
+   },paired.device.id);
+  }
   await Promise.race([pageFailure,(async()=>{await page.goto(base+'/player');if(options.image)await page.waitForFunction(()=>document.querySelector('img')?.naturalWidth>0);else if(options.youtube)await page.waitForFunction(()=>window.fixtureYT?.startedAt>0,{},{timeout:15000});else if(!options.empty&&!options.unpaired&&!options.attentionEnabled)await page.waitForFunction(()=>{const v=document.querySelector('video[data-role="creative"][data-active="true"]');return v&&!v.paused&&v.currentTime>.1;},{},{timeout:15000});})()]);
  return {page,db,requests,bodies,replies,paired,pageErrors,playlistObservations,releaseCalibrationSave:()=>releaseCalibrationSave(),setItemsEnabled:()=>{forceItems=true;},setConfig:values=>{Object.assign(config,values);configVersion++;if(Object.hasOwn(values,'attention_enabled')||Object.hasOwn(values,'attention_profile')){db.settings||={};db.settings.config_revision=(db.settings.config_revision||0)+1;}},setReply:(path,reply)=>reply?overrides.set(path,reply):overrides.delete(path),cleanup:async()=>{await browser.close();await new Promise(r=>server.close(r));fs.rmSync(temp,{recursive:true,force:true});assert.deepEqual(pageErrors,[],'Player fixture must not have uncaught browser errors');}};
  }catch(e){await browser?.close();await new Promise(r=>server.close(r));fs.rmSync(temp,{recursive:true,force:true});throw e;}
@@ -450,12 +465,13 @@ test('downscaling preserves minimum subject size in source pixels and clears raw
 
 
 test('diagnostic native playback requires no campaign, keeps commercial storage empty, and reload does not run twice', {skip:!executablePath||!ffmpeg}, async()=>{
- const h=await harness({empty:true,diagnostic:true,modelWorking:true,loseFirstDiagnosticAck:true});try{
+ const h=await harness({empty:true,diagnostic:true,presenceV2:true,playerProtocol:3,loseFirstDiagnosticAck:true});try{
   try { await waitFor(()=>h.db.diagnostic_results?.length===1,35000); } catch(error) { console.error('Diagnostic fixture failure',h.db.diagnostic_assignments,await h.page.locator('body').innerText(),h.requests.filter(r=>r.path.includes('diagnostic')));throw error; }
   assert.equal(h.db.plays.length,0);assert.equal(h.db.presence.length,0);assert.deepEqual(h.db.campaigns,[]);
   assert.equal(h.requests.filter(r=>r.path==='/api/play').length,0);
   assert.equal(h.db.diagnostic_results[0].diagnostic,true);assert.equal(h.db.diagnostic_results[0].billable,false);
   assert.equal(h.db.diagnostic_results[0].measured,true);assert.equal(h.db.diagnostic_results[0].avg_persons,1);
+  assert.equal(h.db.diagnostic_results[0].model_ver,presenceV2Profile.body_model);assert.equal(h.db.diagnostic_results[0].model_state,'ready','completion reports retain the finished slot state after its local slot is cleared');
   assert.equal(h.db.devices[0].assignment_uses,undefined);assert.equal(h.db.devices[0].airtime_buckets,undefined);
   assert.ok(await h.page.evaluate(id=>window.fixtureDiagnostic.pendingDiagnostic(id),h.paired.device.id),'Lost acknowledgement keeps result durable');
   await h.page.reload();
@@ -463,6 +479,18 @@ test('diagnostic native playback requires no campaign, keeps commercial storage 
   await new Promise(r=>setTimeout(r,1500));
   assert.equal(h.requests.filter(r=>r.path==='/api/diagnostic/start').length,1);
   assert.equal(h.db.diagnostic_results.length,1);
+ }finally{await h.cleanup();}
+});
+
+test('cached pre-V2 camera schedule stays blocked offline and never starts a retired detector', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({empty:true,legacyCachedSchedule:true,failAllPlaylists:true});try{
+  await waitForBrowser(h.page,async id=>!!(await window.fixtureCache.readySchedule(id)),h.paired.device.id);
+  await h.page.waitForFunction(()=>document.body.innerText.includes('Player update required for this camera screen'));
+  const text=await h.page.locator('body').innerText();assert.match(text,/Connect and reload/);assert.match(text,/saved delivery records remain on this device/);
+  await new Promise(resolve=>setTimeout(resolve,500));
+  assert.equal(h.db.plays.length,0,'An old cached grant cannot start paid playback offline');
+  assert.equal(h.requests.filter(r=>['/tf.js','/coco.js'].includes(r.path)||r.path.startsWith('/models/coco-ssd/')).length,0,'The retired COCO runtime is never requested');
+  assert.equal(await h.page.evaluate(()=>window.fixtureV2RuntimeStarts||0),0,'A V2 binding is required before any current measurement runtime starts');
  }finally{await h.cleanup();}
 });
 
@@ -625,9 +653,9 @@ test('presence V2 keeps camera and healthy peer through consecutive creatives an
  }finally{await h.cleanup();}
 });
 
-test('attention model setup never reveals the local camera panel when commissioning is disabled', {skip:!executablePath||!ffmpeg}, async()=>{
- const h=await harness({attentionEnabled:true,modelWorking:true,attentionModelDelayMs:1200,watchCommissioning:true,config:{diagnostics_overlay:false}});try{
-  await h.page.waitForFunction(()=>window.fixtureAttentionFrames>0,{},{timeout:15000});
+test('presence model setup never reveals the local camera panel when commissioning is disabled', {skip:!executablePath||!ffmpeg}, async()=>{
+ const h=await harness({presenceV2:true,playerProtocol:3,attentionModelDelayMs:1200,watchCommissioning:true,config:{diagnostics_overlay:false}});try{
+  await h.page.waitForFunction(()=>window.fixtureV2Frames>0,{},{timeout:15000});
   assert.equal(await h.page.locator('[data-role="commissioning-preview"]').getAttribute('aria-hidden'),'true');
   assert.equal(await h.page.locator('[data-role="commissioning-stats"]').count(),0);
   assert.equal(await h.page.locator('[data-role="commissioning-preview"] button').count(),0);

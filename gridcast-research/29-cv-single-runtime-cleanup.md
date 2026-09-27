@@ -1,6 +1,6 @@
 # Complete the CV replacement: one active runtime
 
-Status: planned, not built or deployed. Prepared 27 September 2026 after Sanan's replacement clarification, coordinator/QC source audit and Claude's 16:40 review. Current deployed application remains 0.10.3 / `9fd738a`, Firebase rollout `build-2026-09-27-003`. This document completes document 28's intended replacement; it does not redesign the accepted models or metrics.
+Status: built and locally verified as player 0.10.4 on 28 September 2026; independent source QC cleared the final candidate. Firebase release is pending. Prepared 27 September after Sanan’s replacement clarification; this completes document 28’s intended replacement without changing the accepted models or metric thresholds.
 
 ## Intended result
 
@@ -60,3 +60,11 @@ Run TypeScript and one production build for the frozen revision plus the affecte
 ## Deferred from this release
 
 YouTube transition chrome, reporting headline redesign beyond truthful current model/config display, maintenance rate-limiter changes, saved-record deletion, revoking Safari pairings, Android device qualification, main-branch merge, credential rotation and unrelated research-file cleanup remain separate work. Claude's review suggestions do not authorize those actions. No new hardware compatibility implementation is needed to unblock the old iMac, which Sanan reports working in Chrome.
+
+## Authorized implementation addendum — 27 September 2026
+
+Sanan authorized starting after the 23:50 review. Builder owns application/test implementation; QC performs independent frozen-candidate review, Tester focused acceptance, coordinator integration/Firebase release and read-only blocked-record investigation.
+
+Add two bounded items to this release: (1) correct V2-only report tables/hourly display/export that otherwise read globally unmeasured, preserving model-specific units and historical legacy distinction without a broad mixed-profile dashboard redesign; (2) collect sanitized aggregate per-stage attempted/completed/accepted/slow-rejected counts and response latency including rejected results, with session/window identity and bounded retained history visible in existing diagnostics. Include actual face/association/coverage reasons where available, without inventing evidence. Preserve fresh-result thresholds and existing measurement definitions; do not treat the cafe trend as proof of throttling. Camera frames, geometry and temporary track IDs remain local.
+
+Inspect blocked/failed/invalid-time evidence without deletion. The local blocked record may require its original player browser; inability to retrieve that offline browser does not authorize clearing or rewriting it and does not block the independent build. No unrelated pairing revocation, full history rewrite, main merge or credential rotation is included.

@@ -8,35 +8,49 @@ const moduleObject = { exports: {} };
 new Function('require','module','exports', ts.transpileModule(fs.readFileSync(path.join(__dirname, '../lib/devices.ts'), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText)(name=>name.startsWith('.')?require('./load-lib.cjs')(name.slice(2)):require(name),moduleObject,moduleObject.exports);
 const { issuePairing, pairingCodeHash, deviceIdFromToken, deviceRoute, revokeDevices, playRecordId, calibrationForDevice } = moduleObject.exports;
 const { validatePresenceBinding } = require('./load-lib.cjs')('vision/measurement-binding-v2');
+const { PRESENCE_V2_PROFILE } = require('./load-lib.cjs')('vision/presence-v2-profile');
 const canonical = value => Array.isArray(value) ? `[${value.map(canonical).join(',')}]` : value && typeof value === 'object' ? `{${Object.keys(value).sort().map(key=>`${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}` : JSON.stringify(value);
 const MODEL = 'coco-ssd@2.2.3/lite_mobilenet_v2';
-function fixture(protocol=2) {
-  let now = Date.parse('2026-09-24T00:00:00.000Z');
+function fixture(protocol=3) {
+  let now = Date.parse('2026-09-24T00:00:00.000Z'),configVersion=3;
   const db = { orgs: [{id:'org1',status:'active'},{id:'org2',status:'active'}], screens: [{id:'screen1',org_id:'org1',status:'active',has_camera:true},{id:'screen2',org_id:'org2',status:'active'}], devices: [], device_assignments: [], plays: [], presence: [], campaigns: [{id:'campaign1',org_id:'org1',advertiser_id:'advertiser1',rate_type:'per_play',rate_value:9,committed_budget:100000,accrued_spend:0}] };
-  let config = { model:'coco-ssd', sample_interval_s:2, count_ceiling:50, camera_fail_mode:'continue' };
-  const item = {campaign_id:'campaign1',creative_id:'creative1',duration_s:10,youtube_id:'example',rate_value:2};
-  const options = () => ({ now, playerProtocol:protocol, clientKey:crypto.randomUUID(), playlist: () => ({ items:[item],config,config_version:3 }) });
+  let config = { camera_source:'local', confidence_min:.4, count_ceiling:50, camera_fail_mode:'continue' };
+  const item = {campaign_id:'campaign1',creative_id:'creative1',duration_s:10,youtube_id:'example',rate_value:2},items=[item];
+  const options = (playerProtocol=protocol) => ({ now, playerProtocol, clientKey:crypto.randomUUID(), playlist: () => ({ items:[...items],config,config_version:configVersion }) });
   const call = (method, route, body={}, token) => { const r=deviceRoute(db,method,route.split('/'),body,token,options());return {...r,status:r?.status||200}; };
   const pair = (sid='screen1') => { const screen=db.screens.find(s=>s.id===sid);const code=issuePairing(db,screen,now);const r=call('POST','pair',{code:code.code}); assert.equal(r.status,200);return r.body; };
-  const paired=pair(), assignment=call('GET','playlist/screen1',{},paired.token).body.items[0];
-  const event = (patch={}) => ({play_uid:crypto.randomUUID(),seq_no:1,assignment_id:assignment.assignment_id,campaign_id:'campaign1',creative_id:'creative1',config_version:3,started_at_device:'2026-09-24T00:00:00.000Z',ended_at_device:'2026-09-24T00:00:10.000Z',playing_duration_ms:10000,media_started_s:0,media_ended_s:10,ended_reason:'ended',server_clock_offset_ms:0,measured:true,avg_persons:2,sample_count:5,model_ver:MODEL,...patch});
+  const paired=pair(),assignment=call('GET','playlist/screen1',{},paired.token).body.items[0];
+  const event = (patch={}) => {const assignmentId=patch.assignment_id||assignment.assignment_id,issued=db.device_assignments.find(a=>a.id===assignmentId),binding=(db.measurement_bindings||[]).find(row=>row.assignment_id===assignmentId);return {play_uid:crypto.randomUUID(),seq_no:1,assignment_id:assignmentId,campaign_id:issued?.campaign_id||'campaign1',creative_id:issued?.creative_id||'creative1',config_version:issued?.config_version||3,started_at_device:'2026-09-24T00:00:00.000Z',ended_at_device:'2026-09-24T00:00:10.000Z',playing_duration_ms:10000,media_started_s:0,media_ended_s:10,ended_reason:'ended',server_clock_offset_ms:0,measured:true,avg_persons:2,sample_count:5,model_ver:binding||issued?.model_configured===PRESENCE_V2_PROFILE.body_model?PRESENCE_V2_PROFILE.body_model:MODEL,...(binding?{measurement_binding_id:binding.id,presence_profile_id:binding.profile}:{}),...patch};};
   now+=11000;
-  return {db,call,pair,paired,assignment,event,item,advance:n=>{now+=n},config};
+  return {db,call,pair,paired,assignment,event,item,items,advance:n=>{now+=n},config,setConfigVersion:v=>{configVersion=v}};
 }
-test('calibration revisions are immutable, assignments freeze full provenance, delayed receipt survives recalibration, and re-pair requires local calibration',()=>{
- const f=fixture();f.config.attention_enabled=true;f.config.attention_profile='attention-v1/mediapipe-1.0.1';
+function seedHistoricalLegacyAssignment(f,overrides={}) {
+ const item=f.assignment,assignment=f.db.device_assignments.find(a=>a.id===item.assignment_id);
+ for(const key of ['measurement_binding_id','measurement_profile','measurement_config','model_versions'])delete item[key];
+ const bindingIds=new Set((f.db.measurement_bindings||[]).filter(binding=>binding.assignment_id===assignment.id).map(binding=>binding.id));
+ f.db.measurement_bindings=(f.db.measurement_bindings||[]).filter(binding=>binding.assignment_id!==assignment.id);
+ for(const device of f.db.devices)if(device.assignment_set)device.assignment_set.binding_ids=(device.assignment_set.binding_ids||[]).filter(id=>!bindingIds.has(id));
+ Object.assign(assignment,{model_configured:'coco-ssd',sample_interval_s:2,attention_enabled:false,attention_profile:null,attention_calibration_revision:null,attention_calibration:null,attention_manifest_sha256:null,attention_pipeline_sha256:null},overrides);
+ item.model_configured=assignment.model_configured;item.attention_enabled=assignment.attention_enabled;item.attention_profile=assignment.attention_profile;item.attention_mode=assignment.attention_mode;item.attention_calibration_revision=assignment.attention_calibration_revision;
+ return assignment;
+}
+function historicalGrantSignature(f,calibrationOverride) {
+ const sigCalibration=arguments.length>1?calibrationOverride:f.config.attention_calibration;
+ const frozen=f.items.map(item=>{const campaign=f.db.campaigns.find(row=>row.id===item.campaign_id),economics=require('./load-lib.cjs')('settlement').economics(item),enabled=f.config.attention_enabled===true;
+  return [item.campaign_id,campaign?.advertiser_id||null,item.creative_id,item.youtube_id||null,item.asset_id||null,economics,item.duration_s,item.media_type||'video',item.width||null,item.height||null,item.kind||'paid',item.asset_sha256||null,item.rate_type??campaign?.rate_type??'flat',Number(item.rate_value??campaign?.rate_value)||0,campaign?.committed_budget??null,3,f.config.camera_fail_mode||'continue',f.config.model||null,Number(f.config.sample_interval_s)||2,Number(f.config.count_ceiling)||50,enabled,f.config.attention_profile||null,sigCalibration?.revision||null,sigCalibration||null,enabled?require('./load-lib.cjs')('vision/attention-contracts').ATTENTION_PROFILE.manifest_sha256:null,enabled?require('./load-lib.cjs')('vision/attention-contracts').ATTENTION_PROFILE.pipeline_sha256:null];
+ });
+ return crypto.createHash('sha256').update(JSON.stringify({frozen,config_version:3,rotation_version:null})).digest('hex');
+}
+test('a frozen historical V1 assignment accepts its delayed calibrated receipt after local recalibration',()=>{
+ const f=fixture();f.config.attention_profile='attention-v1/mediapipe-1.0.1';
  const makeCalibration=(revision,deviceId,yaw=12)=>({schema:'calibration-v1/1',profile:f.config.attention_profile,revision,device_id:deviceId,screen_id:'screen1',camera_ref:'opaqueCameraReference123',width:640,height:480,rotation:0,method:'guided-3s',yaw_tenths:yaw,pitch_tenths:-5,samples:10,span_ms:2700,yaw_spread_tenths:2,pitch_spread_tenths:3,completed_at:new Date(f.db.screens[0].pairing_expires_at?Date.parse(f.db.screens[0].pairing_expires_at)-600000:Date.now()).toISOString()});
  const first=makeCalibration('calibrationA',f.paired.device.id),saved=f.call('POST','attention/calibration',{calibration:first},f.paired.token);
  assert.equal(saved.status,200);assert.equal(f.db.attention_calibrations.length,1);assert.deepEqual(f.db.attention_calibrations[0].calibration,first);
  const configRevision=f.db.settings?.config_revision;assert.equal(f.call('POST','attention/calibration',{calibration:first},f.paired.token).body.duplicate,true);assert.equal(f.db.settings?.config_revision,configRevision,'calibration does not revise commercial config');
  assert.equal(f.call('POST','attention/calibration',{calibration:{...first,yaw_tenths:99}},f.paired.token).status,409);
- f.config.attention_calibration=first;
- const firstItem=f.call('GET','playlist/screen1',{},f.paired.token).body.items[0],oldAssignment=f.db.device_assignments.find(a=>a.id===firstItem.assignment_id);
- assert.deepEqual(oldAssignment.attention_calibration,first);
+ const oldAssignment=seedHistoricalLegacyAssignment(f,{attention_enabled:true,attention_profile:f.config.attention_profile,attention_mode:'guided',attention_calibration_revision:first.revision,attention_calibration:first,attention_manifest_sha256:require('./load-lib.cjs')('vision/attention-contracts').ATTENTION_PROFILE.manifest_sha256,attention_pipeline_sha256:require('./load-lib.cjs')('vision/attention-contracts').ATTENTION_PROFILE.pipeline_sha256});
  const second=makeCalibration('calibrationB',f.paired.device.id,20);assert.equal(f.call('POST','attention/calibration',{calibration:second},f.paired.token).status,200);
- f.config.attention_calibration=second;
- const secondItem=f.call('GET','playlist/screen1',{},f.paired.token).body.items[0],newAssignment=f.db.device_assignments.find(a=>a.id===secondItem.assignment_id);
- assert.notEqual(newAssignment.id,oldAssignment.id);assert.deepEqual(oldAssignment.attention_calibration,first);assert.deepEqual(newAssignment.attention_calibration,second);
+ assert.deepEqual(oldAssignment.attention_calibration,first,'recalibration does not rewrite already-issued evidence');
  const event={play_uid:crypto.randomUUID(),seq_no:1,assignment_id:oldAssignment.id,campaign_id:'campaign1',creative_id:'creative1',config_version:oldAssignment.config_version,started_at_device:oldAssignment.issued_at,ended_at_device:new Date(Date.parse(oldAssignment.issued_at)+10000).toISOString(),playing_duration_ms:10000,media_started_s:0,media_ended_s:10,ended_reason:'ended',server_clock_offset_ms:0,measured:true,avg_persons:2,sample_count:5,model_ver:MODEL,attention:{schema:'attention-v1/1',profile:first.profile,calibration_revision:first.revision,playing_ms:10000,body:[8000,2000,0],face:[8000,2000,0],attention:[6000,4000],expression:[6000,4000],presence_person_ms:10000,looking_person_ms:5000,smile_person_ms:1000,face_assessable_person_ms:7000,expression_assessable_person_ms:6000,estimated_impressions:1,attentive_impressions:1,tracked_visits:1,right_censored_visits:0,longest_look_ms:1000}};
  f.advance(11000);
  const delayed=f.call('POST','play',event,f.paired.token);assert.equal(delayed.body.attention_status,'accepted');assert.equal(f.db.plays.at(-1).attention_calibration.yaw_tenths,12);
@@ -44,17 +58,59 @@ test('calibration revisions are immutable, assignments freeze full provenance, d
  assert.equal(calibrationForDevice(f.db.screens[0],newDevice,f.config.attention_profile),null,'screen calibration from the revoked device cannot authorize its replacement');
  assert.deepEqual(f.db.attention_calibrations.map(x=>x.id),['calibrationA','calibrationB']);
 });
-test('attention-enabled playlist and receipts use default offsets without delaying paid playback or changing money',()=>{
- const off=fixture();off.db.device_assignments=[];delete off.db.devices[0].assignment_set;delete off.db.campaign_budgets;
- const plain=off.call('GET','playlist/screen1',{},off.paired.token).body.items[0];
- const on=fixture();on.config.attention_enabled=true;on.config.attention_profile='attention-v1/mediapipe-1.0.1';on.db.device_assignments=[];delete on.db.devices[0].assignment_set;delete on.db.campaign_budgets;
- const playlist=on.call('GET','playlist/screen1',{},on.paired.token).body,item=playlist.items[0],assignment=on.db.device_assignments[0];
- assert.equal(playlist.budget_state,'available');assert.equal(item.attention_enabled,true);assert.equal(item.attention_mode,'default');assert.equal(item.attention_calibration_revision,null);
- assert.equal(item.assignment_id!==undefined,true);assert.equal(assignment.attention_calibration,null);assert.equal(assignment.attention_mode,'default');
- assert.equal(assignment.max_plays,on.db.device_assignments[0].max_plays);assert.equal(on.db.campaign_budgets[0].spent_paise,off.db.campaign_budgets[0].spent_paise);assert.equal(on.db.campaign_budgets[0].reservations[0].remaining_plays,off.db.campaign_budgets[0].reservations[0].remaining_plays);
- const event={...on.event(),assignment_id:item.assignment_id,attention:{schema:'attention-v1/1',profile:on.config.attention_profile,attention_mode:'default',calibration_revision:null,playing_ms:10000,body:[8000,2000,0],face:[8000,2000,0],attention:[6000,4000],expression:[6000,4000],presence_person_ms:10000,looking_person_ms:5000,smile_person_ms:1000,face_assessable_person_ms:7000,expression_assessable_person_ms:6000,estimated_impressions:1,attentive_impressions:1,tracked_visits:1,right_censored_visits:0,longest_look_ms:1000}};
- const accepted=on.call('POST','play',event,on.paired.token);assert.equal(accepted.body.attention_status,'accepted');assert.equal(accepted.body.billable,true);assert.equal(on.db.plays[0].attention_mode,'default');assert.equal(on.db.plays[0].attention_calibration_revision,null);assert.equal(on.db.attention_day[0].attention_mode,'default');assert.equal(on.db.attention_day[0].calibration_revision,null);
- const offReceipt=off.call('POST','play',{...off.event({assignment_id:plain.assignment_id})},off.paired.token);assert.equal(accepted.body.billable,offReceipt.body.billable);assert.equal(on.db.campaigns[0].accrued_spend,off.db.campaigns[0].accrued_spend);
+test('V2 body and face bindings are automatic and optional V1 flags do not change paid grants',()=>{
+ const on=fixture(),item=on.assignment,assignment=on.db.device_assignments[0],id=item.assignment_id,maxPlays=assignment.max_plays,remaining=on.db.campaign_budgets[0].reservations[0].remaining_plays;
+ on.config.attention_enabled=true;on.config.attention_profile='attention-v1/mediapipe-1.0.1';
+ const refreshed=on.call('GET','playlist/screen1',{},on.paired.token).body.items[0];
+ assert.equal(refreshed.measurement_profile,PRESENCE_V2_PROFILE.id);assert.equal(refreshed.assignment_id,id,'a retired flag does not rotate the paid grant');
+ assert.equal(on.db.device_assignments.length,1);assert.equal(assignment.max_plays,maxPlays);assert.equal(on.db.campaign_budgets[0].reservations[0].remaining_plays,remaining);
+ const {presenceV2Summary}=require('./load-lib.cjs')('vision/attention-v2-contracts');const summary=presenceV2Summary({body_observed_s:8,body_saturated_s:0,face_observed_s:8,face_saturated_s:0,attention_observed_s:6,expression_observed_s:6,presence_person_s:10,attention_person_s:5,smile_person_s:1,face_observable_person_s:7,expression_observable_person_s:6,estimated_impressions:1,attentive_impressions:1,tracked_visits:1,right_censored_visits:0,longest_look_s:1},10000,'default',null);
+ const accepted=on.call('POST','play',{...on.event(),assignment_id:id,attention:summary},on.paired.token);
+ assert.equal(accepted.body.attention_status,'accepted');assert.equal(accepted.body.billable,true);assert.equal(on.db.plays[0].rate_value,2);assert.equal(on.db.campaigns[0].accrued_spend,2);
+});
+test('protocol 3 rebases an unchanged historical grant after legacy config keys disappear',()=>{
+ const f=fixture(3),assignment=seedHistoricalLegacyAssignment(f),device=f.db.devices[0];
+ Object.assign(f.config,{model:'coco-ssd',sample_interval_s:2,attention_enabled:false,attention_profile:'attention-v1/mediapipe-1.0.1',attention_calibration:null});
+ const oldSignature=historicalGrantSignature(f);device.assignment_set.signature=oldSignature;
+ const usage=Math.min(1,Math.max(0,assignment.max_plays-1));device.assignment_uses=[{id:assignment.id,n:usage}];
+ const original={ids:[...device.assignment_set.ids],bindingIds:[...device.assignment_set.binding_ids],maxPlays:assignment.max_plays,uses:structuredClone(device.assignment_uses),budgets:structuredClone(f.db.campaign_budgets),spend:f.db.campaigns[0].accrued_spend,count:f.db.device_assignments.length};
+ for(const key of ['model','sample_interval_s','attention_enabled','attention_profile','attention_calibration'])delete f.config[key];
+ assert.equal(oldSignature===device.assignment_set.signature,true,'fixture starts with a stored pre-upgrade settings signature');
+ const refreshed=f.call('GET','playlist/screen1',{},f.paired.token);assert.equal(refreshed.status,200);assert.deepEqual(device.assignment_set.ids,original.ids);assert.equal(refreshed.body.items[0].assignment_id,assignment.id);assert.equal(refreshed.body.items[0].max_plays,original.maxPlays);assert.equal(refreshed.body.items[0].measurement_binding_id,undefined,'a historical COCO grant is not relabeled with a V2 binding');
+ assert.deepEqual(device.assignment_uses,original.uses);assert.deepEqual(f.db.campaign_budgets,original.budgets);assert.equal(f.db.campaigns[0].accrued_spend,original.spend);assert.equal(f.db.device_assignments.length,original.count);assert.notEqual(device.assignment_set.signature,oldSignature,'the accepted old signature is normalized once');
+ const rebased=device.assignment_set.signature,again=f.call('GET','playlist/screen1',{},f.paired.token);assert.equal(again.body.items[0].assignment_id,assignment.id);assert.equal(device.assignment_set.signature,rebased);
+});
+
+test('protocol 3 rebases a held V2 grant signed with current saved calibration while legacy attention is disabled',()=>{
+ const f=fixture(3),assignment=f.db.device_assignments[0],device=f.db.devices[0],profile='attention-v1/mediapipe-1.0.1';
+ const calibration={schema:'calibration-v1/1',profile,revision:'savedWhileDisabled',device_id:device.id,screen_id:'screen1',camera_ref:'opaqueCameraReference123',width:640,height:480,rotation:0,method:'guided-3s',yaw_tenths:12,pitch_tenths:-5,samples:10,span_ms:2700,yaw_spread_tenths:2,pitch_spread_tenths:3,completed_at:new Date(f.db.devices[0].created_at).toISOString()};
+ f.db.screens[0].attention_calibration=structuredClone(calibration);Object.assign(f.config,{model:'coco-ssd',sample_interval_s:2,attention_enabled:false,attention_profile:profile,attention_calibration:calibration});
+ const oldSignature=historicalGrantSignature(f);device.assignment_set.signature=oldSignature;device.assignment_uses=[{id:assignment.id,n:1}];
+ for(const key of ['model','sample_interval_s','attention_enabled','attention_profile'])delete f.config[key];
+ // playlistFor continues to resolve the current, device-bound screen calibration at runtime.
+ f.config.attention_calibration=calibration;
+ const ids=[...device.assignment_set.ids],uses=structuredClone(device.assignment_uses),max=assignment.max_plays,budget=structuredClone(f.db.campaign_budgets);
+ const result=f.call('GET','playlist/screen1',{},f.paired.token);
+ assert.equal(result.status,200);assert.deepEqual(device.assignment_set.ids,ids);assert.equal(result.body.items[0].assignment_id,assignment.id);assert.equal(result.body.items[0].measurement_profile,PRESENCE_V2_PROFILE.id,'The existing paid grant remains under the V2 profile');
+ assert.deepEqual(device.assignment_uses,uses);assert.equal(assignment.max_plays,max);assert.deepEqual(f.db.campaign_budgets,budget);assert.equal(f.db.device_assignments.length,1);assert.notEqual(device.assignment_set.signature,oldSignature);
+});
+
+test('protocol 3 rebases the full historical playlist when only funded items have held rows',()=>{
+ const f=fixture(3),assignment=f.db.device_assignments[0],device=f.db.devices[0];
+ Object.assign(f.config,{model:'coco-ssd',sample_interval_s:2,attention_enabled:false,attention_profile:'attention-v1/mediapipe-1.0.1',attention_calibration:null});
+ const second={campaign_id:'campaign2',creative_id:'creative2',duration_s:10,youtube_id:'second-example',rate_value:2};
+ f.db.campaigns.push({id:'campaign2',org_id:'org1',advertiser_id:'advertiser2',rate_type:'per_play',rate_value:2,committed_budget:0,accrued_spend:0});f.items.push(second);
+ const oldSignature=historicalGrantSignature(f);device.assignment_set.signature=oldSignature;device.assignment_uses=[{id:assignment.id,n:1}];
+ for(const key of ['model','sample_interval_s','attention_enabled','attention_profile','attention_calibration'])delete f.config[key];
+ const heldId=assignment.id,heldMax=assignment.max_plays,uses=structuredClone(device.assignment_uses),spend=f.db.campaigns.map(c=>[c.id,c.accrued_spend]);
+ const reserved=()=>Object.fromEntries((f.db.campaign_budgets||[]).map(row=>[row.campaign_id,(row.reservations||[]).reduce((n,r)=>n+r.remaining_plays*r.rate_paise,0)]).filter(([,amount])=>amount>0));
+ const beforeReserved=reserved(),result=f.call('GET','playlist/screen1',{},f.paired.token);
+ assert.equal(result.status,200);assert.deepEqual(result.body.items.map(i=>i.assignment_id),[heldId],'The held funded item is reused; the unfunded item stays unfunded');assert.deepEqual(device.assignment_set.ids,[heldId]);
+ assert.deepEqual(device.assignment_uses,uses);assert.equal(assignment.max_plays,heldMax);assert.deepEqual(reserved(),beforeReserved);assert.deepEqual(f.db.campaigns.map(c=>[c.id,c.accrued_spend]),spend);assert.equal(f.db.device_assignments.length,1);assert.notEqual(device.assignment_set.signature,oldSignature);
+ const acceptedSignature=device.assignment_set.signature;
+ f.item.rate_value=3;const changedRate=f.call('GET','playlist/screen1',{},f.paired.token);assert.notEqual(changedRate.body.items[0].assignment_id,heldId,'A changed commercial rate invalidates the historical hold');assert.notEqual(device.assignment_set.signature,acceptedSignature);
+ const rateChangedId=changedRate.body.items[0].assignment_id;f.call('GET','playlist/screen1',{},f.paired.token);const sameConfigId=device.assignment_set.ids[0];assert.equal(sameConfigId,rateChangedId);
+ f.setConfigVersion(4);const changedConfig=f.call('GET','playlist/screen1',{},f.paired.token);assert.notEqual(changedConfig.body.items[0].assignment_id,rateChangedId,'A changed commercial config version does not reuse the old held grant');
 });
 
 test('V2 playlist upgrades an existing assignment to a new pipeline binding without collision or losing old receipts',()=>{
@@ -62,6 +118,7 @@ test('V2 playlist upgrades an existing assignment to a new pipeline binding with
  assert.ok(oldBinding&&assignment);
  const previousPipeline='7d8e7edd31110372295e909b8ba8b75c91b2bbd9a83a5862771189eed1c96016';
  const deployedPipeline='906b881633dd9a5fcf7347790fd18ce81f0d768255f63198cab21334ae335d77';
+ const previousCurrentPipeline='a6de272583e9697e5e9577c9f724567b6acfaac2eb5d1d3648dfa5caa8ac0def';
  const oldId='measurement_'+crypto.createHash('sha256').update(canonical([assignment.id,oldBinding.config.profile,oldBinding.config,oldBinding.config.calibration_revision])).digest('hex');
  const provenanceId=pipeline=>`measurement_${crypto.createHash('sha256').update(canonical([assignment.id,oldBinding.config.profile,oldBinding.config,oldBinding.config.calibration_revision,oldBinding.manifest_sha256,pipeline,oldBinding.model_versions.body,oldBinding.model_versions.face,oldBinding.model_versions.runtime])).digest('hex')}`;
  const currentPipeline=require('./load-lib.cjs')('vision/presence-v2-profile').PRESENCE_V2_PROFILE.pipeline_sha256;
@@ -71,16 +128,16 @@ test('V2 playlist upgrades an existing assignment to a new pipeline binding with
  const modelVersions=oldBinding.model_versions;delete oldBinding.model_versions;assert.equal(validatePresenceBinding(oldBinding,assignment,f.db.devices[0],f.db.screens[0],oldId),false,'Malformed persisted provenance fails closed instead of throwing');oldBinding.model_versions=modelVersions;
  oldBinding.pipeline_sha256=deployedPipeline;assert.equal(validatePresenceBinding(oldBinding,assignment,f.db.devices[0],f.db.screens[0],oldId),true,'Legacy-ID bindings issued by deployed 0.10.2 remain valid after the new runtime pin');
  oldBinding.id=provenanceId(deployedPipeline);assert.equal(validatePresenceBinding(oldBinding,assignment,f.db.devices[0],f.db.screens[0],oldBinding.id),true,'Provenance-scoped 0.10.2 receipts also remain valid');oldBinding.id=oldId;
- oldBinding.pipeline_sha256=currentPipeline;
- assert.equal(validatePresenceBinding(oldBinding,assignment,f.db.devices[0],f.db.screens[0],oldId),true,'Legacy-ID bindings issued by 0.10.1 remain valid even though their pin is current');
+ oldBinding.pipeline_sha256=previousCurrentPipeline;
+ assert.equal(validatePresenceBinding(oldBinding,assignment,f.db.devices[0],f.db.screens[0],oldId),true,'Legacy-ID bindings issued by deployed 0.10.3 remain valid under the candidate pin');
  oldBinding.id=provenanceId(previousPipeline);oldBinding.pipeline_sha256=previousPipeline;
  assert.equal(validatePresenceBinding(oldBinding,assignment,f.db.devices[0],f.db.screens[0],oldBinding.id),true,'New provenance-scoped IDs reconstruct from their stored approved pin after a later pin update');
  oldBinding.pipeline_sha256='unapproved-pipeline-pin';assert.equal(validatePresenceBinding(oldBinding,assignment,f.db.devices[0],f.db.screens[0],oldBinding.id),false,'Unknown historical pins are not accepted');
- oldBinding.id=oldId;oldBinding.pipeline_sha256=currentPipeline;f.db.devices[0].assignment_set.binding_ids=[oldId];
+ oldBinding.id=oldId;oldBinding.pipeline_sha256=previousCurrentPipeline;f.db.devices[0].assignment_set.binding_ids=[oldId];
  const upgraded=f.call('GET','playlist/screen1',{},f.paired.token),newItem=upgraded.body.items[0],newBinding=f.db.measurement_bindings.find(b=>b.id===newItem.measurement_binding_id);
  assert.equal(upgraded.status,200);assert.equal(newItem.assignment_id,assignment.id,'The paid assignment itself is preserved');assert.notEqual(newItem.measurement_binding_id,oldId,'The changed pipeline receives a provenance-scoped binding ID');
  assert.equal(newBinding.pipeline_sha256,require('./load-lib.cjs')('vision/presence-v2-profile').PRESENCE_V2_PROFILE.pipeline_sha256);assert.ok(validatePresenceBinding(newBinding,assignment,f.db.devices[0],f.db.screens[0],newItem.measurement_binding_id));
- assert.equal(f.db.measurement_bindings.find(b=>b.id===oldId).pipeline_sha256,currentPipeline,'The original immutable binding is retained');assert.equal(f.db.measurement_bindings.length,2);
+ assert.equal(f.db.measurement_bindings.find(b=>b.id===oldId).pipeline_sha256,previousCurrentPipeline,'The original immutable deployed binding is retained');assert.equal(f.db.measurement_bindings.length,2);
  assert.equal(f.db.device_assignments.length,assignmentCount);assert.equal(f.db.campaigns[0].committed_budget,budgetBefore,'Refreshing the binding does not reserve money or replace the assignment');
 });
 
@@ -91,9 +148,9 @@ test('attention profile mismatch still issues paid and filler playback authoriza
  const fillerList=filler.call('GET','playlist/screen1',{},filler.paired.token).body;assert.equal(fillerList.items.length,0);assert.equal(fillerList.filler_items.length,1);assert.equal(fillerList.filler_items[0].attention_enabled,true);assert.equal(fillerList.filler_items[0].attention_mode,'default');
 });
 test('default fallback under a frozen guided assignment is explicit and legacy offline guided summaries still validate',()=>{
- const f=fixture();f.config.attention_enabled=true;f.config.attention_profile='attention-v1/mediapipe-1.0.1';f.config.attention_calibration={schema:'calibration-v1/1',profile:f.config.attention_profile,revision:'guidedA',device_id:f.paired.device.id,screen_id:'screen1',camera_ref:'opaqueCameraReference123',width:640,height:480,rotation:0,method:'guided-3s',yaw_tenths:12,pitch_tenths:-5,samples:10,span_ms:2700,yaw_spread_tenths:2,pitch_spread_tenths:3,completed_at:new Date(f.db.devices[0].created_at).toISOString()};
- f.db.device_assignments=[];delete f.db.devices[0].assignment_set;const item=f.call('GET','playlist/screen1',{},f.paired.token).body.items[0];assert.equal(item.attention_mode,'guided');
- const base={schema:'attention-v1/1',profile:f.config.attention_profile,playing_ms:10000,body:[8000,2000,0],face:[8000,2000,0],attention:[6000,4000],expression:[6000,4000],presence_person_ms:10000,looking_person_ms:5000,smile_person_ms:1000,face_assessable_person_ms:7000,expression_assessable_person_ms:6000,estimated_impressions:1,attentive_impressions:1,tracked_visits:1,right_censored_visits:0,longest_look_ms:1000};
+ const f=fixture(),profile='attention-v1/mediapipe-1.0.1',calibration={schema:'calibration-v1/1',profile,revision:'guidedA',device_id:f.paired.device.id,screen_id:'screen1',camera_ref:'opaqueCameraReference123',width:640,height:480,rotation:0,method:'guided-3s',yaw_tenths:12,pitch_tenths:-5,samples:10,span_ms:2700,yaw_spread_tenths:2,pitch_spread_tenths:3,completed_at:new Date(f.db.devices[0].created_at).toISOString()};
+ seedHistoricalLegacyAssignment(f,{attention_enabled:true,attention_profile:profile,attention_mode:'guided',attention_calibration_revision:'guidedA',attention_calibration:calibration,attention_manifest_sha256:require('./load-lib.cjs')('vision/attention-contracts').ATTENTION_PROFILE.manifest_sha256,attention_pipeline_sha256:require('./load-lib.cjs')('vision/attention-contracts').ATTENTION_PROFILE.pipeline_sha256});const item=f.assignment;assert.equal(item.attention_mode,'guided');
+ const base={schema:'attention-v1/1',profile,playing_ms:10000,body:[8000,2000,0],face:[8000,2000,0],attention:[6000,4000],expression:[6000,4000],presence_person_ms:10000,looking_person_ms:5000,smile_person_ms:1000,face_assessable_person_ms:7000,expression_assessable_person_ms:6000,estimated_impressions:1,attentive_impressions:1,tracked_visits:1,right_censored_visits:0,longest_look_ms:1000};
  const fallback=f.call('POST','play',{...f.event(),assignment_id:item.assignment_id,attention:{...base,attention_mode:'default',calibration_revision:null}},f.paired.token);assert.equal(fallback.body.attention_status,'accepted');assert.equal(f.db.plays.at(-1).attention_calibration_revision,null);
  const legacy=f.call('POST','play',{...f.event({seq_no:2}),assignment_id:item.assignment_id,attention:{...base,calibration_revision:'guidedA'}},f.paired.token);assert.equal(legacy.body.attention_status,'accepted');assert.equal(f.db.plays.at(-1).attention_mode,'guided');
 });
@@ -191,7 +248,7 @@ test('fresh and cached device playlists expose only playback fields while rates 
  assert.notEqual(fresh.assignment_id,f.assignment.assignment_id,'rate changes must invalidate the prior assignment');
  const cached=f.call('GET','playlist/screen1',{},f.paired.token).body.items[0];
  assert.equal(cached.assignment_id,fresh.assignment_id,'second response exercises cached assignments');
- const allowed=['campaign_id','creative_id','youtube_id','duration_s','asset_id','asset_url','width','height','letterbox','assignment_id','valid_until','accept_until','max_plays','media_type','kind','asset_sha256','asset_bytes','asset_mime','attention_enabled','attention_profile','attention_mode','attention_calibration_revision','attention_manifest_sha256','attention_pipeline_sha256'].sort();
+ const allowed=['campaign_id','creative_id','youtube_id','duration_s','asset_id','asset_url','width','height','letterbox','assignment_id','valid_until','accept_until','max_plays','media_type','kind','asset_sha256','asset_bytes','asset_mime','attention_enabled','attention_profile','attention_mode','attention_calibration_revision','attention_manifest_sha256','attention_pipeline_sha256','measurement_binding_id','measurement_profile','model_versions','measurement_config'].sort();
  for(const served of [fresh,cached]){
   assert.deepEqual(Object.keys(served).sort(),allowed);
   assert.equal(served.asset_url,f.item.asset_url);assert.equal(served.youtube_id,'example');
@@ -237,7 +294,7 @@ test('a partially exhausted paid set replenishes only that campaign and preserve
  const f=fixture();f.db.campaigns[0].screen_ids=Array.from({length:40000},(_,i)=>'s'+i);
  f.db.campaigns.push({id:'campaign2',org_id:'org1',advertiser_id:'advertiser2',rate_type:'per_play',rate_value:1,committed_budget:100,accrued_spend:0});
  const items=[{...f.item,rate_value:3},{campaign_id:'campaign2',creative_id:'creative2',duration_s:10,youtube_id:'abcdefghijk',rate_value:1}];
- const get=()=>deviceRoute(f.db,'GET',['playlist','screen1'],{},f.paired.token,{now:Date.parse('2026-09-24T00:00:11Z'),playerProtocol:2,playlist:()=>({items,config:f.config,config_version:3})}).body;
+ const get=()=>deviceRoute(f.db,'GET',['playlist','screen1'],{},f.paired.token,{now:Date.parse('2026-09-24T00:00:11Z'),playerProtocol:3,playlist:()=>({items,config:f.config,config_version:3})}).body;
  const before=get();assert.equal(before.items[0].max_plays,1);assert.ok(before.items[1].max_plays>1);
  assert.equal(f.call('POST','play',f.event({assignment_id:before.items[0].assignment_id}),f.paired.token).body.billable,true);
  const after=get();assert.notEqual(after.items[0].assignment_id,before.items[0].assignment_id);assert.equal(after.items[1].assignment_id,before.items[1].assignment_id);
@@ -250,7 +307,7 @@ test('a cached empty set retries funding immediately when another screen release
  const campaign={id:'campaign2',org_id:'org1',advertiser_id:'advertiser2',rate_type:'per_play',rate_value:1,committed_budget:1,accrued_spend:0};f.db.campaigns.push(campaign);
  const other={id:'other-assignment',device_id:'other-device',campaign_id:campaign.id,duration_s:10,rate_type:'per_play',rate_value:1,issued_at:new Date(now).toISOString(),valid_until:new Date(now+3600000).toISOString(),accept_until:new Date(now+72*3600000).toISOString()};
  assert.equal(reserveBudget(f.db,campaign,other,1,now),1);
- const get=()=>deviceRoute(f.db,'GET',['playlist','screen1'],{},f.paired.token,{now,playerProtocol:2,playlist:()=>({items:[{campaign_id:campaign.id,creative_id:'creative2',duration_s:10,youtube_id:'abcdefghijk',rate_value:1}],config:f.config,config_version:3})}).body;
+ const get=()=>deviceRoute(f.db,'GET',['playlist','screen1'],{},f.paired.token,{now,playerProtocol:3,playlist:()=>({items:[{campaign_id:campaign.id,creative_id:'creative2',duration_s:10,youtube_id:'abcdefghijk',rate_value:1}],config:f.config,config_version:3})}).body;
  assert.equal(get().items.length,0);const phase=f.db.devices[0].assignment_set.rotation_index;
  budgetReceipt(f.db,campaign,other,true,false,now);
  const after=get();assert.equal(after.items.length,1);assert.equal(after.items[0].max_plays,1);assert.equal(f.db.devices[0].assignment_set.rotation_index,phase);
@@ -259,14 +316,14 @@ test('a cached empty set retries funding immediately when another screen release
 
 test('a changed filler media identity invalidates its old evidence while unchanged media reuses it',()=>{
  const f=fixture(),filler={creative_id:'house',duration_s:20,media_type:'image',width:1920,height:1080,asset_id:'house-asset',asset_sha256:'a'.repeat(64)};
- const get=()=>deviceRoute(f.db,'GET',['playlist','screen1'],{},f.paired.token,{now:Date.parse('2026-09-24T00:00:11Z'),playerProtocol:2,playlist:()=>({items:[],filler_items:[filler],config:f.config,config_version:3})}).body.filler_items[0];
+ const get=()=>deviceRoute(f.db,'GET',['playlist','screen1'],{},f.paired.token,{now:Date.parse('2026-09-24T00:00:11Z'),playerProtocol:3,playlist:()=>({items:[],filler_items:[filler],config:f.config,config_version:3})}).body.filler_items[0];
  const before=get();assert.equal(get().assignment_id,before.assignment_id);
  filler.asset_sha256='b'.repeat(64);assert.notEqual(get().assignment_id,before.assignment_id);
 });
 
 test('renewal chooses the authorization horizon from the newly rotated media source',()=>{
  const f=fixture(),now=Date.parse('2026-09-24T00:00:11Z');
- const result=deviceRoute(f.db,'GET',['playlist','screen1'],{},f.paired.token,{now,playerProtocol:2,playlist:(_s,_d,index=0)=>({items:[{...f.item,asset_id:index%2?undefined:'uploaded',youtube_id:index%2?'abcdefghijk':undefined,creative_id:index%2?'online':'offline'}],config:f.config,config_version:3})});
+ const result=deviceRoute(f.db,'GET',['playlist','screen1'],{},f.paired.token,{now,playerProtocol:3,playlist:(_s,_d,index=0)=>({items:[{...f.item,asset_id:index%2?undefined:'uploaded',youtube_id:index%2?'abcdefghijk':undefined,creative_id:index%2?'online':'offline'}],config:f.config,config_version:3})});
  assert.equal(result.body.items[0].creative_id,'online');assert.equal(Date.parse(result.body.valid_until)-now,3600000);
 });
 
@@ -291,4 +348,16 @@ test('draft attention preparation preserves legacy camera policy billing and rec
    if(candidate==='valid'){const changed={...body};delete changed.attention;assert.equal(f.call('POST','play',changed,f.paired.token).status,409);}
   }
  }
+});
+
+test('heartbeat stores bounded diagnostics by session and window with revision upserts',()=>{
+ const f=fixture(3),{PresencePerformanceTelemetry}=require('./load-lib.cjs')('vision/performance-telemetry'),t=new PresencePerformanceTelemetry();
+ const base=Date.parse('2026-09-24T00:00:10.000Z');
+ const normalize=report=>({...report,session_started_at:new Date(base).toISOString(),windows:report.windows.map(w=>({...w,started_at:new Date(base).toISOString(),ended_at:new Date(base).toISOString()}))});
+ const post=diagnostics=>f.call('POST','heartbeat',{config_version:3,device_now:new Date(base).toISOString(),app_ver:'test',agent_ver:'test',uptime_s:1,vision:{camera_state:'disabled',model_state:'not_loaded',model_ver:null,last_sample_at:null,diagnostics}},f.paired.token);
+ let report=normalize(t.snapshot()),reply=post(report);assert.equal(reply.status,200);assert.equal(f.db.devices[0].vision.diagnostics_history.length,1);
+ report={...report,camera_frame:{pixels:'must not persist'},windows:report.windows.map(w=>({...w,revision:w.revision+1,body:{...w.body,attempted:2}}))};
+ reply=post(report);assert.equal(reply.status,200);assert.equal(f.db.devices[0].vision.diagnostics_history.length,1);assert.equal(f.db.devices[0].vision.diagnostics_history[0].revision,2);assert.equal(f.db.devices[0].vision.diagnostics_history[0].body.attempted,2);assert.equal('camera_frame' in f.db.devices[0].vision.diagnostics_history[0],false);
+ report={...report,windows:report.windows.map(w=>({...w,revision:1_000_001}))};reply=post(report);assert.equal(reply.status,200);assert.equal(f.db.devices[0].vision.diagnostics_history[0].revision,1_000_001,'large safe revisions do not reject the whole heartbeat');
+ reply=post({...report,windows:[{...report.windows[0],body:{...report.windows[0].body,latency_histogram:[1000001,0,0,0,0,0,0,0]}}]});assert.equal(reply.status,400);
 });

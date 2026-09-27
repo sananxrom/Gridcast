@@ -1,4 +1,5 @@
 import type { Observation } from './metrics';
+import { PresencePerformanceTelemetry, type FaceCoverageDecision, type PresenceDiagnosticSnapshot } from './performance-telemetry';
 import { PRESENCE_V2_PROFILE } from './presence-v2-profile';
 export { PRESENCE_V2_PROFILE } from './presence-v2-profile';
 
@@ -7,6 +8,7 @@ type Manifest = { version: string; assets: Asset[] };
 type Stage = 'body' | 'face';
 type StageStatus = { state: 'starting' | 'ready' | 'error'; model: string; message?: string; last_at?: number; observed_fps?:number; result_ms?:number; retry_attempts?:number; retry_delay_ms?:number|null; last_failure?:string; last_issue?:'stage_failure'|'slow_result'|'unsupported'; worker_offscreen_canvas?:boolean; worker_webgl?:boolean; worker_webgl2?:boolean };
 export type PresenceV2State = { body: StageStatus; face: StageStatus };
+export type PresenceV2Runtime = { close:()=>void;retryFailed:()=>Promise<boolean>;readonly busy:boolean;readonly bodyBusy:boolean;readonly faceBusy:boolean;diagnostics:()=>PresenceDiagnosticSnapshot;frame:(video:HTMLVideoElement,calibration:{yaw:number;pitch:number},context?:any,confidence?:number)=>void };
 export type PresenceV2AssetProgress = { message:string;phase:'checking'|'downloading'|'verifying';downloaded:number;verified:number;total:number;elapsedSeconds:number;etaSeconds:null };
 const CACHE = 'gridcast-presence-v2-assets-1';
 const WORKER_HASH: Record<Stage, string> = {
@@ -57,13 +59,14 @@ export async function preparePresenceV2Assets(signal: AbortSignal, progress: (va
 export async function createPresenceV2Runtime(
   assets: Awaited<ReturnType<typeof preparePresenceV2Assets>>,
   signal: AbortSignal,
-  observe: (observation: Observation, context?: any) => void,
+  observe: (observation: Observation, context?: any) => FaceCoverageDecision|void,
   onState: (state: PresenceV2State) => void,
 ) {
   const state: PresenceV2State = {
     body: { state: 'starting', model: PRESENCE_V2_PROFILE.body_model },
     face: { state: 'starting', model: PRESENCE_V2_PROFILE.face_model },
   };
+  const telemetry=new PresencePerformanceTelemetry();
   let closed = false, lastEmitted = -Infinity;
   let watchdog: ReturnType<typeof setInterval> | null = null;
   const workers: Partial<Record<Stage, Worker>> = {}, urls: string[] = [], stageUrls:Record<Stage,string[]>={body:[],face:[]}, busy: Record<Stage, boolean> = { body: false, face: false };
@@ -141,6 +144,8 @@ export async function createPresenceV2Runtime(
       state[stage] = { state: data.result?.ok ? 'ready' : 'error', model: state[stage].model,...workerCapabilities({offscreen_canvas:state[stage].worker_offscreen_canvas,webgl:state[stage].worker_webgl,webgl2:state[stage].worker_webgl2}),
         retry_attempts:retryAttempts[stage],retry_delay_ms:null,...(!data.result?.ok?{last_failure:safeFailure(data.error||'Camera inference failed'),message:safeFailure(data.error||'Camera inference failed')} : {}), last_at: performance.now() };
       const availableAt = performance.now(), maxAge = stage === 'body' ? 750 : 500;
+      const latency=availableAt-data.at;
+      telemetry.completed(stage,latency,maxAge,data.result?.ok===true,availableAt);
       if (availableAt - data.at > maxAge) {
         const slow=`Slow frame discarded (${Math.round(availableAt-data.at)} ms)`;
         state[stage] = { state: data.result?.ok?'ready':'error', model: state[stage].model,...workerCapabilities({offscreen_canvas:state[stage].worker_offscreen_canvas,webgl:state[stage].worker_webgl,webgl2:state[stage].worker_webgl2}),message:slow,last_issue:'slow_result',last_failure:slow,last_at:availableAt,retry_attempts:retryAttempts[stage],retry_delay_ms:null };
@@ -154,7 +159,11 @@ export async function createPresenceV2Runtime(
       else { observation.faces = { ok: data.result?.ok === true, faces: data.result?.faces || [], saturated: data.result?.saturated === true }; observation.calibration = data.result?.calibration || null; }
       // V2 metrics use result-available order across independent workers. Preserve the
       // original capture time and play token separately; never merge stages synthetically.
-      if (availableAt > lastEmitted) { observe(observation, { ...(data.context || {}), stage, captured_at: data.at, available_at: availableAt }); lastEmitted = availableAt; }
+      if (availableAt > lastEmitted) {
+        const decision=observe(observation, { ...(data.context || {}), stage, captured_at: data.at, available_at: availableAt, latency_ms:latency });
+        if(stage==='face'&&decision)telemetry.coverage(decision,availableAt);
+        lastEmitted = availableAt;
+      }
       report();
       if(failedResults[stage]>=3)failStage(stage,data.error||`${stage} inference failed repeatedly`);
     };
@@ -202,18 +211,19 @@ export async function createPresenceV2Runtime(
     const worker = workers[stage], now = performance.now(), interval = stage === 'body' ? PRESENCE_V2_PROFILE.body_interval_ms : PRESENCE_V2_PROFILE.face_interval_ms;
     if (!worker || closed || signal.aborted || busy[stage] || now - lastFrame[stage] < interval || video.readyState < 2 || video.paused || video.ended || video.currentTime === lastTime[stage]) return;
     if (video.srcObject instanceof MediaStream && !video.srcObject.getVideoTracks().some(t => t.readyState === 'live' && !t.muted && t.enabled)) return;
-    lastFrame[stage] = now; lastTime[stage] = video.currentTime; busy[stage] = true; sentAt[stage] = now;
+    lastFrame[stage] = now; lastTime[stage] = video.currentTime; busy[stage] = true; sentAt[stage] = now;telemetry.attempted(stage,now);
     try {
       const size = stage === 'body' ? PRESENCE_V2_PROFILE.body_input_px : PRESENCE_V2_PROFILE.face_input_px;
       const frame = await createImageBitmap(video, { resizeWidth: size, resizeHeight: Math.max(1, Math.round(size * video.videoHeight / video.videoWidth)), resizeQuality: 'low' });
       if (closed || signal.aborted || workers[stage] !== worker) { frame.close(); busy[stage] = false; return; }
       worker.postMessage({ type: 'FRAME', frame, at: now, confidence: Math.max(.01, Math.min(1, confidence)), calibration, context }, [frame]);
-    } catch (error: any) { busy[stage] = false; failStage(stage, error.message || 'Camera frame could not be read'); }
+    } catch (error: any) { busy[stage] = false;telemetry.submissionFailed(stage,performance.now()); failStage(stage, error.message || 'Camera frame could not be read'); }
   };
-  if(!closed&&!signal.aborted)watchdog = setInterval(() => { const now = performance.now(); for (const stage of ['body', 'face'] as const) if (busy[stage] && now - sentAt[stage] > 10000) failStage(stage, `${stage} inference stalled`); }, 1000);
+  if(!closed&&!signal.aborted)watchdog = setInterval(() => { const now = performance.now(); for (const stage of ['body', 'face'] as const) if (busy[stage] && now - sentAt[stage] > 10000) {telemetry.timedOut(stage,now);failStage(stage, `${stage} inference stalled`);} }, 1000);
   return {
     close,
     retryFailed,
+    diagnostics:()=>telemetry.snapshot(),
     get busy() { return busy.body || busy.face; },
     get bodyBusy() { return busy.body; },
     get faceBusy() { return busy.face; },
