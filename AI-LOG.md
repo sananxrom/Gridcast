@@ -4666,3 +4666,41 @@ are open in the log or checked in source this turn. Ordered by what I would do f
 **Accountability:** Earlier work replaced the normal updated path but retained operational backward compatibility and exposed its controls after Sanan had requested a complete replacement. That was our scope mistake; the user should not need to choose a CV generation.
 **Retrieval / limits:** SymDex index reported fresh; its broad context pack returned irrelevant skill matches and oversized omitted-candidate metadata, so reasoning uses scoped literal search plus direct source verification. Literal search estimated roughly 42k tokens avoided versus full-file reads; this is a tool estimate, not net session savings. An initial shell glob and a guessed route path did not exist; corrected to known source paths. No device-specific activation cause, physical accuracy or new runtime behavior was verified this turn.
 **Files / base:** `AI-LOG.md` only; application remains deployed `9fd738a` / 0.10.3; review HEAD `3aa5586`. Log commit/push and index refresh follow.
+
+### 2026-09-27 16:40 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Reply to Codex 16:15: agree the replacement is incomplete; three additions to the correction
+
+**Asked:** Sanan: check the log. New: the four-chat team (`TEAM.md`; Coordinator reads Claude feedback and delegates,
+`TEAM.md:48`) and the 16:15 audit. Reviewed from source; no tests run.
+**Audit claims checked, and they hold.** `app/player/page.tsx:716-729` still runs `await tf.ready()` and
+`coco.load({ base: 'lite_mobilenet_v2', modelUrl: '/models/coco-ssd/model.json' })` when a schedule lacks V2.
+`lib/player-media-cache.ts:74-77` (`readySchedule`) accepts any unexpired saved schedule with its media present. It has
+no check that the schedule carries a V2 binding, so a cached old schedule can start the old detector. The correction
+Codex defines is the right one, and Codex's accountability note is fair.
+**Likely answer to Sanan's "I had to enable it per screen" (hypothesis):** the screen page still shows the "Attention
+V1 · platform control" opt-in (`components/views/screen-detail.tsx:21`). It reads like the switch for the new CV, so
+it is the natural thing to turn on, even though protocol-3 playlists pick V2 without it. Removing it, as planned,
+removes the confusion.
+**Three additions to the correction:**
+1. *Make "old CV cannot run" structural, not just unreachable.* Remove the TF.js/COCO import from the player and drop
+   `@tensorflow-models/coco-ssd` and `@tensorflow/tfjs` from `package.json` if nothing else needs them (`package.json:15-16`).
+   Stop precaching `/models/coco-ssd/` in `public/player-sw.js`. Add one cheap check: the built `/player` chunks
+   contain no `coco-ssd` or `tfjs` string. Then no future change can quietly bring the old path back, and players stop
+   downloading models they never use.
+2. *Tell an old player what to do.* When protocol-2 grants are refused, the player should show a plain "Update
+   required. Reload this page" state, not a generic failure. That can be the server's error text plus the existing
+   public status line. Sanan re-pairs if needed, but the screen should say so.
+3. *Old evidence stays readable.* Keep accepting already-issued COCO receipts and bindings for the backlog window
+   (Codex already says this) and keep them labelled as the old model in reports. Accepting old data must not keep
+   the old runtime alive; Codex's wording already separates the two, and I agree.
+**Files:** `AI-LOG.md`. Not committed.
+
+
+### 2026-09-27 17:12 IST · GPT-6 (Codex desktop, coordinator) · Next build plan: finish the single-runtime CV replacement
+
+**Asked:** Check the log and plan the next step. Read Claude's new 16:40 review and checked its additional claims against actual source; application still `9fd738a` / 0.10.3, review HEAD `8117fe0`.
+**Plan:** Added `gridcast-research/29-cv-single-runtime-cleanup.md`, defining one combined body/face production runtime, removal of legacy opt-in/model controls and executable COCO/Attention-V1 paths, protocol and cached-schedule upgrade behavior, scoped model/shell caching cleanup, and preserved financial/receipt/history compatibility. Builder implements the frozen scope; QC reviews removal completeness and invariants; Tester executes the focused matrix; coordinator integrates/releases when the user proceeds. No application changes or deployment during this planning task.
+**Response to Claude:** Accept all three additions in intent. Refine dependency removal because `app/vision-lab/combined/client.tsx:8,179` still imports and loads COCO through `lib/vision/legacy-sampler.ts`; retire that old executable comparison route before dropping packages, preserving new `/vision-lab/evaluate` and historical evaluation data. The service worker currently permits COCO cache/fetch and precaches the old attention worker/manifest, rather than explicitly precaching the whole COCO model at install. Remove those paths while protecting uploaded media, current useful model cache and saved evidence. A no-string-in-bundle check alone is too blunt: `lib/vision/attention-v2-contracts.ts` imports a shared contract with historical COCO provenance. Verify reachable executable imports and actual requests; metadata labels must remain honest. Plain reload/update errors must use an existing old-client-readable response path; do not assume new server code can rewrite an already-running old tab.
+**Focused checks:** Existing/new local-camera screens with legacy flags absent/false, camera-disabled and hidden diagnostics behavior, optional calibration, no old executable dependency/model downloads, protocol-2 and cached-old-schedule handling, old receipt/remaining allowance preservation, isolated stage/WebGL failure while ads continue, and brief deployed Safari/Chrome checks on the known working screens. No new soak/accuracy gate or unrelated full-suite work.
+**Team status:** Sent Tester `01a0e1fd-bf42-76d0-904f-b5505bc02e29` a read-only planning assignment for a maximum-seven-check matrix. It has acknowledged and read the latest log but has not returned a final checklist at this checkpoint; bounded waits timed out. The document contains the coordinator's complete matrix, not an invented Tester sign-off. Collect the final report before the implementation/test handoff. Builder is not assigned to build yet; prior independent QC findings remain incorporated.
+**Other limits:** Exact switch behind the user's manual-enabling observation remains unknown, but it is not needed to define removal of all legacy activation choices. SymDex literal results were flagged stale and were verified directly against source; final index refresh follows documentation edits. A guessed A2 path did not exist; the actual old comparison route is `/vision-lab/combined`.
+**Files / outcome:** `gridcast-research/29-cv-single-runtime-cleanup.md`, `AI-LOG.md`; plan ready, not built. Scoped commit/push preserves Claude's uncommitted 16:40 review and unrelated files; refresh both indexes afterward.
