@@ -1,6 +1,6 @@
 # Complete the CV replacement: one active runtime
 
-Status: built and locally verified as player 0.10.4 on 28 September 2026; independent source QC cleared the final candidate. Firebase release is pending. Prepared 27 September after Sanan’s replacement clarification; this completes document 28’s intended replacement without changing the accepted models or metric thresholds.
+Status: deployed as player 0.10.4, application commit `8c233235e538875ebd5857d07ca1a503c4315b3c`, Firebase rollout `build-2026-09-27-004` (UTC ID), verified READY / SUCCEEDED / 100% traffic on 28 September 2026 IST. Independent QC and focused tests passed; production report and laptop Safari body/face runtime plus persisted telemetry were checked. Physical café accuracy and long-session attention diagnosis remain follow-up work.
 
 ## Intended result
 

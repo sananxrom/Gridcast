@@ -24,14 +24,14 @@ All chats are on host `local`. The QC/Tester chats currently have no saved proje
 
 ## Current application checkpoint
 
-- Firebase player 0.10.3, application commit `9fd738adb40ed212f46c2119958bee9e8709c1c1`.
-- Rollout `build-2026-09-27-003` was verified SUCCEEDED, READY and 100% traffic on 27 September. Reverify cloud state when doing a future release; this is a dated checkpoint.
+- Firebase player 0.10.4, application commit `8c233235e538875ebd5857d07ca1a503c4315b3c`.
+- Rollout `build-2026-09-27-004` (UTC ID) was verified SUCCEEDED, READY and 100% traffic on 28 September IST. Reverify cloud state for future releases; this is a dated checkpoint.
 - Project `gridcast-508011`, backend `gridcast-backend`, hosting `asia-southeast1`. Firestore and private media are in Mumbai. Do not substitute an old Vercel URL.
 - App: https://gridcast-backend--gridcast-508011.asia-southeast1.hosted.app
-- The complete CV implementation uses EfficientDet body detection plus MediaPipe face analysis. Keep both full models. Body and face stages recover independently with ongoing backoff capped at five minutes. Failed inference is unavailable, never measured zero.
+- Production COCO/V1 execution, controls, old model assets and comparison lab are removed in 0.10.4. Existing camera-enabled screens use the new system automatically after reload; historical receipt validation remains. The complete CV implementation uses EfficientDet body detection plus MediaPipe face analysis. Keep both full models. Body and face stages recover independently with ongoing backoff capped at five minutes. Failed inference is unavailable, never measured zero.
 - Calibration is optional; defaults are valid operating settings. Ads continue during CV failure. New creatives reset per-creative measurements, not the camera/model session.
 - Player diagnostics, when enabled, include local camera preview, body/face boxes and live metrics. Dashboard receives appropriate aggregate measurements and exposes existing reports. Camera images/geometry and temporary track IDs remain local.
-- Laptop Safari / Demo Mohali Retail Media 1: coordinator observed both models counting after 0.10.3 reload. Three existing blocked delivery records remain saved; no cleanup was performed.
+- Laptop Safari / Demo Mohali Retail Media 1: coordinator checked 0.10.4 across creative transitions on 28 September. Both models ready with fresh empty-scene observations; Firebase persisted body/face performance counters. This was not a people-accuracy test. Seven blocked records were present at first observation and remained unchanged during the bounded test; no cleanup performed. Temporary test tab was closed afterward.
 - Old iMac Safari / earlier Demo Tricity Screens 3: user reported worker WebGL 2 unavailable. Old iMac Chrome / Demo Mohali Retail Media 2: user subsequently confirmed counting works. Do not mislabel either observation as proof of long-session reliability or accuracy, and do not swap these screen identities.
 - Claude's 13:49 IST log entry proposes follow-up work. It is review input, not an assignment to revoke pairings, delete saved records, merge main, rotate credentials or start new features.
 
