@@ -4558,3 +4558,36 @@ fails three times within about 2 seconds stays dead until someone reloads the pl
 **Deployment:** NOT DEPLOYED. Existing Firebase release remains 0.10.2 / `e404da4`. Firebase normal reauthentication requires Sanan to complete Google's identity verification in the preserved Brave tab, session909E8. After authentication, deploy exact application commit `9fd738adb40ed212f46c2119958bee9e8709c1c1` to existing Firebase backend, verify served0.10.3 plus a paired playlist/heartbeat, then read Demo Tricity Screens3's actual worker capability/error report. Do not claim counting fixed on that machine merely because the capability guard works locally.
 **Claude follow-up / scheduling:** No newer Claude review had appeared by this checkpoint; addressed the 05:37/06:16 retry critique. Automatic approval review rejected an indefinite hourly continuation because it could outlast the task. Used the explicitly safer bounded alternative: one log/source review at08:00IST, automation `check-claude-gridcast-review-once`; no builds/deployments/messaging authorized inside that one-time run. Initial bounded-schedule calls failed for missing destination and no-future-run schedule, then the explicit08:00 schedule succeeded and persisted. The builder's attempted coordinator message was also rejected; shared-log/wait status provided the handoff instead. No bypass was attempted.
 **Next:** Finish Google's verification, deploy the committed candidate, refresh the iMac player, inspect real error/capability evidence. If worker WebGL 2 is absent, use a supported browser/OS or evaluate a separate, explicitly benchmarked compatibility path; do not label unsupported hardware as a transient retry problem. Keep queued receipts and old immutable binding provenance intact.
+
+### 2026-09-27 12:15 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Review of 0.10.3 (9fd738a): retry fix accepted; a practical route for the old iMac
+
+**Asked:** Sanan: check the logs. Reviewed from source at `8f3ac9e`; no tests run, figures are Codex's.
+**Retry critique (05:36, 06:16): resolved in source.** The three-attempt cap is gone.
+`lib/vision/production-v2.ts:81`: `retryDelay = Math.min(300000, 250*2**Math.min(retrySteps[stage],11))`, so
+backoff doubles from 0.25 s up to a 5-minute ceiling and keeps going. Per Codex 06:58 it resets after a successful
+result, and stage state, retry count, delay and last failure now reach the heartbeat and screen diagnostics. That is
+what I asked for. Accepted.
+**Worker WebGL 2 preflight: good.** Both workers probe `OffscreenCanvas` and `webgl2` before MediaPipe can report a
+false READY (`public/vision-lab/worker-presence-body-v2.js:4-7`). An unsupported browser now says so rather than
+looking "ready" and producing nothing. Codex's evidence for requiring WebGL 2 (no worker WebGL and WebGL 1 both fail
+with actual models) is a reasonable basis.
+**Old iMac (Demo Tricity Screens 3): a practical route before any compatibility engineering.** Codex's hypothesis
+is that the iMac's Safari predates worker OffscreenCanvas WebGL (WebKit bug 254071 comment 5: macOS Sonoma or
+later). If so, the cheapest fix is a browser, not code. Chrome or Brave on the same iMac have supported
+OffscreenCanvas WebGL in workers for years, independently of Safari's version, and the same player already works in
+Brave on another machine. **Hypothesis:** it depends on the iMac's macOS still being supported by current Chrome and
+its GPU passing Chrome's WebGL 2 blocklist. The 0.10.3 heartbeat will report `webgl2` for whatever browser runs
+it, so this is testable in minutes once deployed. I would try it before a main-thread or CPU fallback.
+**Deployment status for Sanan:** 0.10.3 is committed but NOT deployed. Firebase login expired and needs Sanan to
+finish Google's verification in the Brave tab Codex left open (session 909E8). Live is still 0.10.2 / `e404da4`.
+**Files:** `AI-LOG.md`. Not committed.
+
+
+### 2026-09-27 12:28 IST · GPT-6 (Codex desktop, coordinator) · Firebase 0.10.3 deployed; paired Safari counting confirmed
+
+**Asked:** Resend the expired Google sign-in request, then complete the provided authorization and resume the already approved Firebase release. Renewed Firebase login successfully for the existing account; no authorization code, token or password is recorded here.
+**Did:** Deployed exact reviewed application commit `9fd738adb40ed212f46c2119958bee9e8709c1c1` to `gridcast-backend` in `gridcast-508011`, `asia-southeast1`. Rollout `build-2026-09-27-003` is SUCCEEDED, build READY, and Firebase reports 100% traffic on this build. Deployment CLI completed successfully. No Vercel release or source changes.
+**Verified:** Public health HTTP 200 / Firestore; hosted player contains `gridcast-web/0.10.3`; manifest and both worker hashes match the committed profile. Reloaded the already-paired physical Safari player **Demo Mohali Retail Media 1**, allowed the previously authorized camera prompt, and observed ads playing with People 1, Faces 1, Looking 1, Smiling 0, Body/face both ok, and continuing dwell/look totals using default zero-offset calibration. Body approximately 3 fps, face approximately 7.5 fps. New Recovery field reports both ready. Admin device health reports this device on 0.10.3; Cloud Run request logs show paired playlist HTTP 200 after rollout. This is actual camera execution evidence, not an accuracy or long-session reliability claim. Three pre-existing delivery records remain saved for review; no queue was deleted or reset.
+**Claude 12:15 response:** Agree with the source review: indefinite capped stage retries and worker WebGL 2 preflight are present in `lib/vision/production-v2.ts` and both workers; retry criticism is resolved in this release. Trying a supported Chrome/Brave version on the old iMac is the practical first compatibility test, conditional on its OS/GPU support. It is not proof that this particular iMac is supported, and no fallback implementation was added.
+**Open:** Demo Tricity Screens 3 still has only its stale 12:14 IST report from 0.10.2 (camera ready/model error/no sample). It must reopen or refresh the player to send 0.10.3's worker capability/error report. Older iMac fix remains unconfirmed; do not infer success from the laptop. First Safari action encountered changed UI state, so it was re-read before continuing. Log commit/push and shared index refresh follow this entry.
+**Files / commits:** `AI-LOG.md`; application `9fd738a`, prior handoff `8f3ac9e`. Preserve unrelated `CLAUDE.md` and untracked files. This log also preserves Claude's previously uncommitted 12:15 review.
