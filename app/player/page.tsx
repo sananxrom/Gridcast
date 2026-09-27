@@ -19,7 +19,7 @@ import { presenceV2Summary, preparePresenceV2Envelope } from '@/lib/vision/atten
 import { PresenceV2LocalDiagnostics, type LocalTrackDiagnostics } from '@/lib/vision/local-diagnostics-v2';
 
 declare global { interface Window { YT: any; onYouTubeIframeAPIReady: () => void; cocoSsd: any; tf: any } }
-const APP_VERSION = 'gridcast-web/0.10.2';
+const APP_VERSION = 'gridcast-web/0.10.3';
 const MODEL_VERSION = 'coco-ssd@2.2.3/lite_mobilenet_v2';
 const PRESENCE_V2_MODEL_VERSION = PRESENCE_V2_PROFILE.body_model;
 type Credential = { token: string; device_id: string; screen_id: string };
@@ -46,6 +46,15 @@ async function request(path: string, token?: string, body?: any) {
   const res = await fetch('/api' + path, { method: body === undefined ? 'GET' : 'POST', headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? { cache: 'no-store' as const } : { body: JSON.stringify(body) }) });
   const value = await res.json().catch(() => ({}));
   return { status: res.status, value };
+}
+
+function presenceRecoveryLabel(stage:PresenceV2State['body']|undefined,label:string){
+  if(!stage)return `${label}: unavailable`;
+  if(stage.state==='ready')return `${label}: ready`;
+  if(stage.state==='starting')return `${label}: retrying · attempt ${stage.retry_attempts||0}`;
+  const delay=stage.retry_delay_ms;
+  const wait=delay===null||delay===undefined?'scheduled':delay<1000?`${delay} ms`:delay<60000?`${Math.ceil(delay/1000)} s`:`${Math.ceil(delay/60000)} min`;
+  return `${label}: ${stage.last_issue==='unsupported'?'unsupported':'failed'} · retry ${stage.retry_attempts||0} · next ${wait}${stage.last_failure?` · ${stage.last_failure}`:''}`;
 }
 
 export default function Player() {
@@ -115,6 +124,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
     let retryingWrites = false;
     let pairingChanged = false;
     const isCurrent = () => !disposed && !pairingChanged;
+    let cachedRuntimeDiagnostic:any=null;
 
     let disposed = false, currentSlot: Slot | null = null, playlist: Playlist | null = null, pending: Playlist | null = null;
     let cycleItems: Item[] = [], cycleIndex = 0, fillerIndex = 0, waitingEmpty = false;
@@ -146,6 +156,19 @@ const [soundBlocked, setSoundBlocked] = useState(false);
     const state = (value: string) => { if (!disposed) setStatus(value); };
     const isPresenceV2=(item?:Item|null)=>item?.measurement_profile===PRESENCE_V2_PROFILE.id&&typeof item.measurement_binding_id==='string';
     const hasPresenceV2=(settings?:Playlist|null)=>!!settings&&(settings.config?.presence_profile_id===PRESENCE_V2_PROFILE.id||[...(settings.items||[]),...(settings.filler_items||[])].some(isPresenceV2));
+    function runtimeDiagnostic(){
+      if(cachedRuntimeDiagnostic)return cachedRuntimeDiagnostic;
+      const ua=navigator.userAgent||'',platform=(navigator as any).userAgentData?.platform||navigator.platform||'';
+      let browser='Other',browserMajor=0,match:RegExpMatchArray|null=null;
+      if((match=ua.match(/Edg\/(\d{1,3})/))){browser='Edge';browserMajor=Number(match[1]);}
+      else if((match=ua.match(/(?:Chrome|CriOS)\/(\d{1,3})/))){browser='Chrome';browserMajor=Number(match[1]);}
+      else if((match=ua.match(/Firefox\/(\d{1,3})/))){browser='Firefox';browserMajor=Number(match[1]);}
+      else if((match=ua.match(/Version\/(\d{1,3}).*Safari\//))){browser='Safari';browserMajor=Number(match[1]);}
+      const os=/iPhone|iPad|iPod/i.test(platform)||/iPhone|iPad|iPod/.test(ua)||platform==='MacIntel'&&navigator.maxTouchPoints>1?'iOS':/Mac|macOS/i.test(platform)?'macOS':/Win/i.test(platform)?'Windows':/Android/i.test(ua)?'Android':/Linux/i.test(platform)?'Linux':'Other';
+      const hasGL=(kind:'webgl'|'webgl2')=>{try{const c=document.createElement('canvas'),gl=c.getContext(kind) as WebGLRenderingContext|WebGL2RenderingContext|null;const supported=!!gl;gl?.getExtension('WEBGL_lose_context')?.loseContext();return supported;}catch{return false;}};
+      cachedRuntimeDiagnostic={browser,browser_major:browserMajor,os,capabilities:{worker:typeof Worker==='function',offscreen_canvas:typeof OffscreenCanvas==='function',create_image_bitmap:typeof createImageBitmap==='function',webgl:hasGL('webgl'),webgl2:hasGL('webgl2'),secure_context:window.isSecureContext===true}};
+      return cachedRuntimeDiagnostic;
+    }
     function stopAttention(){attentionAbort?.abort();attentionAbort=null;presenceV2Setup=null;attentionWorker?.close();attentionWorker=null;presenceV2Diagnostics.reset();presenceV2State=null;setPresenceV2ViewState(null);activeCalibrator=null;activeCalibratorToken=null;attentionProfile='';setAttentionModelsReady(false);setAttentionCalibrating(false);setAttentionDisplay(null);if(currentSlot)currentSlot.attentionValid=false;}
     async function ensurePresenceV2(settings:Playlist){
       if(!hasPresenceV2(settings))return;
@@ -347,10 +370,11 @@ const [soundBlocked, setSoundBlocked] = useState(false);
     }
     function vision() {
       const v2=isPresenceV2(currentSlot?.item), bodyState=presenceV2State?.body.state;
+      const stageRecovery=(stage:PresenceV2State['body']|undefined)=>({status:!stage?'unavailable':stage.last_issue==='unsupported'?'unsupported':stage.last_issue==='slow_result'?'slow':stage.state==='error'?'failed':stage.state==='starting'?'retrying':'ready',attempts:Math.min(999999,Math.max(0,Math.floor(stage?.retry_attempts||0))),retry_after_ms:stage?.retry_delay_ms??null,detail:stage?.last_failure||'',worker_offscreen_canvas:stage?.worker_offscreen_canvas??null,worker_webgl:stage?.worker_webgl??null,worker_webgl2:stage?.worker_webgl2??null});
       return { camera_state: !playlist?.screen.has_camera ? 'disabled' : cameraStarting ? 'starting' : cameraHealthyNow() ? 'ready' : 'unavailable',
         model_state: v2 ? bodyState==='ready'?'ready':bodyState==='error'?'error':cameraStarting?'loading':'not_loaded' : detectorBroken ? 'error' : detector ? 'ready' : cameraStarting ? 'loading' : 'not_loaded',
         model_ver: v2 ? bodyState==='ready'?PRESENCE_V2_MODEL_VERSION:null : detector && !detectorBroken ? MODEL_VERSION : null,
-        ...(v2?{presence_profile_id:PRESENCE_V2_PROFILE.id,measurement_binding_id:currentSlot?.item.measurement_binding_id,assignment_id:currentSlot?.item.assignment_id}:{}),last_sample_at: lastSampleAt };
+        ...(v2?{presence_profile_id:PRESENCE_V2_PROFILE.id,measurement_binding_id:currentSlot?.item.measurement_binding_id,assignment_id:currentSlot?.item.assignment_id,recovery:{body:stageRecovery(presenceV2State?.body),face:stageRecovery(presenceV2State?.face)},runtime:runtimeDiagnostic()}:{}),last_sample_at: lastSampleAt };
     }
     async function flushTest() {
       if (diagnosticFlushing || disposed || fatal) return;
@@ -747,7 +771,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
       if(activeCalibratorToken){activeCalibrator=null;activeCalibratorToken=null;calibrationRequested=false;attentionSetupPaused=false;calibrationFeedbackUntil=Date.now()+15000;setAttentionSetupActive(false);setAttentionCalibrating(false);setAttentionStatus(attentionCalibration?'Calibration cancelled; the saved calibration is still in use.':'Calibration cancelled · playback continues with default zero offsets.');return;}
       if(attentionAbort){attentionSetupPaused=true;calibrationRequested=false;stopAttention();setAttentionProgress(null);setAttentionSetupActive(true);setAttentionStatus('Attention setup cancelled. Saved delivery evidence and any earlier calibration are unchanged.');}
     };
-    retryAttention.current=()=>{attentionSetupPaused=false;if(playlist&&hasPresenceV2(playlist)){if(!cameraHealthyNow()){void initCamera(true);return;}if(attentionWorker&&presenceV2State&&[presenceV2State.body,presenceV2State.face].some(stage=>stage.state==='error')){void attentionWorker.retryFailed().then((attempted:boolean)=>{if(!attempted)setAttentionStatus('The failed camera CV stage could not be restarted. Reload the player to try again.');});return;}void ensurePresenceV2(playlist);return;}if(!cameraHealthyNow()){void initCamera(true);return;}if(attentionModelsReady&&attentionWorker&&playlist?.config.attention_enabled===true){calibrationRequested=false;void calibrateAttention.current().catch(()=>{});return;}if(playlist)void ensureAttention(playlist);};
+    retryAttention.current=()=>{attentionSetupPaused=false;if(playlist&&hasPresenceV2(playlist)){if(!cameraHealthyNow()){void initCamera(true);return;}if(attentionWorker&&presenceV2State&&[presenceV2State.body,presenceV2State.face].some(stage=>stage.state==='error')){void attentionWorker.retryFailed();return;}void ensurePresenceV2(playlist);return;}if(!cameraHealthyNow()){void initCamera(true);return;}if(attentionModelsReady&&attentionWorker&&playlist?.config.attention_enabled===true){calibrationRequested=false;void calibrateAttention.current().catch(()=>{});return;}if(playlist)void ensureAttention(playlist);};
     async function detect() {
       const v = cameraSurface, c = overlay, target = currentSlot;
       // Never sample an idle, paused or background player. Only one inference may run at once.
@@ -1004,6 +1028,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
           {diagnosticsExpanded&&<>
             <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px]"><label className="flex items-center gap-1"><input type="checkbox" aria-label="Show tracking boxes" checked={showTrackingBoxes} onChange={e=>setShowTrackingBoxes(e.target.checked)}/>Show tracking boxes</label><label className="flex items-center gap-1"><input type="checkbox" aria-label="Show face details" checked={showFaceDetails} onChange={e=>setShowFaceDetails(e.target.checked)}/>Show face details</label></div>
             <div className="grid grid-cols-2 gap-x-3 gap-y-1 border-t border-white/10 pt-2 text-[10px]"><span>Body observed / unknown</span><span className="text-right">{displayedSummary?`${displayedSummary.body_observed_s.toFixed(1)}s / ${displayedSummary.body_unknown_s.toFixed(1)}s`:'Unavailable'}</span><span>Face observed / unknown</span><span className="text-right">{displayedSummary?`${displayedSummary.face_observed_s.toFixed(1)}s / ${displayedSummary.face_unknown_s.toFixed(1)}s`:'Unavailable'}</span><span>Attention observed / unknown</span><span className="text-right">{displayedSummary?`${displayedSummary.attention_observed_s.toFixed(1)}s / ${displayedSummary.attention_unknown_s.toFixed(1)}s`:'Unavailable'}</span><span>Body throughput / response</span><span className="text-right">{attentionDisplay?.performance.body_fps===null||attentionDisplay?.performance.body_fps===undefined?'Unavailable':`${attentionDisplay.performance.body_fps.toFixed(1)} fps · ${attentionDisplay.performance.body_result_ms?.toFixed(1)??'—'} ms`}</span><span>Face throughput / response</span><span className="text-right">{attentionDisplay?.performance.face_fps===null||attentionDisplay?.performance.face_fps===undefined?'Unavailable':`${attentionDisplay.performance.face_fps.toFixed(1)} fps · ${attentionDisplay.performance.face_result_ms?.toFixed(1)??'—'} ms`}</span><span>Estimated distance / stopped</span><span className="text-right">Face width 14.5 cm at 65° FOV; body height 165 cm; stopped below 0.15 body-heights/s for 2.5 s. Approximate local estimates only.</span><span>Calibration</span><span className="text-right">{attentionProvenance?attentionProvenance.mode==='guided'?`Guided · ${attentionProvenance.revision?.slice(0,8)||'saved'}`:'Default · zero offsets':'Unavailable'}</span><span>Recorded / pending</span><span className="text-right">{recorded} / {queue.pending}{queue.reserved?` · ${queue.reserved} reserved`:''}</span><span>Camera / model</span><span className="text-right">{visionStatus}</span><span>Setup</span><span className="text-right">{attentionStatus||'Unavailable'}</span></div>
+            {presenceV2ViewState&&<p data-role="cv-recovery-state" className="border-t border-white/10 pt-2 text-[10px] text-white/70">Recovery · {presenceRecoveryLabel(presenceV2ViewState.body,'People')} · {presenceRecoveryLabel(presenceV2ViewState.face,'Face')}</p>}
             <div className="max-h-28 space-y-1 overflow-y-auto border-t border-white/10 pt-2">{attentionDisplay?.liveFresh&&attentionDisplay.tracks.length?attentionDisplay.tracks.map(track=><p key={track.key} className="flex justify-between gap-2 text-[10px]"><span>Track #{track.key} · {track.uncertain||track.looking===null?'Unknown':track.looking?'Looking':'Not looking'}{track.smiling===null?' · smile unknown':track.smiling?' · smiling':' · not smiling'}</span><span className="shrink-0 tabular-nums">Dwell {track.dwell_s.toFixed(1)}s · look {track.longest_look_s.toFixed(1)}s</span></p>):<p className="text-[10px] text-white/50">Temporary track details unavailable while observations are stale or paused.</p>}</div>
             <p className="border-t border-white/10 pt-2 text-[10px] text-white/60">{diagnosticActive?'Diagnostic sample':`Last play average: ${average}`} · {diagnosticStatus||status}</p>
             {commissioning&&visionRetry&&<button className="underline" onClick={()=>retryCamera.current()}>Retry camera</button>}

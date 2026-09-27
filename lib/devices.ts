@@ -121,6 +121,16 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
       if (!v || !['disabled','starting','ready','unavailable'].includes(v.camera_state) || !['loading','ready','error','not_loaded'].includes(v.model_state)
         || (v.model_ver !== null && !['coco-ssd@2.2.3/lite_mobilenet_v2',PRESENCE_V2_PROFILE.body_model].includes(v.model_ver))
         || (v.last_sample_at !== null && (typeof v.last_sample_at !== 'string' || !Number.isFinite(Date.parse(v.last_sample_at))))) return fail(400, 'Invalid detector status');
+      const stageReport=(x:any)=>x&&['ready','retrying','failed','slow','unsupported','unavailable'].includes(x.status)&&Number.isSafeInteger(x.attempts)&&x.attempts>=0&&x.attempts<=999999
+        &&(x.retry_after_ms===null||Number.isSafeInteger(x.retry_after_ms)&&x.retry_after_ms>=0&&x.retry_after_ms<=300000)
+        &&typeof x.detail==='string'&&x.detail.length<=120&&!/[\r\n\t]/.test(x.detail)&&!(/https?:\/\//i.test(x.detail))
+        &&['worker_offscreen_canvas','worker_webgl','worker_webgl2'].every(k=>x[k]===undefined||x[k]===null||typeof x[k]==='boolean');
+      const cleanStage=(x:any)=>({status:x.status,attempts:x.attempts,retry_after_ms:x.retry_after_ms,detail:x.detail,
+        worker_offscreen_canvas:typeof x.worker_offscreen_canvas==='boolean'?x.worker_offscreen_canvas:null,worker_webgl:typeof x.worker_webgl==='boolean'?x.worker_webgl:null,worker_webgl2:typeof x.worker_webgl2==='boolean'?x.worker_webgl2:null});
+      const runtime=v.runtime,cap=runtime?.capabilities;
+      if(v.recovery!==undefined&&(!v.recovery||!stageReport(v.recovery.body)||!stageReport(v.recovery.face)))return fail(400,'Invalid stage recovery status');
+      if(runtime!==undefined&&(!runtime||!['Safari','Chrome','Firefox','Edge','Other'].includes(runtime.browser)||!Number.isSafeInteger(runtime.browser_major)||runtime.browser_major<0||runtime.browser_major>999
+        ||!['macOS','iOS','Windows','Android','Linux','Other'].includes(runtime.os)||!cap||['worker','offscreen_canvas','create_image_bitmap','webgl','webgl2','secure_context'].some(k=>typeof cap[k]!=='boolean')))return fail(400,'Invalid player runtime status');
       if(v.presence_profile_id!==undefined||v.measurement_binding_id!==undefined||v.assignment_id!==undefined){
         const a=(db.device_assignments||[]).find((row:any)=>row.id===v.assignment_id&&row.device_id===device.id&&row.screen_id===screen.id);
         const binding=(db.measurement_bindings||[]).find((row:any)=>row.id===v.measurement_binding_id);
@@ -128,7 +138,8 @@ export function deviceRoute(db: any, method: string, seg: string[], body: any, t
           ||!validatePresenceBinding(binding,a,device,screen,v.measurement_binding_id))return fail(400,'Heartbeat does not match an issued measurement binding');
       }else if(v.model_ver===PRESENCE_V2_PROFILE.body_model)return fail(400,'New model status needs its issued measurement binding');
       device.vision = { camera_state: v.camera_state, model_state: v.model_state, model_ver: v.model_ver, presence_profile_id:v.presence_profile_id||null,
-        measurement_binding_id:v.measurement_binding_id||null,assignment_id:v.assignment_id||null,last_sample_at: v.last_sample_at, reported_at: iso(now), source: 'device_report' };
+        measurement_binding_id:v.measurement_binding_id||null,assignment_id:v.assignment_id||null,last_sample_at: v.last_sample_at,
+        ...(v.recovery?{recovery:{body:cleanStage(v.recovery.body),face:cleanStage(v.recovery.face)}}:{}),...(runtime?{runtime:{browser:runtime.browser,browser_major:runtime.browser_major,os:runtime.os,capabilities:{worker:cap.worker,offscreen_canvas:cap.offscreen_canvas,create_image_bitmap:cap.create_image_bitmap,webgl:cap.webgl,webgl2:cap.webgl2,secure_context:cap.secure_context}}}:{}),reported_at: iso(now), source: 'device_report' };
     }
     if(body.live_attention!==undefined){
       const live=body.live_attention, binding=(db.measurement_bindings||[]).find((row:any)=>row.id===live?.measurement_binding_id),assignment=(db.device_assignments||[]).find((row:any)=>row.id===live?.assignment_id&&row.device_id===device.id&&row.screen_id===screen.id);

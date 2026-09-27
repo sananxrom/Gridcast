@@ -1,8 +1,19 @@
 /* Independent face/attention worker: body setup, inference and failure are isolated. */
 let face = null;
+function graphicsCapabilities() {
+  if (typeof OffscreenCanvas !== 'function') return { offscreen_canvas: false, webgl: false, webgl2: false };
+  try {
+    const canvas = new OffscreenCanvas(1, 1), gl2 = canvas.getContext('webgl2'), gl1 = gl2 || canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+    const capabilities = { offscreen_canvas: true, webgl: !!gl1, webgl2: !!gl2 };
+    gl1?.getExtension?.('WEBGL_lose_context')?.loseContext?.();
+    return capabilities;
+  } catch { return { offscreen_canvas: true, webgl: false, webgl2: false }; }
+}
 self.onmessage = async ({ data }) => {
   if (data.type === 'INIT') {
     try {
+      const capabilities = graphicsCapabilities();
+      if (!capabilities.webgl2) { postMessage({ type: 'UNSUPPORTED', stage: 'face', capabilities, error: 'Camera measurement needs worker WebGL 2. Update Safari/macOS or use a supported browser.' }); return; }
       const { FaceLandmarker, FilesetResolver } = await import(data.asset_urls['vision_bundle.mjs']);
       const files = await FilesetResolver.forVisionTasks('');
       const loader = String(files.wasmLoaderPath).split('/').pop();
@@ -13,8 +24,8 @@ self.onmessage = async ({ data }) => {
       const modelBytes = new Uint8Array(await (await fetch(data.asset_urls['face.task'])).arrayBuffer());
       face = await FaceLandmarker.createFromOptions(files, { baseOptions: { modelAssetBuffer: modelBytes, delegate: 'CPU' },
         runningMode: 'VIDEO', numFaces: 5, outputFaceBlendshapes: true, outputFacialTransformationMatrixes: true });
-      postMessage({ type: 'READY', stage: 'face' });
-    } catch (error) { face?.close(); face = null; postMessage({ type: 'ERROR', stage: 'face', error: String(error?.message || error) }); }
+      postMessage({ type: 'READY', stage: 'face', capabilities });
+    } catch (error) { face?.close(); face = null; postMessage({ type: 'ERROR', stage: 'face', error: String(error?.message || error), capabilities: graphicsCapabilities() }); }
     return;
   }
   if (data.type !== 'FRAME') return;

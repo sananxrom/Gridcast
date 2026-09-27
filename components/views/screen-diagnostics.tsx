@@ -13,6 +13,9 @@ export function ScreenDiagnostics({screenId,device,assignments,results,history,o
  const last=assignments[0];
  const vision=device?.vision;
  const stale=!vision?.reported_at || Date.now()-Date.parse(vision.reported_at)>90000;
+ const recovery=(row:any,label:string)=>row?`${label}: ${row.status}${row.attempts?` · attempt ${row.attempts}`:''}${row.retry_after_ms?` · retry in ${Math.ceil(row.retry_after_ms/1000)}s`:''}${row.detail?` · ${row.detail}`:''}`:`${label}: not reported`;
+ const workerGraphics=(row:any)=>row?`OffscreenCanvas ${row.worker_offscreen_canvas===null?'unknown':row.worker_offscreen_canvas?'yes':'no'} · WebGL ${row.worker_webgl===null?'unknown':row.worker_webgl?'yes':'no'} · WebGL 2 ${row.worker_webgl2===null?'unknown':row.worker_webgl2?'yes':'no'}`:'not reported';
+ const runtime=vision?.runtime,cap=runtime?.capabilities;
  async function act(path:string){setBusy(true);setError('');try{await api(path,{});await onChanged();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
  return <Card className="mb-4 space-y-3 p-4" aria-label="Screen test">
   <h3 className="font-semibold">Camera and screen test</h3>
@@ -23,6 +26,9 @@ export function ScreenDiagnostics({screenId,device,assignments,results,history,o
    <div><dt className="text-muted-foreground">Last status report</dt><dd>{when(vision?.reported_at)}{stale && ' · waiting for a fresh report'}</dd></div>
    <div><dt className="text-muted-foreground">Last presence sample</dt><dd>{when(vision?.last_sample_at)}</dd></div>
   </dl>
+  {vision?.recovery&&<p className="text-xs text-muted-foreground">Model recovery · {recovery(vision.recovery.body,'People')} · {recovery(vision.recovery.face,'Face')}</p>}
+  {vision?.recovery&&<p className="text-xs text-muted-foreground">Measurement worker graphics · People: {workerGraphics(vision.recovery.body)} · Face: {workerGraphics(vision.recovery.face)}</p>}
+  {runtime&&<p className="text-xs text-muted-foreground">Player environment · {runtime.browser} {runtime.browser_major||''} · {runtime.os} · Worker {cap?.worker?'yes':'no'} · Offscreen canvas {cap?.offscreen_canvas?'yes':'no'} · WebGL {cap?.webgl?'yes':'no'} / WebGL 2 {cap?.webgl2?'yes':'no'} · Image bitmap {cap?.create_image_bitmap?'yes':'no'} · Secure context {cap?.secure_context?'yes':'no'}</p>}
   <p className="text-xs text-muted-foreground">These are software reports from the paired player. Camera images stay on that device. Counts are sampled only during playback.</p>
   {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
   {pending ? <div className="space-y-2"><p className="text-sm">{pending.status==='running'?'Test running':'Test requested — waiting for the player and an available playback window.'} Expires {when(pending.expires_at)}.</p><Button size="sm" variant="outline" disabled={busy} onClick={()=>act(`/screen/${screenId}/test/${pending.id}/revoke`)}>Cancel test</Button></div>

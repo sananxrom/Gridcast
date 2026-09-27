@@ -61,6 +61,7 @@ test('V2 playlist upgrades an existing assignment to a new pipeline binding with
  const f=fixture(3),oldBinding=f.db.measurement_bindings[0],assignment=f.db.device_assignments.find(a=>a.id===oldBinding.assignment_id);
  assert.ok(oldBinding&&assignment);
  const previousPipeline='7d8e7edd31110372295e909b8ba8b75c91b2bbd9a83a5862771189eed1c96016';
+ const deployedPipeline='906b881633dd9a5fcf7347790fd18ce81f0d768255f63198cab21334ae335d77';
  const oldId='measurement_'+crypto.createHash('sha256').update(canonical([assignment.id,oldBinding.config.profile,oldBinding.config,oldBinding.config.calibration_revision])).digest('hex');
  const provenanceId=pipeline=>`measurement_${crypto.createHash('sha256').update(canonical([assignment.id,oldBinding.config.profile,oldBinding.config,oldBinding.config.calibration_revision,oldBinding.manifest_sha256,pipeline,oldBinding.model_versions.body,oldBinding.model_versions.face,oldBinding.model_versions.runtime])).digest('hex')}`;
  const currentPipeline=require('./load-lib.cjs')('vision/presence-v2-profile').PRESENCE_V2_PROFILE.pipeline_sha256;
@@ -68,6 +69,8 @@ test('V2 playlist upgrades an existing assignment to a new pipeline binding with
  const budgetBefore=f.db.campaigns[0].committed_budget,assignmentCount=f.db.device_assignments.length;
  assert.equal(validatePresenceBinding(oldBinding,assignment,f.db.devices[0],f.db.screens[0],oldId),true,'Already issued bindings and queued receipts from 0.10.0 stay valid');
  const modelVersions=oldBinding.model_versions;delete oldBinding.model_versions;assert.equal(validatePresenceBinding(oldBinding,assignment,f.db.devices[0],f.db.screens[0],oldId),false,'Malformed persisted provenance fails closed instead of throwing');oldBinding.model_versions=modelVersions;
+ oldBinding.pipeline_sha256=deployedPipeline;assert.equal(validatePresenceBinding(oldBinding,assignment,f.db.devices[0],f.db.screens[0],oldId),true,'Legacy-ID bindings issued by deployed 0.10.2 remain valid after the new runtime pin');
+ oldBinding.id=provenanceId(deployedPipeline);assert.equal(validatePresenceBinding(oldBinding,assignment,f.db.devices[0],f.db.screens[0],oldBinding.id),true,'Provenance-scoped 0.10.2 receipts also remain valid');oldBinding.id=oldId;
  oldBinding.pipeline_sha256=currentPipeline;
  assert.equal(validatePresenceBinding(oldBinding,assignment,f.db.devices[0],f.db.screens[0],oldId),true,'Legacy-ID bindings issued by 0.10.1 remain valid even though their pin is current');
  oldBinding.id=provenanceId(previousPipeline);oldBinding.pipeline_sha256=previousPipeline;
@@ -153,10 +156,13 @@ test('heartbeat works without a playlist item and records applied version indepe
 test('V2 live heartbeat stores only bounded aggregate counts under its issued binding',()=>{
  const f=fixture(3),item=f.assignment,id='presence-v2/efficientdet-lite0-mediapipe-face/1';
  assert.equal(item.measurement_profile,id);assert.ok(item.measurement_binding_id);
- const heartbeat={device_now:'2026-09-24T00:00:11Z',config_version:3,vision:{camera_state:'ready',model_state:'ready',model_ver:'efficientdet-lite0-int8/1',presence_profile_id:id,measurement_binding_id:item.measurement_binding_id,assignment_id:item.assignment_id,last_sample_at:null},live_attention:{profile_id:id,measurement_binding_id:item.measurement_binding_id,assignment_id:item.assignment_id,sampled_at:'2026-09-24T00:00:11Z',people:2,face_assessable:1,looking:1,smiling:0,body_status:'ok',face_status:'ok',body_saturated:false,face_saturated:false,boxes:[[0,0,1,1]]}};
+ const heartbeat={device_now:'2026-09-24T00:00:11Z',config_version:3,vision:{camera_state:'ready',model_state:'error',model_ver:null,presence_profile_id:id,measurement_binding_id:item.measurement_binding_id,assignment_id:item.assignment_id,last_sample_at:null,recovery:{body:{status:'ready',attempts:0,retry_after_ms:null,detail:'',worker_offscreen_canvas:true,worker_webgl:true,worker_webgl2:true},face:{status:'unsupported',attempts:4,retry_after_ms:300000,detail:'Camera measurement needs worker WebGL 2. Update Safari/macOS or use a supported browser.',worker_offscreen_canvas:true,worker_webgl:true,worker_webgl2:false}},runtime:{browser:'Safari',browser_major:17,os:'macOS',capabilities:{worker:true,offscreen_canvas:true,create_image_bitmap:true,webgl:false,webgl2:false,secure_context:true}}},live_attention:{profile_id:id,measurement_binding_id:item.measurement_binding_id,assignment_id:item.assignment_id,sampled_at:'2026-09-24T00:00:11Z',people:2,face_assessable:1,looking:1,smiling:0,body_status:'ok',face_status:'ok',body_saturated:false,face_saturated:false,boxes:[[0,0,1,1]]}};
  assert.equal(f.call('POST','heartbeat',heartbeat,f.paired.token).status,200);
+ assert.deepEqual(f.db.devices[0].vision.recovery,heartbeat.vision.recovery);assert.deepEqual(f.db.devices[0].vision.runtime,heartbeat.vision.runtime);
  assert.equal(f.db.devices[0].live_attention.people,2);assert.equal(f.db.devices[0].live_attention.looking,1);assert.equal('boxes' in f.db.devices[0].live_attention,false,'geometry is never persisted');
  assert.equal(f.call('POST','heartbeat',{...heartbeat,live_attention:{...heartbeat.live_attention,people:21}},f.paired.token).status,400);
+ assert.equal(f.call('POST','heartbeat',{...heartbeat,vision:{...heartbeat.vision,recovery:{...heartbeat.vision.recovery,face:{...heartbeat.vision.recovery.face,detail:'x'.repeat(121)}}}},f.paired.token).status,400,'Recovery text has a strict length limit');
+ assert.equal(f.call('POST','heartbeat',{...heartbeat,vision:{...heartbeat.vision,runtime:{...heartbeat.vision.runtime,browser:'Unknown Browser'}}},f.paired.token).status,400,'Runtime diagnostics use an allowlist');
  assert.equal(f.db.devices[0].live_attention.people,2,'invalid readings do not replace the last accepted aggregate');
 });
 

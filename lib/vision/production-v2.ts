@@ -5,7 +5,7 @@ export { PRESENCE_V2_PROFILE } from './presence-v2-profile';
 type Asset = { name: string; url: string; sha256: string; bytes: number };
 type Manifest = { version: string; assets: Asset[] };
 type Stage = 'body' | 'face';
-type StageStatus = { state: 'starting' | 'ready' | 'error'; model: string; message?: string; last_at?: number; observed_fps?:number; result_ms?:number };
+type StageStatus = { state: 'starting' | 'ready' | 'error'; model: string; message?: string; last_at?: number; observed_fps?:number; result_ms?:number; retry_attempts?:number; retry_delay_ms?:number|null; last_failure?:string; last_issue?:'stage_failure'|'slow_result'|'unsupported'; worker_offscreen_canvas?:boolean; worker_webgl?:boolean; worker_webgl2?:boolean };
 export type PresenceV2State = { body: StageStatus; face: StageStatus };
 export type PresenceV2AssetProgress = { message:string;phase:'checking'|'downloading'|'verifying';downloaded:number;verified:number;total:number;elapsedSeconds:number;etaSeconds:null };
 const CACHE = 'gridcast-presence-v2-assets-1';
@@ -67,58 +67,84 @@ export async function createPresenceV2Runtime(
   let closed = false, lastEmitted = -Infinity;
   let watchdog: ReturnType<typeof setInterval> | null = null;
   const workers: Partial<Record<Stage, Worker>> = {}, urls: string[] = [], stageUrls:Record<Stage,string[]>={body:[],face:[]}, busy: Record<Stage, boolean> = { body: false, face: false };
-  const retryAttempts:Record<Stage,number>={body:0,face:0};
+  const retryAttempts:Record<Stage,number>={body:0,face:0}, retrySteps:Record<Stage,number>={body:0,face:0};
+  const retryTimers:Record<Stage,ReturnType<typeof setTimeout>|null>={body:null,face:null};
+  const initializers:Partial<Record<Stage,()=>void>>={};
+  const assetLoads=new Map<string,Promise<void>>();
+  const runtimeAbort=new AbortController(),runtimeSignal=runtimeAbort.signal;
   const retrying = new Set<Stage>();
   const failedResults:Record<Stage,number>={body:0,face:0};
   const sentAt: Record<Stage, number> = { body: 0, face: 0 }, lastFrame: Record<Stage, number> = { body: -Infinity, face: -Infinity };
   const lastTime: Record<Stage, number> = { body: -1, face: -1 }, resultTimes:Record<Stage,number[]>={body:[],face:[]};
   const report = () => { if (!closed) onState({ body: { ...state.body }, face: { ...state.face } }); };
+  const safeFailure = (message:unknown) => String(message || 'Camera measurement stage failed').replace(/[\r\n\t]+/g,' ').replace(/https?:\/\/\S+/gi,'[resource]').slice(0,120);
+  const retryDelay = (stage:Stage) => Math.min(300000,250*2**Math.min(retrySteps[stage],11));
+  const workerCapabilities=(value:any)=>value?{...(typeof value.offscreen_canvas==='boolean'?{worker_offscreen_canvas:value.offscreen_canvas}:{}),...(typeof value.webgl==='boolean'?{worker_webgl:value.webgl}:{}),...(typeof value.webgl2==='boolean'?{worker_webgl2:value.webgl2}:{})}:{};
+  const assertOpen=()=>{if(closed||runtimeSignal.aborted)throw new DOMException('Stopped','AbortError');};
+  const savedWorkerCapabilities=(stage:Stage)=>({...(typeof state[stage].worker_offscreen_canvas==='boolean'?{offscreen_canvas:state[stage].worker_offscreen_canvas}:{}),...(typeof state[stage].worker_webgl==='boolean'?{webgl:state[stage].worker_webgl}:{}),...(typeof state[stage].worker_webgl2==='boolean'?{webgl2:state[stage].worker_webgl2}:{})});
+  async function ensureAsset(entry:Asset) {
+    const existing=assetLoads.get(entry.name);if(existing)return existing;
+    const load=(async()=>{
+      assertOpen();const cache=await caches.open(CACHE);assertOpen();const saved=await cache.match(entry.url);assertOpen();let data=saved?await saved.arrayBuffer():null;assertOpen();
+      if(!data||data.byteLength!==entry.bytes||hex(await crypto.subtle.digest('SHA-256',data))!==entry.sha256){
+        assertOpen();await cache.delete(entry.url);const response=await fetch(entry.url,{signal:runtimeSignal,mode:'cors',credentials:'omit'});assertOpen();
+        if(!response.ok||response.type==='opaque')throw Error(`Could not download ${entry.name}`);
+        data=await response.arrayBuffer();assertOpen();if(data.byteLength!==entry.bytes||hex(await crypto.subtle.digest('SHA-256',data))!==entry.sha256)throw Error(`Integrity check failed for ${entry.name}`);
+        assertOpen();await cache.put(entry.url,new Response(data,{headers:{'Content-Type':entry.name.endsWith('.wasm')?'application/wasm':'application/octet-stream'}}));assertOpen();
+      }
+      assets.ready.add(entry.name);delete assets.errors[entry.name==='person.tflite'?'body':entry.name==='face.task'?'face':'common'];
+    })();assetLoads.set(entry.name,load);try{return await load;}finally{if(assetLoads.get(entry.name)===load)assetLoads.delete(entry.name);}
+  }
   function releaseStageUrls(stage:Stage){const owned=new Set(stageUrls[stage]);owned.forEach(url=>URL.revokeObjectURL(url));stageUrls[stage]=[];for(let i=urls.length-1;i>=0;i--)if(owned.has(urls[i]))urls.splice(i,1);}
-  function createStageUrl(stage:Stage,blob:Blob){const url=URL.createObjectURL(blob);urls.push(url);stageUrls[stage].push(url);return url;}
-  function close() { if (closed) return; closed = true; Object.values(workers).forEach(worker => worker?.terminate()); if (watchdog) clearInterval(watchdog); urls.forEach(URL.revokeObjectURL); signal.removeEventListener('abort', close); }
+  function createStageUrl(stage:Stage,blob:Blob){assertOpen();const url=URL.createObjectURL(blob);urls.push(url);stageUrls[stage].push(url);return url;}
+  function close() { if (closed) return; closed = true;runtimeAbort.abort(); for(const stage of ['body','face'] as const){if(retryTimers[stage])clearTimeout(retryTimers[stage]!);retryTimers[stage]=null;initializers[stage]?.();delete initializers[stage];workers[stage]?.terminate();delete workers[stage];} if (watchdog) clearInterval(watchdog); urls.forEach(URL.revokeObjectURL); urls.length=0;stageUrls.body=[];stageUrls.face=[];signal.removeEventListener('abort', close); }
   signal.addEventListener('abort', close, { once: true });
   async function start(stage: Stage) {
     releaseStageUrls(stage);failedResults[stage]=0;
     const modelName = stage === 'body' ? 'person.tflite' : 'face.task';
-    if (assets.errors.common || assets.errors[stage] || !assets.ready.has(modelName)) throw Error(assets.errors[stage] || assets.errors.common || `${modelName} was not verified`);
-    const workerResponse = await fetch(stage === 'body' ? PRESENCE_V2_PROFILE.body_worker_url : PRESENCE_V2_PROFILE.face_worker_url, { signal, cache: 'no-store' });
+    assertOpen();const required=assets.manifest.assets.filter(entry=>entry.name===modelName||!['person.tflite','face.task'].includes(entry.name));
+    for(const entry of required){await ensureAsset(entry);assertOpen();}
+    const workerResponse = await fetch(stage === 'body' ? PRESENCE_V2_PROFILE.body_worker_url : PRESENCE_V2_PROFILE.face_worker_url, { signal:runtimeSignal, cache: 'no-store' });assertOpen();
     if (!workerResponse.ok) throw Error(`The pinned ${stage} worker is unavailable`);
-    const source = await workerResponse.arrayBuffer();
-    if (hex(await crypto.subtle.digest('SHA-256', source)) !== WORKER_HASH[stage]) throw Error(`The pinned ${stage} worker did not match the V2 pipeline.`);
+    const source = await workerResponse.arrayBuffer();assertOpen();
+    if (hex(await crypto.subtle.digest('SHA-256', source)) !== WORKER_HASH[stage]) throw Error(`The pinned ${stage} worker did not match the V2 pipeline.`);assertOpen();
     const workerUrl = createStageUrl(stage,new Blob([source], { type: 'text/javascript' }));
-    const cache = await caches.open(CACHE), assetUrls: Record<string, string> = {};
+    const cache = await caches.open(CACHE);assertOpen();const assetUrls: Record<string, string> = {},requiredNames=new Set(required.map(entry=>entry.name));
     for (const entry of assets.manifest.assets) {
-      if (!assets.ready.has(entry.name)) continue;
-      const saved = await cache.match(entry.url); if (!saved) throw Error(`The verified ${entry.name} is no longer cached.`);
-      const body = await saved.arrayBuffer();
+      if (!requiredNames.has(entry.name)) continue;
+      const saved = await cache.match(entry.url);assertOpen();if (!saved) throw Error(`The verified ${entry.name} is no longer cached.`);
+      const body = await saved.arrayBuffer();assertOpen();
       if (body.byteLength !== entry.bytes || hex(await crypto.subtle.digest('SHA-256', body)) !== entry.sha256) throw Error(`The cached ${entry.name} failed integrity verification.`);
       const mime = entry.name.endsWith('.mjs') || entry.name.endsWith('.js') ? 'text/javascript' : entry.name.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream';
       assetUrls[entry.name] = createStageUrl(stage,new Blob([body], { type: mime }));
     }
-    const worker = new Worker(workerUrl); workers[stage] = worker;
+    assertOpen();const worker = new Worker(workerUrl); workers[stage] = worker;
     await new Promise<void>((resolve, reject) => {
-      const done = () => { clearTimeout(timer); signal.removeEventListener('abort', abort); };
-      const abort = () => { done(); worker.terminate(); reject(new DOMException('Stopped', 'AbortError')); };
+      const done = () => { clearTimeout(timer); runtimeSignal.removeEventListener('abort', abort);if(initializers[stage]===abort)delete initializers[stage]; };
+      const abort = () => { done(); worker.terminate();if(workers[stage]===worker)delete workers[stage]; reject(new DOMException('Stopped', 'AbortError')); };
       const timer = setTimeout(() => { done(); worker.terminate(); reject(Error(`${stage} model initialization timed out`)); }, 60000);
+      initializers[stage]=abort;
       worker.onmessage = ({ data }) => {
-        if (data.type === 'READY' && data.stage === stage) { done(); state[stage] = { state: 'ready', model: state[stage].model }; report(); resolve(); }
-        else if (data.type === 'ERROR' && data.stage === stage) { done(); reject(Error(data.error || `${stage} model initialization failed`)); }
+        if (data.type === 'READY' && data.stage === stage) { done(); state[stage] = { state: 'ready', model: state[stage].model, retry_attempts:retryAttempts[stage],retry_delay_ms:null,...workerCapabilities(data.capabilities),...(state[stage].last_failure?{last_failure:state[stage].last_failure}:{}) }; report(); resolve(); }
+        else if (data.type === 'UNSUPPORTED' && data.stage === stage) { done();state[stage]={...state[stage],...workerCapabilities(data.capabilities)};const error:any=Error(safeFailure(data.error||'This browser cannot run camera measurement. Update Safari and macOS, or use a supported browser.'));error.code='UNSUPPORTED';reject(error); }
+        else if (data.type === 'ERROR' && data.stage === stage) { done();state[stage]={...state[stage],...workerCapabilities(data.capabilities)};reject(Error(data.error || `${stage} model initialization failed`)); }
       };
       worker.onerror = event => { done(); reject(Error(event.message || `${stage} worker failed`)); };
-      if (signal.aborted) { abort(); return; }
-      signal.addEventListener('abort', abort, { once: true });
+      if (runtimeSignal.aborted) { abort(); return; }
+      runtimeSignal.addEventListener('abort', abort, { once: true });
       worker.postMessage({ type: 'INIT', asset_urls: assetUrls });
     });
     worker.onmessage = ({ data }) => {
       if (closed || data.type !== 'OBSERVATION' || data.stage !== stage || !Number.isFinite(data.at)) return;
       busy[stage] = false;
-      if(data.result?.ok)failedResults[stage]=0;else failedResults[stage]++;
-      state[stage] = { state: data.result?.ok ? 'ready' : 'error', model: state[stage].model,
-        ...(data.error ? { message: String(data.error).slice(0, 160) } : {}), last_at: performance.now() };
+      if(data.result?.ok){failedResults[stage]=0;retryAttempts[stage]=0;retrySteps[stage]=0;}else failedResults[stage]++;
+      state[stage] = { state: data.result?.ok ? 'ready' : 'error', model: state[stage].model,...workerCapabilities({offscreen_canvas:state[stage].worker_offscreen_canvas,webgl:state[stage].worker_webgl,webgl2:state[stage].worker_webgl2}),
+        retry_attempts:retryAttempts[stage],retry_delay_ms:null,...(!data.result?.ok?{last_failure:safeFailure(data.error||'Camera inference failed'),message:safeFailure(data.error||'Camera inference failed')} : {}), last_at: performance.now() };
       const availableAt = performance.now(), maxAge = stage === 'body' ? 750 : 500;
       if (availableAt - data.at > maxAge) {
-        state[stage] = { state: 'error', model: state[stage].model, message: 'Stale frame discarded', last_at: availableAt };
-        report(); return;
+        const slow=`Slow frame discarded (${Math.round(availableAt-data.at)} ms)`;
+        state[stage] = { state: data.result?.ok?'ready':'error', model: state[stage].model,...workerCapabilities({offscreen_canvas:state[stage].worker_offscreen_canvas,webgl:state[stage].worker_webgl,webgl2:state[stage].worker_webgl2}),message:slow,last_issue:'slow_result',last_failure:slow,last_at:availableAt,retry_attempts:retryAttempts[stage],retry_delay_ms:null };
+        report();if(!data.result?.ok&&failedResults[stage]>=3)failStage(stage,`${slow}; ${safeFailure(data.error||'Camera inference failed')}`);return;
       }
       const times=resultTimes[stage];times.push(availableAt);while(times.length>2&&availableAt-times[0]>5000)times.shift();
       const observedFps=times.length>1?(times.length-1)*1000/(times.at(-1)!-times[0]):0;
@@ -134,42 +160,43 @@ export async function createPresenceV2Runtime(
     };
     worker.onerror = event => failStage(stage, event.message || `${stage} worker failed`);
   }
-  function failStage(stage: Stage, message: string) {
+  function failStage(stage: Stage, message: string, issue:'stage_failure'|'unsupported'='stage_failure') {
     if (closed) return;
-    const alreadyRetrying=retrying.has(stage);
+    if(retryTimers[stage])clearTimeout(retryTimers[stage]!);retryTimers[stage]=null;
     workers[stage]?.terminate(); delete workers[stage]; busy[stage] = false;
     releaseStageUrls(stage);
-    const retryLimitReached=retryAttempts[stage]>=3;
-    state[stage] = { state: 'error', model: state[stage].model, message: retryLimitReached?'Retry limit reached. Reload the player to try again.':String(message).slice(0, 160) };
+    const failure=safeFailure(message),delay=retryDelay(stage);
+    state[stage] = { state: 'error', model: state[stage].model,...workerCapabilities({offscreen_canvas:state[stage].worker_offscreen_canvas,webgl:state[stage].worker_webgl,webgl2:state[stage].worker_webgl2}),message:failure,last_failure:failure,last_issue:issue,retry_attempts:retryAttempts[stage],retry_delay_ms:delay };
     report();
-    if(!retryLimitReached&&!alreadyRetrying)void retryStage(stage);
+    if(!retrying.has(stage))scheduleRetry(stage,delay);
   }
-  async function retryStage(stage:Stage) {
+  function scheduleRetry(stage:Stage,delay=retryDelay(stage)) {
+    if(closed||signal.aborted||retryTimers[stage]||retrying.has(stage))return;
+    state[stage]={...state[stage],state:'error',retry_attempts:retryAttempts[stage],retry_delay_ms:delay};report();
+    retryTimers[stage]=setTimeout(()=>{retryTimers[stage]=null;void retryStage(stage);},delay);
+  }
+  async function retryStage(stage:Stage,manual=false) {
     if(closed||signal.aborted||state[stage].state!=='error'||retrying.has(stage))return false;
-    const attempts=retryAttempts[stage];
-    if(attempts>=3){state[stage]={...state[stage],message:'Retry limit reached. Reload the player to try again.'};report();return false;}
-    retryAttempts[stage]=attempts+1;retrying.add(stage);workers[stage]?.terminate();delete workers[stage];busy[stage]=false;
-    state[stage]={state:'starting',model:state[stage].model};report();
-    await new Promise(resolve=>setTimeout(resolve,250*2**attempts));
-    if(closed||signal.aborted){retrying.delete(stage);return false;}
+    if(retryTimers[stage]){clearTimeout(retryTimers[stage]!);retryTimers[stage]=null;}
+    if(manual)retrySteps[stage]=0;
+    retryAttempts[stage]=Math.min(999999,retryAttempts[stage]+1);retrySteps[stage]=Math.min(11,retrySteps[stage]+1);
+    retrying.add(stage);workers[stage]?.terminate();delete workers[stage];busy[stage]=false;
+    state[stage]={...state[stage],state:'starting',message:'Retrying this measurement stage',retry_attempts:retryAttempts[stage],retry_delay_ms:null};report();
     try{await start(stage);return true;}
-    catch(error:any){failStage(stage,error?.message||`${stage} model retry failed`);return false;}
-    finally{
-      retrying.delete(stage);
-      if(state[stage].state==='error'&&retryAttempts[stage]<3&&!closed&&!signal.aborted)setTimeout(()=>void retryStage(stage),0);
-    }
+    catch(error:any){if(!closed&&!signal.aborted)failStage(stage,error?.message||`${stage} model retry failed`,error?.code==='UNSUPPORTED'?'unsupported':'stage_failure');return false;}
+    finally{retrying.delete(stage);if(state[stage].state==='error'&&!retryTimers[stage]&&!closed&&!signal.aborted)scheduleRetry(stage);}
   }
   async function retryFailed() {
     const failed=(['body','face'] as const).filter(stage=>state[stage].state==='error');
     if(!failed.length)return false;
-    const retryable=failed.filter(stage=>retryAttempts[stage]<3&&!retrying.has(stage));
-    for(const stage of failed.filter(stage=>retryAttempts[stage]>=3))state[stage]={...state[stage],message:'Retry limit reached. Reload the player to try again.'};
-    if(!retryable.length){report();return false;}
-    return (await Promise.all(retryable.map(retryStage))).some(Boolean);
+    const retryable=failed.filter(stage=>!retrying.has(stage));
+    if(!retryable.length){report();return failed.some(stage=>retrying.has(stage));}
+    await Promise.all(retryable.map(stage=>retryStage(stage,true)));
+    return true;
   }
   onState(state);
   const starts = await Promise.allSettled([start('body'), start('face')]);
-  starts.forEach((result, index) => { if (result.status === 'rejected') failStage(index === 0 ? 'body' : 'face', String(result.reason?.message || result.reason)); });
+  starts.forEach((result, index) => { if (result.status === 'rejected') failStage(index === 0 ? 'body' : 'face', String(result.reason?.message || result.reason),result.reason?.code==='UNSUPPORTED'?'unsupported':'stage_failure'); });
   if(closed||signal.aborted)throw new DOMException('Stopped','AbortError');
   const send = async (stage: Stage, video: HTMLVideoElement, calibration: { yaw: number; pitch: number }, context: any, confidence: number) => {
     const worker = workers[stage], now = performance.now(), interval = stage === 'body' ? PRESENCE_V2_PROFILE.body_interval_ms : PRESENCE_V2_PROFILE.face_interval_ms;

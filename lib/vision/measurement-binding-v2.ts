@@ -23,13 +23,13 @@ export type PresenceBindingConfig = {
 const canonical = (value: any): string => Array.isArray(value) ? `[${value.map(canonical).join(',')}]`
   : value && typeof value === 'object' ? `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${canonical(value[k])}`).join(',')}}` : JSON.stringify(value);
 const digest = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex');
-// Explicitly approved 0.10.0 / 0.10.1 provenance remains valid for issued bindings and
+// Explicitly approved released provenance remains valid for issued bindings and
 // queued receipts. Add each released pin here before a future runtime pin is deployed.
 const APPROVED_BINDING_PROVENANCE = [
   { manifest_sha256:PRESENCE_V2_PROFILE.manifest_sha256, pipeline_sha256:PRESENCE_V2_PROFILE.pipeline_sha256,
-    model_versions:{body:PRESENCE_V2_PROFILE.body_model,face:PRESENCE_V2_PROFILE.face_model,runtime:PRESENCE_V2_PROFILE.runtime}, legacy_id:true }, // current 0.10.2
+    model_versions:{body:PRESENCE_V2_PROFILE.body_model,face:PRESENCE_V2_PROFILE.face_model,runtime:PRESENCE_V2_PROFILE.runtime}, legacy_id:true }, // current 0.10.3
   { manifest_sha256:PRESENCE_V2_PROFILE.manifest_sha256, pipeline_sha256:'906b881633dd9a5fcf7347790fd18ce81f0d768255f63198cab21334ae335d77',
-    model_versions:{body:PRESENCE_V2_PROFILE.body_model,face:PRESENCE_V2_PROFILE.face_model,runtime:PRESENCE_V2_PROFILE.runtime}, legacy_id:true }, // 0.10.1, retained after future pin changes
+    model_versions:{body:PRESENCE_V2_PROFILE.body_model,face:PRESENCE_V2_PROFILE.face_model,runtime:PRESENCE_V2_PROFILE.runtime}, legacy_id:true }, // deployed 0.10.1/0.10.2 receipt provenance
   { manifest_sha256:PRESENCE_V2_PROFILE.manifest_sha256, pipeline_sha256:'7d8e7edd31110372295e909b8ba8b75c91b2bbd9a83a5862771189eed1c96016',
     model_versions:{body:PRESENCE_V2_PROFILE.body_model,face:PRESENCE_V2_PROFILE.face_model,runtime:PRESENCE_V2_PROFILE.runtime}, legacy_id:true }, // 0.10.0
 ];
