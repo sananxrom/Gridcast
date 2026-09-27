@@ -45,3 +45,12 @@ Local CLI: `/Users/sanan/.local/bin/symdex`. Refresh structural data with
 queries. The Codex MCP entry is `symdex` and runs `symdex serve`. Keep generated indexes out of Git.
 The requested core installation does not include semantic embeddings; use symbol/text search unless
 a separate embedding setup is explicitly chosen.
+
+
+## Multi-chat coordination
+
+Sanan established dedicated Coordinator, Builder, QC and Tester chats. Read `TEAM.md` for their exact
+chat IDs, source path, responsibilities, assignment/report format and shared-file ownership rules.
+The coordinator dispatches bounded work and collects final reports; a review note or backlog item
+is not automatically a new assignment. Use newer user instructions and dated AI-LOG evidence when
+older handovers disagree. Model choices in TEAM.md are user-confirmed; preserve chat settings.

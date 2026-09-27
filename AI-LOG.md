@@ -4607,3 +4607,51 @@ finish Google's verification in the Brave tab Codex left open (session 909E8). L
 **Evidence:** Sanan confirms CV is now working in Chrome on the old iMac, paired as **Demo Mohali Retail Media 2**. This is user-confirmed physical-device success; no independent inspection or duration/accuracy claim in this checkpoint. Do not confuse this new pairing with the earlier Safari failure under Demo Tricity Screens 3 or the laptop's Demo Mohali Retail Media 1.
 **Conclusion:** Chrome is a working route for this iMac with the deployed full body-and-face system. The earlier worker WebGL 2 failure is specific to the Safari environment tested, not evidence that this iMac cannot run the models. Use Chrome on this machine for current testing; no compatibility fallback or detector replacement is needed to unblock it. Safari on the iMac remains unsupported by the current worker path; its exact OS/browser versions are still unknown.
 **Outcome / files:** Logged the confirmed workaround in `AI-LOG.md`; no application changes or redeploy. Firebase application remains `9fd738a` / 0.10.3, rollout `build-2026-09-27-003`. Log commit/push and index refresh follow.
+
+### 2026-09-27 13:49 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Next steps, consolidated from the log and source
+
+**Asked:** Sanan: check the log and identify next steps. State: 0.10.3 live (`9fd738a`, `build-2026-09-27-003`); CV
+counting confirmed by Sanan or Codex on Demo Mohali Retail Media 1 (Mac Safari) and 2 (old iMac, Chrome). Items below
+are open in the log or checked in source this turn. Ordered by what I would do first.
+
+**A. Validate what is live (Sanan, short, hands-on).**
+1. Soak: leave the two working screens running several hours; check that stage state, retry count and counts stay
+   fresh on the screen page. Nothing yet shows the recovery path under real long sessions.
+2. Quick accuracy spot-check: two or three minutes per screen of people entering, leaving, looking and turning
+   away, compared with the diagnostics counts. The formal A2 human check was never completed (Codex 19:06 and
+   19:11 on 26 Sep).
+3. Review and clear the three saved delivery records on Mohali 1 (Codex 12:28) through the maintenance-code flow.
+4. Revoke the stale Safari pairing, Demo Tricity Screens 3, so it stops reporting "model error".
+
+**B. Product gaps still open (Codex builds).**
+5. YouTube chrome between ads (Sanan's report, my 21:55 entry on 25 Sep): still one YouTube player for the session
+   (`grep -c 'new window.YT.Player' app/player/page.tsx` = 1), and no cover over non-PLAYING states. The 0.8.0 shield
+   fixed hover only. Also still open: the question whether YouTube's terms allow covering its branding.
+6. Mixed-profile headline (my 04:50 entry): tidy before any advertiser sees a transition period.
+7. Minor: Release B's global maintenance limiter lets anyone block code redemption for everyone (my 22:28 entry on
+   25 Sep).
+8. Android / TV hardware: nothing has run on the target box yet. Needed before any real venue.
+
+**C. Housekeeping and risk (Sanan).**
+9. `main` is still `13083f5`; the deployed branch `codex/gridcast-trust-layer-wp5` is 88 commits ahead
+   (`git rev-list --count main..HEAD`). Production runs from an unmerged feature branch. Decide when to merge.
+10. Rotate the GitHub token seen in the process list (my first entry, 25 Sep 16:12). Disconnect the paused Vercel
+    project from Git; decide on `gridcast-invite`.
+11. Commit or discard the untracked research docs 00-09 and 20, and the modified `CLAUDE.md`.
+
+**D. Before any customer is live (later).**
+12. Venue notice or signage for on-device face analysis. Sanan removed it as a build blocker, but it is the public
+    side of the privacy copy the product now carries.
+13. WP6 billing gaps from `10-next-steps.md` §7 (payment records, budget alerts, rate-card versioning), never
+    re-audited against current code.
+**Files:** `AI-LOG.md`. Not committed.
+
+
+### 2026-09-27 14:11 IST · GPT-6 (Codex desktop, coordinator) · Four-chat team context and communication established
+
+**Asked:** Sanan created/renamed the specialist chats, confirmed QC Sol/high and Tester Luna/medium, then explicitly requested establishing their context and communication.
+**Did:** Created `TEAM.md` with the exact four existing chat IDs/titles, actual source path versus desktop wrapper, responsibilities, shared-file/browser ownership, assignment/report format, current 0.10.3 checkpoint and CV findings, evidence limits, Claude review channel, and user preferences. Added an `AGENTS.md` pointer so subsequent sessions discover it. Highlighted that `handover.md` predates the accepted full body-and-face system and current release. Sent one bounded read-only onboarding message to existing Builder, QC and Tester, preserving each chat's configured model settings. Did not create duplicate chats or change their sidebar association.
+**Verified communication:** All three returned final acknowledgements, collected directly by `wait_threads`: Builder `01a0d96f-7f41-7711-8eb1-1617f5922282`, QC `01a0e1fe-d5be-7b43-9a00-7e90712e0557`, Tester `01a0e1fd-bf42-76d0-904f-b5505bc02e29`. Each correctly names `/Users/sanan/Downloads/gc`, release 0.10.3 / `9fd738a`, and its scope. Builder and QC explicitly acknowledge coordinator-collected reporting; Tester states its expected evidence format. No onboarding tool communication was rejected. Specialists are finished and awaiting scoped tasks. A first bounded wait timed out while Builder was still processing; the next wait returned its completed acknowledgement.
+**Operating decision:** Coordinator dispatches work and actively collects final reports; no automatic reverse-message callback, background daemon or repeated automation is implied. Coordinator owns integration/commits/deployment. QC reviews independently, Tester runs focused assigned checks, Builder implements. Only one owner edits a given file or controls a physical browser session at a time. No unsolicited specialist-to-specialist message loop. Claude's new 13:49 review was read and retained as unassigned backlog, not acted on.
+**Outcome:** Team onboarding complete. `git diff --check` passed. No application edits, builds, tests, cloud/device mutations or release changes. Log, `TEAM.md` and `AGENTS.md` will be committed/pushed; unrelated working-tree files remain untouched. Shared index refresh follows. This commit also preserves Claude's existing uncommitted 13:49 log entry.
+**Files / base:** `TEAM.md`, `AGENTS.md`, `AI-LOG.md`; base `e15798b`. Model settings are user-confirmed, not independently exposed by thread-inspection tools.
