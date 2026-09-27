@@ -19,7 +19,7 @@ import { presenceV2Summary, preparePresenceV2Envelope } from '@/lib/vision/atten
 import { PresenceV2LocalDiagnostics, type LocalTrackDiagnostics } from '@/lib/vision/local-diagnostics-v2';
 
 declare global { interface Window { YT: any; onYouTubeIframeAPIReady: () => void; cocoSsd: any; tf: any } }
-const APP_VERSION = 'gridcast-web/0.10.0';
+const APP_VERSION = 'gridcast-web/0.10.1';
 const MODEL_VERSION = 'coco-ssd@2.2.3/lite_mobilenet_v2';
 const PRESENCE_V2_MODEL_VERSION = PRESENCE_V2_PROFILE.body_model;
 type Credential = { token: string; device_id: string; screen_id: string };
@@ -54,6 +54,7 @@ export default function Player() {
   const [count, setCount] = useState<number | null>(null), [average, setAverage] = useState<string>('—'), [recorded, setRecorded] = useState(0);
   const [attentionDisplay,setAttentionDisplay]=useState<AttentionDisplay|null>(null),[attentionLastAd,setAttentionLastAd]=useState<AttentionLastAd|null>(null);
   const [attentionProvenance,setAttentionProvenance]=useState<{mode:'default'|'guided';revision:string|null}|null>(null);
+  const [presenceV2ViewState,setPresenceV2ViewState]=useState<PresenceV2State|null>(null);
   const [showTrackingBoxes,setShowTrackingBoxes]=useState(true),[showFaceDetails,setShowFaceDetails]=useState(true),[diagnosticsExpanded,setDiagnosticsExpanded]=useState(false);
   const [queue, setQueue] = useState({ pending: 0, blocked: 0, reserved: 0, total: 0 });
   const [visionStatus, setVisionStatus] = useState('Waiting for screen settings'), [visionRetry, setVisionRetry] = useState(false);
@@ -145,7 +146,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
     const state = (value: string) => { if (!disposed) setStatus(value); };
     const isPresenceV2=(item?:Item|null)=>item?.measurement_profile===PRESENCE_V2_PROFILE.id&&typeof item.measurement_binding_id==='string';
     const hasPresenceV2=(settings?:Playlist|null)=>!!settings&&(settings.config?.presence_profile_id===PRESENCE_V2_PROFILE.id||[...(settings.items||[]),...(settings.filler_items||[])].some(isPresenceV2));
-    function stopAttention(){attentionAbort?.abort();attentionAbort=null;presenceV2Setup=null;attentionWorker?.close();attentionWorker=null;presenceV2Diagnostics.reset();presenceV2State=null;activeCalibrator=null;activeCalibratorToken=null;attentionProfile='';setAttentionModelsReady(false);setAttentionCalibrating(false);setAttentionDisplay(null);if(currentSlot)currentSlot.attentionValid=false;}
+    function stopAttention(){attentionAbort?.abort();attentionAbort=null;presenceV2Setup=null;attentionWorker?.close();attentionWorker=null;presenceV2Diagnostics.reset();presenceV2State=null;setPresenceV2ViewState(null);activeCalibrator=null;activeCalibratorToken=null;attentionProfile='';setAttentionModelsReady(false);setAttentionCalibrating(false);setAttentionDisplay(null);if(currentSlot)currentSlot.attentionValid=false;}
     async function ensurePresenceV2(settings:Playlist){
       if(!hasPresenceV2(settings))return;
       if(attentionWorker&&attentionProfile===PRESENCE_V2_PROFILE.id)return;
@@ -167,11 +168,11 @@ const [soundBlocked, setSoundBlocked] = useState(false);
             if(observation.faces){const now=observation.at;presenceV2Diagnostics.observeFaces(now,observation.faces.faces||[],attentionMetrics?.liveFaces(now)||[]);}
           }
         },state=>{
-          presenceV2State=state;
+          presenceV2State=state;setPresenceV2ViewState(state);
           const body=state.body.state,face=state.face.state;setAttentionModelsReady(body==='ready'||face==='ready');
           const line=(stage:typeof state.body,label:string)=>`${label}: ${stage.state==='ready'?'ready':stage.state==='error'?`unavailable${stage.message?` · ${stage.message}`:''}`:'loading'}`;
           setAttentionStatus(`${line(state.body,'People')} · ${line(state.face,'Face / attention')}${modelConfig?.calibration_revision?' · guided calibration':' · default zero offsets'}`);
-          if(body==='error')setVisionRetry(true);else setVisionRetry(false);
+          setVisionRetry(false);
         });
         if(disposed||controller.signal.aborted){attentionWorker?.close();attentionWorker=null;return;}
         startPresenceFramePump();
@@ -746,7 +747,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
       if(activeCalibratorToken){activeCalibrator=null;activeCalibratorToken=null;calibrationRequested=false;attentionSetupPaused=false;calibrationFeedbackUntil=Date.now()+15000;setAttentionSetupActive(false);setAttentionCalibrating(false);setAttentionStatus(attentionCalibration?'Calibration cancelled; the saved calibration is still in use.':'Calibration cancelled · playback continues with default zero offsets.');return;}
       if(attentionAbort){attentionSetupPaused=true;calibrationRequested=false;stopAttention();setAttentionProgress(null);setAttentionSetupActive(true);setAttentionStatus('Attention setup cancelled. Saved delivery evidence and any earlier calibration are unchanged.');}
     };
-    retryAttention.current=()=>{attentionSetupPaused=false;if(!cameraHealthyNow()){void initCamera(true);return;}if(attentionModelsReady&&attentionWorker&&playlist?.config.attention_enabled===true){calibrationRequested=false;void calibrateAttention.current().catch(()=>{});return;}if(playlist)void ensureAttention(playlist);};
+    retryAttention.current=()=>{attentionSetupPaused=false;if(playlist&&hasPresenceV2(playlist)){if(!cameraHealthyNow()){void initCamera(true);return;}if(attentionWorker&&presenceV2State&&[presenceV2State.body,presenceV2State.face].some(stage=>stage.state==='error')){void attentionWorker.retryFailed().then((attempted:boolean)=>{if(!attempted)setAttentionStatus('The failed camera CV stage could not be restarted. Reload the player to try again.');});return;}void ensurePresenceV2(playlist);return;}if(!cameraHealthyNow()){void initCamera(true);return;}if(attentionModelsReady&&attentionWorker&&playlist?.config.attention_enabled===true){calibrationRequested=false;void calibrateAttention.current().catch(()=>{});return;}if(playlist)void ensureAttention(playlist);};
     async function detect() {
       const v = cameraSurface, c = overlay, target = currentSlot;
       // Never sample an idle, paused or background player. Only one inference may run at once.
@@ -966,7 +967,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
     {credential && <Button className="mt-3" disabled={busy} onClick={() => { setRecoveryOpen(false); setCode(''); setErr(''); }}>Cancel</Button>}
     <p className="mt-4 text-xs text-muted-foreground">Camera-enabled players use their assigned presence profile and may send bounded aggregate measurements. Camera frames, face geometry, landmarks and temporary person IDs stay on this device.</p>
   </div>;
-  const attentionPreparing=!!attentionProgress;
+  const attentionPreparing=!!attentionProgress,presenceV2Failed=presenceV2ViewState?.body.state==='error'||presenceV2ViewState?.face.state==='error',presenceV2Retrying=presenceV2ViewState?.body.state==='starting'||presenceV2ViewState?.face.state==='starting';
   const attentionReady=attentionModelsReady&&attentionCameraReady;
   const displayedSummary=attentionDisplay?.snapshot.current||attentionLastAd?.summary||null;
   const displayedSummaryName=attentionDisplay?.snapshot.current?(current?.creative_name||current?.creative_id||'Current creative'):attentionLastAd?.name;
@@ -984,7 +985,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
     {(commissioning || !current || publicFailure || rejected || !!storageWarning || soundBlocked && !!current) && <div data-role="player-status" className="fixed left-3 top-3 z-10 rounded bg-black/80 p-3 text-xs" role="status">
       {commissioning && <><b>{screen?.name || 'Gridcast'}</b> · {diagnosticActive ? 'Screen test' : 'Media playback'}<br /></>}
       {soundBlocked && current ? <span>Tap the screen for sound</span> : storageWarning || status}{commissioning && offlineStatus && <p className="mt-1">{offlineStatus}</p>}
-      {commissioning && attentionEnabled && <p className="mt-1">Attention setup · {attentionStatus || 'Preparing on this device'}</p>}
+      {commissioning && attentionEnabled && <p className="mt-1">{attentionSetupActive?'Camera CV setup':'Camera CV'} · {attentionStatus || 'Preparing on this device'}</p>}
       {commissioning && attentionEnabled && attentionProgress && attentionProgress.total > 0 && <div className="mt-2 text-xs" aria-live="polite">{attentionProgress.phase==='initializing'?<p>Model files verified · initializing local models · {attentionProgress.elapsedSeconds}s elapsed</p>:<><div className="flex justify-between gap-3"><span>Model files verified · {Math.floor(100*attentionProgress.verified/attentionProgress.total)}%</span><span>{attentionProgress.elapsedSeconds}s elapsed</span></div><progress className="mt-1 h-2 w-full" max={attentionProgress.total} value={attentionProgress.verified} aria-label="Attention model files verified"/><p className="mt-1">{(attentionProgress.verified/1048576).toFixed(1)} / {(attentionProgress.total/1048576).toFixed(1)} MB verified · {(attentionProgress.downloaded/1048576).toFixed(1)} MB downloaded{attentionProgress.etaSeconds===null?'':` · about ${attentionProgress.etaSeconds}s remaining`}</p><p>{attentionProgress.message}</p></>}</div>}
       {rejected && <div className="mt-2 flex gap-3"><Button disabled={busy} onClick={retry}>Retry existing pairing</Button><Button disabled={busy} onClick={openRecovery}>Enter a new pairing code</Button></div>}
       {!recoveryOpen && err && <p role="alert" className="mt-1 text-amber-300">{err}</p>}
@@ -1006,7 +1007,7 @@ const [soundBlocked, setSoundBlocked] = useState(false);
             <div className="max-h-28 space-y-1 overflow-y-auto border-t border-white/10 pt-2">{attentionDisplay?.liveFresh&&attentionDisplay.tracks.length?attentionDisplay.tracks.map(track=><p key={track.key} className="flex justify-between gap-2 text-[10px]"><span>Track #{track.key} · {track.uncertain||track.looking===null?'Unknown':track.looking?'Looking':'Not looking'}{track.smiling===null?' · smile unknown':track.smiling?' · smiling':' · not smiling'}</span><span className="shrink-0 tabular-nums">Dwell {track.dwell_s.toFixed(1)}s · look {track.longest_look_s.toFixed(1)}s</span></p>):<p className="text-[10px] text-white/50">Temporary track details unavailable while observations are stale or paused.</p>}</div>
             <p className="border-t border-white/10 pt-2 text-[10px] text-white/60">{diagnosticActive?'Diagnostic sample':`Last play average: ${average}`} · {diagnosticStatus||status}</p>
             {commissioning&&visionRetry&&<button className="underline" onClick={()=>retryCamera.current()}>Retry camera</button>}
-            {commissioning&&attentionEnabled&&<div className="flex flex-wrap gap-2">{attentionPreparing||attentionCalibrating?<Button variant="outline" onClick={()=>cancelAttention.current()}>{attentionCalibrating?'Cancel calibration':'Cancel setup'}</Button>:attentionReady?<Button variant="outline" onClick={()=>void calibrateAttention.current().catch(()=>{})}>{attentionSetupActive?'Retry calibration':'Calibrate attention · 3 seconds'}</Button>:<Button variant="outline" onClick={()=>retryAttention.current()}>Retry camera analysis</Button>}</div>}
+            {commissioning&&attentionEnabled&&<div className="flex flex-wrap gap-2">{attentionPreparing||attentionCalibrating?<Button variant="outline" onClick={()=>cancelAttention.current()}>{attentionCalibrating?'Cancel calibration':'Cancel setup'}</Button>:presenceV2Retrying?<Button variant="outline" disabled>Restarting failed CV stage…</Button>:presenceV2Failed?<Button variant="outline" onClick={()=>retryAttention.current()}>Retry camera analysis</Button>:attentionReady?<Button variant="outline" onClick={()=>void calibrateAttention.current().catch(()=>{})}>{attentionSetupActive?'Retry calibration':'Calibrate attention · 3 seconds'}</Button>:<Button variant="outline" onClick={()=>retryAttention.current()}>Retry camera analysis</Button>}</div>}
             {diagnosticStatus&&<p className="text-[10px] text-amber-200">{diagnosticStatus}</p>}{queue.blocked>0&&<p className="text-[10px] text-amber-300">{queue.blocked} delivery records need review and remain saved on this device.</p>}
             {attentionEnabled&&attentionProgress&&attentionProgress.total>0&&<div className="text-[10px]" aria-live="polite">{attentionProgress.phase==='initializing'?<p>Verified model files · initializing local models · {attentionProgress.elapsedSeconds}s</p>:<><div className="flex justify-between"><span>Verified model files · {Math.floor(100*attentionProgress.verified/attentionProgress.total)}%</span><span>{attentionProgress.elapsedSeconds}s</span></div><progress className="h-2 w-full" max={attentionProgress.total} value={attentionProgress.verified} aria-label="Attention model files verified"/><p>{attentionProgress.message}</p></>}</div>}
           </>}

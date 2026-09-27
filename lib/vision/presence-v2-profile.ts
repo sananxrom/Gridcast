@@ -10,7 +10,7 @@ export const PRESENCE_V2_PROFILE = Object.freeze({
   face_worker_url: '/vision-lab/worker-presence-face-v2.js',
   body_worker_sha256: '814eeef639d2b1a0585f51ad2e6d7845aa9d533c46931eb929101dc0c5529a0d',
   face_worker_sha256: '2e25c2379985de7b34f417c9823f086edfeb3ed5332f0934717e8731cdecceff',
-  pipeline_sha256: '7d8e7edd31110372295e909b8ba8b75c91b2bbd9a83a5862771189eed1c96016',
+  pipeline_sha256: '906b881633dd9a5fcf7347790fd18ce81f0d768255f63198cab21334ae335d77',
   body_input_px: 320,
   face_input_px: 640,
   body_interval_ms: 333,

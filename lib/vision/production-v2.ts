@@ -66,28 +66,34 @@ export async function createPresenceV2Runtime(
   };
   let closed = false, lastEmitted = -Infinity;
   let watchdog: ReturnType<typeof setInterval> | null = null;
-  const workers: Partial<Record<Stage, Worker>> = {}, urls: string[] = [], busy: Record<Stage, boolean> = { body: false, face: false };
+  const workers: Partial<Record<Stage, Worker>> = {}, urls: string[] = [], stageUrls:Record<Stage,string[]>={body:[],face:[]}, busy: Record<Stage, boolean> = { body: false, face: false };
+  const retryAttempts:Record<Stage,number>={body:0,face:0};
+  const retrying = new Set<Stage>();
+  const failedResults:Record<Stage,number>={body:0,face:0};
   const sentAt: Record<Stage, number> = { body: 0, face: 0 }, lastFrame: Record<Stage, number> = { body: -Infinity, face: -Infinity };
   const lastTime: Record<Stage, number> = { body: -1, face: -1 }, resultTimes:Record<Stage,number[]>={body:[],face:[]};
   const report = () => { if (!closed) onState({ body: { ...state.body }, face: { ...state.face } }); };
+  function releaseStageUrls(stage:Stage){const owned=new Set(stageUrls[stage]);owned.forEach(url=>URL.revokeObjectURL(url));stageUrls[stage]=[];for(let i=urls.length-1;i>=0;i--)if(owned.has(urls[i]))urls.splice(i,1);}
+  function createStageUrl(stage:Stage,blob:Blob){const url=URL.createObjectURL(blob);urls.push(url);stageUrls[stage].push(url);return url;}
   function close() { if (closed) return; closed = true; Object.values(workers).forEach(worker => worker?.terminate()); if (watchdog) clearInterval(watchdog); urls.forEach(URL.revokeObjectURL); signal.removeEventListener('abort', close); }
   signal.addEventListener('abort', close, { once: true });
   async function start(stage: Stage) {
+    releaseStageUrls(stage);failedResults[stage]=0;
     const modelName = stage === 'body' ? 'person.tflite' : 'face.task';
     if (assets.errors.common || assets.errors[stage] || !assets.ready.has(modelName)) throw Error(assets.errors[stage] || assets.errors.common || `${modelName} was not verified`);
     const workerResponse = await fetch(stage === 'body' ? PRESENCE_V2_PROFILE.body_worker_url : PRESENCE_V2_PROFILE.face_worker_url, { signal, cache: 'no-store' });
     if (!workerResponse.ok) throw Error(`The pinned ${stage} worker is unavailable`);
     const source = await workerResponse.arrayBuffer();
     if (hex(await crypto.subtle.digest('SHA-256', source)) !== WORKER_HASH[stage]) throw Error(`The pinned ${stage} worker did not match the V2 pipeline.`);
-    const workerUrl = URL.createObjectURL(new Blob([source], { type: 'text/javascript' })); urls.push(workerUrl);
+    const workerUrl = createStageUrl(stage,new Blob([source], { type: 'text/javascript' }));
     const cache = await caches.open(CACHE), assetUrls: Record<string, string> = {};
     for (const entry of assets.manifest.assets) {
       if (!assets.ready.has(entry.name)) continue;
       const saved = await cache.match(entry.url); if (!saved) throw Error(`The verified ${entry.name} is no longer cached.`);
       const body = await saved.arrayBuffer();
       if (body.byteLength !== entry.bytes || hex(await crypto.subtle.digest('SHA-256', body)) !== entry.sha256) throw Error(`The cached ${entry.name} failed integrity verification.`);
-      const mime = entry.name.endsWith('.mjs') ? 'text/javascript' : entry.name.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream';
-      assetUrls[entry.name] = URL.createObjectURL(new Blob([body], { type: mime })); urls.push(assetUrls[entry.name]);
+      const mime = entry.name.endsWith('.mjs') || entry.name.endsWith('.js') ? 'text/javascript' : entry.name.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream';
+      assetUrls[entry.name] = createStageUrl(stage,new Blob([body], { type: mime }));
     }
     const worker = new Worker(workerUrl); workers[stage] = worker;
     await new Promise<void>((resolve, reject) => {
@@ -105,7 +111,9 @@ export async function createPresenceV2Runtime(
     });
     worker.onmessage = ({ data }) => {
       if (closed || data.type !== 'OBSERVATION' || data.stage !== stage || !Number.isFinite(data.at)) return;
-      busy[stage] = false; state[stage] = { state: data.result?.ok ? 'ready' : 'error', model: state[stage].model,
+      busy[stage] = false;
+      if(data.result?.ok)failedResults[stage]=0;else failedResults[stage]++;
+      state[stage] = { state: data.result?.ok ? 'ready' : 'error', model: state[stage].model,
         ...(data.error ? { message: String(data.error).slice(0, 160) } : {}), last_at: performance.now() };
       const availableAt = performance.now(), maxAge = stage === 'body' ? 750 : 500;
       if (availableAt - data.at > maxAge) {
@@ -122,14 +130,42 @@ export async function createPresenceV2Runtime(
       // original capture time and play token separately; never merge stages synthetically.
       if (availableAt > lastEmitted) { observe(observation, { ...(data.context || {}), stage, captured_at: data.at, available_at: availableAt }); lastEmitted = availableAt; }
       report();
+      if(failedResults[stage]>=3)failStage(stage,data.error||`${stage} inference failed repeatedly`);
     };
     worker.onerror = event => failStage(stage, event.message || `${stage} worker failed`);
   }
   function failStage(stage: Stage, message: string) {
     if (closed) return;
+    const alreadyRetrying=retrying.has(stage);
     workers[stage]?.terminate(); delete workers[stage]; busy[stage] = false;
-    state[stage] = { state: 'error', model: state[stage].model, message: String(message).slice(0, 160) };
+    releaseStageUrls(stage);
+    const retryLimitReached=retryAttempts[stage]>=3;
+    state[stage] = { state: 'error', model: state[stage].model, message: retryLimitReached?'Retry limit reached. Reload the player to try again.':String(message).slice(0, 160) };
     report();
+    if(!retryLimitReached&&!alreadyRetrying)void retryStage(stage);
+  }
+  async function retryStage(stage:Stage) {
+    if(closed||signal.aborted||state[stage].state!=='error'||retrying.has(stage))return false;
+    const attempts=retryAttempts[stage];
+    if(attempts>=3){state[stage]={...state[stage],message:'Retry limit reached. Reload the player to try again.'};report();return false;}
+    retryAttempts[stage]=attempts+1;retrying.add(stage);workers[stage]?.terminate();delete workers[stage];busy[stage]=false;
+    state[stage]={state:'starting',model:state[stage].model};report();
+    await new Promise(resolve=>setTimeout(resolve,250*2**attempts));
+    if(closed||signal.aborted){retrying.delete(stage);return false;}
+    try{await start(stage);return true;}
+    catch(error:any){failStage(stage,error?.message||`${stage} model retry failed`);return false;}
+    finally{
+      retrying.delete(stage);
+      if(state[stage].state==='error'&&retryAttempts[stage]<3&&!closed&&!signal.aborted)setTimeout(()=>void retryStage(stage),0);
+    }
+  }
+  async function retryFailed() {
+    const failed=(['body','face'] as const).filter(stage=>state[stage].state==='error');
+    if(!failed.length)return false;
+    const retryable=failed.filter(stage=>retryAttempts[stage]<3&&!retrying.has(stage));
+    for(const stage of failed.filter(stage=>retryAttempts[stage]>=3))state[stage]={...state[stage],message:'Retry limit reached. Reload the player to try again.'};
+    if(!retryable.length){report();return false;}
+    return (await Promise.all(retryable.map(retryStage))).some(Boolean);
   }
   onState(state);
   const starts = await Promise.allSettled([start('body'), start('face')]);
@@ -150,6 +186,7 @@ export async function createPresenceV2Runtime(
   if(!closed&&!signal.aborted)watchdog = setInterval(() => { const now = performance.now(); for (const stage of ['body', 'face'] as const) if (busy[stage] && now - sentAt[stage] > 10000) failStage(stage, `${stage} inference stalled`); }, 1000);
   return {
     close,
+    retryFailed,
     get busy() { return busy.body || busy.face; },
     get bodyBusy() { return busy.body; },
     get faceBusy() { return busy.face; },

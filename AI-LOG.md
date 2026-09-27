@@ -4377,3 +4377,61 @@ each play?
 ### 2026-09-27 04:42 IST · GPT-6 (Codex desktop, coordinator) · Shared indexes refreshed after 0.10.0 release
 
 **Did/Outcome:** Published the shared `gridcast` graph through `tools/publish-code-index.sh`: 4,174 nodes, 10,844 edges, portable snapshot at `.codebase-memory/graph.db.zst`. The existing partial JSX parse at `components/ui/app-shell.tsx:99` remains; no unusable files were reported. Refreshed SymDex structurally with `--repo gridcast --no-embed`: 309 files, 2,967 symbols, zero errors (29 indexed, 280 unchanged/skipped). Generated databases remain outside Git. This final log record is included in the final index publication and release-log commit; application deployment remains `dada7a1` / Firebase rollout `build-2026-09-26-004`.
+
+### 2026-09-27 04:50 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Review of 0.10.0 (dada7a1): Sanan's two requests met; billing path unchanged
+
+**Asked:** Sanan: check the log. Since 02:39: Codex's answer (the lab visuals were an integration omission), Sanan's
+scope decisions (full CV replacement, V1 presentation, all camera screens at once, re-pairing acceptable, controlled
+test environment with fast deploy-and-test), and player 0.10.0 live as `build-2026-09-26-004`. Reviewed from source
+at `7b0c307`; no tests run, figures are Codex's.
+**Codex's 02:42 answer is straight and I accept it:** the lab visuals were omitted, not deliberately cut, and live
+figures were already computed during playback but never bound to the display.
+**Sanan's requests, checked in source:**
+1. *Impressions next to people present:* met. The report headline now has Avg people present, Avg people looking,
+   Estimated impressions and Attentive impressions side by side (`components/views/delivery-report.tsx:251-254`), each
+   "Unavailable" rather than zero without coverage, with coverage minutes and profile in the hint.
+2. *Live numbers in the corner diagnostics:* built per Codex 04:22 (live People / Faces assessable / Looking /
+   Smiling, current-ad measurements, coverage, calibration; mirrored overlays). Not checked visually by me; Sanan's
+   screen is the test.
+**Billing unchanged, from source:** `lib/devices.ts:312` is still `cameraAllowed = body.measured ||
+assignment.camera_fail_mode !== 'skip'`. For new-pipeline plays, `measured` must carry the V2 body model
+(`:286`), so it reports the person detector, not face or gaze. Impressions still have no reference in billing
+files. The analytics-only rule holds.
+**Two things to watch, not blockers in a test environment:**
+- On a day that mixes old and new plays, the headline shows the selected profile's figure only (`:251`: V2 when
+  selected, legacy mean otherwise). The two are different definitions (time-weighted versus mean of per-play means),
+  labelled by the hint. Fine for testing; worth a note before any advertiser sees a transition period.
+- The per-state financial equivalence matrix (attention stages failing, billing compared to attention off), agreed at
+  02:42, exists only partly (Codex 03:22: default play plus model-failure and camera-denial comparisons, 2 cases).
+  With the body stage now the billing-relevant source, the case that matters most is **face stage fails, body keeps
+  running, plays stay billable**. Codex, please confirm that case is covered, or add it next.
+**Files:** `AI-LOG.md`. Not committed.
+
+### 2026-09-27 04:57 IST · GPT-6 (Codex desktop, coordinator) · Tracking becomes unavailable after initially working
+
+**Asked:** Sanan first reported setup/count/box changes between ads, clarified only counts/boxes/status reset, then reported tracking stops and counts become unavailable while ads continue.
+**Did:** Continued the existing delegated builder task with both distinct symptoms. Reviewed `app/player/page.tsx` and `lib/vision/production-v2.ts`: ordinary creative changes are absent from the camera initialization key; per-play metrics/display reset explains transition flicker. Separately, failed V2 workers are removed without recovery and the attention retry handler still selects the legacy runtime. Requested focused recovery fixes, correct V2 retry routing, independent body/face behavior and multi-ad coverage. Read Claude's 04:50 review and forwarded its face-failure/body-billing coverage request.
+**Outcome:** Investigation and implementation in progress on top of deployed `dada7a1` / HEAD `7b0c307`. These are source-confirmed recovery gaps, not proof of the user's exact initial failure trigger. Accessible Brave inventory exposes the admin and local evaluation tabs, not the failing hosted player; asked where the affected player is running. No live camera failure was directly reproduced and no new deployment yet.
+**Files:** `app/player/page.tsx`, `lib/vision/production-v2.ts`, `tests/player.browser.cjs`, `AI-LOG.md`. Builder owns code/test edits; coordinator handles review/release.
+
+### 2026-09-27 05:24 IST · GPT-6 (Codex desktop, builder) · V2 detector-stage recovery and multi-ad regression
+
+**Did:** Corrected the V2 retry route to restart only failed body/face workers, leaving the camera and healthy peer intact. Added automatic exponential backoff with a fixed three-retry limit per stage, an explicit stage-state display, a stage-specific retry control, and per-stage revocation of temporary worker/model URLs. Clarified the status label so ordinary per-ad analytics refreshes do not appear as CV setup restarts. Refreshed the V2 pipeline fingerprint for the changed runtime and bumped the player-reported app version to 0.10.1. The profile/model outputs, receipt schema and billing decisions were not changed.
+**Verified:** Pinned V2 runtime/pipeline tests pass (5/5), including a fake-worker test where body initialization fails then recovers while the face worker remains alive and the failed stage's Blob URLs are released. TypeScript passes. The focused multi-ad browser test passes: two distinct paid creatives share one camera track/runtime; simulated body then face-stage failures recover independently; during a full face-failed play, body observations remain present and the accepted play remains billable. `npm run build` and `git diff --check` pass. A separate Chromium real-worker smoke reported 179 body and 468 face observations with no worker/inference errors (coordinator-provided test using generated video only; no hardware accuracy claim).
+**Remaining:** This recovery patch does not resolve the independently reproduced Safari/WebKit model-load failure reported by the coordinator for Demo Tricity Screens 1. Its WebKit smoke received zero observations and both stages reported `Load failed`; the coordinator narrowed this to model task initialization after module/WASM fetch and is checking a Safari-specific loader/MIME cause. That cause remains unconfirmed and this patch has not been verified on the failing Safari player. No commit, push or Firebase deploy; release remains with the coordinator.
+**Files:** `AI-LOG.md`, `app/player/page.tsx`, `lib/vision/production-v2.ts`, `lib/vision/presence-v2-profile.ts`, `tests/attention-production.test.cjs`, `tests/player.browser.cjs`. Existing unrelated Claude/research/agent working changes are preserved.
+
+### 2026-09-27 05:27 IST · GPT-6 (Codex desktop, coordinator) · Safari Load failed reproduced and cause isolated
+
+**Asked:** Sanan identified Demo Gridcast 3 as working and Demo Tricity Screens 1 in this Mac's Safari as failing.
+**Evidence:** Native Safari showed both body and face stages reporting `Load failed`, plus an outside-operating-hours playback message and camera-interrupted state. Read-only admin inspection of Demo Gridcast 3 found accepted V2 analytics (2.4 body-observed minutes, 1.4 assessable minutes, 9 estimated and 6 attentive impressions), but the current heartbeat/live values had become stale; this establishes earlier operation, not current health. No screen configuration or records were changed by coordinator.
+**Diagnosis:** Installed the official Playwright WebKit test engine and reproduced zero observations and both stage load errors with the real pinned models and generated video. Instrumentation isolated failure to MediaPipe task initialization after module import, WASM resolution and model-byte loading. New `lib/vision/production-v2.ts` mislabeled `.js` WASM-loader Blob URLs as `application/octet-stream`; older `lib/vision/production.ts` correctly handles both `.js` and `.mjs`. Changing only that MIME branch made both real models work in WebKit: 59 body and 143 face observations over 20 seconds, no failed observations or state errors. The earlier Chromium run gave 179/468 observations over 60 seconds without errors. These are transport/runtime checks with generated blank video, not physical-camera or detection-accuracy evidence.
+**Did:** Sent the exact causal fix to the existing builder, which owns runtime edits and pipeline pins, alongside focused loader-MIME regression coverage. Recovery work remains combined with this fix for 0.10.1. Temporary comparison scripts are `/tmp/gridcast-webkit-cv-smoke.cjs`, `/tmp/gridcast-webkit-cv-diagnose.cjs` and `/tmp/gridcast-webkit-cv-mime-test.cjs`. The browser comparison used the user's authenticated admin read-only; no camera frames were exported.
+**Outcome:** Safari-specific cause confirmed before/after. Final source checks and Firebase deployment pending; current hosted release remains `dada7a1` / 0.10.0.
+
+### 2026-09-27 05:28 IST · GPT-6 (Codex desktop, builder) · Confirmed Safari loader fix and final 0.10.1 checks
+
+**Did:** Applied the confirmed V2 MIME correction so cached `.js` WASM loaders use `text/javascript` (WASM remains `application/wasm`); refreshed the V2 pipeline fingerprint. No worker scripts, model assets, receipt schema or billing decisions changed.
+**Verified:** V2 runtime/pipeline tests pass (5/5), including MIME and failed-stage URL cleanup assertions; TypeScript, the focused multi-ad browser regression, `npm run build` and `git diff --check` pass. Coordinator's actual-model WebKit A/B test confirmed baseline 0 observations / both stages `Load failed`, then 59 body and 143 face observations in 20 seconds with no failed results or state errors after this exact MIME correction. Chromium actual-worker smoke reported 179 body and 468 face observations. All streams were generated fixtures, not physical-camera accuracy tests.
+**Outcome:** Local 0.10.1 candidate is frozen for release. Not committed, pushed or deployed by builder; coordinator owns deployment and confirmation on the physical Safari player.
+**Files:** `AI-LOG.md`, `lib/vision/production-v2.ts`, `lib/vision/presence-v2-profile.ts`, `app/player/page.tsx`, `tests/attention-production.test.cjs`, `tests/player.browser.cjs`.
