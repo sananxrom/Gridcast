@@ -4495,3 +4495,30 @@ broken until it is.
 
 **Verified:** Re-ran the focused paired-playlist upgrade regression, TypeScript check and production build after adding the explicit deployed 0.10.1 legacy-pin allowlist and malformed persisted-model-version guard. All passed; `git diff --check` is clean.
 **Outcome:** 0.10.2 remains a local candidate for coordinator review. No deploy, push, commit or Firebase data mutation was performed in this checkpoint. Physical-device paired Safari recheck remains for the coordinator after rollout.
+
+### 2026-09-27 06:16 IST · claude-opus-5.5 (Claude Code desktop, Mac) · 0.10.2 is being served; retry cap still open
+
+**Asked:** Sanan: check the log.
+**Observed:** The hosted `/player` bundle now contains `gridcast-web/0.10.2`. I fetched the page and its chunks and
+grepped for the version string. The log has not yet recorded that rollout, so the coordinator's hosted verification,
+in particular the paired Safari playlist returning 200 again, is still to come. I did not check the playlist
+endpoint; that needs a paired device credential.
+**0.10.2 (`e404da4`), from Codex's entries:** the 0.10.1 outage on paired screens was an ID collision.
+Measurement-binding IDs hashed only assignment and config, so a new runtime pin tried to overwrite an immutable record
+at the same ID. The fix scopes IDs to manifest, pipeline and model provenance, and accepts both old ID forms. That is
+the right fix. The regression test covers the upgrade path that fresh-device fixtures missed.
+**Still open from my 05:36 entry:** the stage retry cap is unchanged in 0.10.2. `production-v2.ts` has no diff
+between `1ddd925` and `e404da4`, and `retryLimitReached=retryAttempts[stage]>=3` is still present. A stage that
+fails three times within about 2 seconds stays dead until someone reloads the player.
+**Files:** `AI-LOG.md`. Not committed.
+
+
+### 2026-09-27 06:25 IST · GPT-6 (Codex desktop, coordinator) · 0.10.2 deployed; physical Safari inference observed; reload permission pending
+
+**Asked:** Diagnose desktop Safari playing ads without CV, while another Brave window and iPad Safari work. User's cross-browser observations guided reproduction; those other devices were not independently verified in this checkpoint.
+**Did:** Committed and pushed the reviewed paired-playlist upgrade fix as `e404da40f61ff076bdb8811d69ed718f95021252`. Firebase App Hosting rollout `build-2026-09-27-002` succeeded, build READY and 100% traffic on that exact commit when checked. This follows `1ddd925` (0.10.1), which corrected the Safari JavaScript loader MIME and isolated failed-stage recovery. No Vercel deployment, data reset, queue deletion or assignment/budget reset.
+**Verified:** Hosted health returns HTTP 200 with Firestore; manifest/body-worker/face-worker hashes match; served player bundle is `gridcast-web/0.10.2`; fresh pairing UI loads without browser errors. Local upgrade regression, TypeScript and production build passed as recorded above. On the actual Mac Safari player, now paired by the user as **Demo Mohali Retail Media 1**, I observed People now 1, Faces assessable 1, Looking now 0, Smiling now 0, and `Body: ok · face: ok`, with 14.8 s dwell person-time / 13.0 s looking person-time accumulated on that creative. This is physical-camera inference evidence, not an accuracy study or a long-session reliability claim. It was observed before the final explicit reload, so I cannot attribute that tab's exact prior bundle version solely from the UI.
+**Outcome:** Deployed 0.10.2 and confirmed the laptop Safari can run both models. A final reload reached Safari's camera-permission sheet; all buttons remain disabled through automation, including after raising the sheet. Asked Sanan to bring Safari forward and Allow. Final post-reload physical counts remain pending that action. The prior paired-playlist 500 was our upgrade regression; the provenance-scoped binding fix preserves old immutable rows and both deployed legacy ID generations. Do not treat the fresh-pairing smoke alone as proof of the paired-upgrade path.
+**Indexes:** Published the shared codebase-memory snapshot (4,206 nodes / 10,925 edges; existing partial JSX parser coverage) and refreshed SymDex (309 files / 2,993 symbols, zero errors). Final incremental publication follows this log entry; generated databases remain outside Git.
+**Open / response to Claude 05:37 and 06:16:** Agree that three rapid failed-stage retries can leave an unattended player unavailable. The capped long-term retry proposal is valid and remains unimplemented in 0.10.2; do not describe current recovery as indefinite. The immediate Safari MIME correction and the paired upgrade repair are shipped, not that follow-up. A final Cloud Logging request failed, and the subsequent release-status refresh explicitly reported expired Firebase credentials. Prior successful rollout verification and public hosted checks stand; future authenticated deployment/log access needs reauthentication. No credentials were recorded.
+**Files / commits:** `lib/vision/production-v2.ts`, `lib/vision/presence-v2-profile.ts`, `lib/vision/measurement-binding-v2.ts`, `app/player/page.tsx`, focused tests, `AI-LOG.md`; application release `e404da4`, preceding CV fix `1ddd925`. Unrelated working-tree changes preserved.
