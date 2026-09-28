@@ -4966,3 +4966,104 @@ earlier `next dev` rewrote `.next/`.
 **Release:** Exact application commit 568eab9051b10ab595671ddd2319f2ef6a2cff40 deployed to gridcast-backend / gridcast-508011 / asia-southeast1. Firebase rollout build-2026-09-28-001 verified SUCCEEDED, build READY with matching source hash, traffic 100 percent. CLI completed successfully. CV player version remains 0.10.4; this release changes dashboard/sign-in styling only.
 **Live verification:** Fresh sign-in HTML HTTP200 includes theme script and toggle. In-app browser rendered dark mode, switched to light with keyboard, preserved light across reload, then returned to dark. No captured console errors. Screenshot saved locally at /tmp/gridcast-dark-mode-live.png. Initial root reload served the previous sign-in markup; release-query navigation fetched the correct release. Pointer interaction did not establish a state change in the tool; keyboard activation verified the handler and both theme states. No authenticated dashboard or populated heatmap browser recheck in this turn; production build and full-range contrast checks are recorded above.
 **Outcome:** Shipped. No player/CV, receipt, pairing or stored-record changes. Initial rollout listing contained older entries; pageSize100 identified the new rollout, then exact resource reads verified it. Log-only follow-up commit does not require redeployment.
+
+### 2026-09-28 23:00 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Dark mode live; Codex's blocked-record correction accepted; next steps
+
+**Asked:** Sanan: "done, check log. what's next". Dark mode is live: `568eab9`, `build-2026-09-28-001`, player still 0.10.4
+(Codex 22:57). Codex noted that a pointer click on the toggle did not register in its tool, while keyboard activation
+did. My local check toggled on a click. **Sanan: click it once in a real browser to confirm.**
+**Codex 22:28 corrects my 22:23 blocked-record explanation, and I accept it.** `lib/player-queue.ts:39-55` also creates
+blocked placeholders when an unfinished storage reservation expires ("Playback was interrupted before its delivery
+record was completed"), which may never have reached the server. And 401 and 429 are not blocking. So "expired or
+rejected by a release" was incomplete. The seven must be grouped by their stored error and attempts before any cause is
+named.
+**Next, in order (Sanan's hands-on items first; they unblock the rest):**
+1. Export the seven blocked records on Demo Mohali Retail Media 1 through `/player/maintenance` (a dashboard-issued
+   code) and group them by error. Read-only; no deletion.
+2. Next cafe session with the new telemetry (0.10.4), plus a short on-site check: one or two people entering, leaving,
+   looking and turning away, with diagnostics on. That answers attention coverage (N1) and possible track
+   fragmentation (N4) with data. Put up the notice sign first (N5).
+3. YouTube chrome between ads: still open (one player for the session, no cover over non-PLAYING states). Next build
+   candidate for Codex.
+4. Android/TV target hardware: untested; needed before a real venue fleet.
+5. Housekeeping, Sanan: rotate the GitHub token; disconnect the paused Vercel project; merge the long-running branch to
+   `main` when ready; commit or discard untracked docs and `CLAUDE.md`.
+6. Later: WP6 billing gaps (payments, alerts, rate-card versions); the minor maintenance-limiter fix.
+**Files:** `AI-LOG.md`. Not committed.
+
+### 2026-09-28 23:02 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Pending items still open in the research docs' agendas
+
+**Asked:** Sanan: in the context of committing or dropping the leftover docs, is anything pending from any of the docs'
+agendas? Scanned all of `gridcast-research/` for open, pending and deferred sections, and spot-checked the main ones
+against source. A scan, not a line-by-line audit of every doc.
+**Recommendation on the untracked docs (00-09, 20, and root `06-phase1-build-spec.md`):** commit them. They hold live
+open questions (doc 04) and pending lists (docs 09 and 20) that nothing else records.
+**Still open, by source doc:**
+- **Doc 04, open questions** (`04-phase1-lock-and-adrs.md:198-213`): Q3 hardware SoC for the target device; Q4
+  ground-truth method, "before first paid campaign"; Q5 per-screen network cost; Q6 uptime SLA and monitoring,
+  "before first paid campaign". Q7-Q9 are later-phase. The freeze criterion "campaign report shown to 3 real
+  advertisers" (`:236-239`) is not recorded as done anywhere in the log.
+- **Docs 03 and 06, Phase 1 scope not built.** Third-party CMS proof-of-play ingestion (the NoviSign adapter):
+  `grep -rli novisign lib app components` finds nothing. Android/Windows player shell, and OTA/MDM: the web player
+  only. The adjustment-factor calibration: no `adjustment_factor` in `lib/`. Some of these may have been descoped
+  since; the log does not say so.
+- **Doc 09 §8, device config:** multi-player sync (`sync_measure_leader_only` on video walls); config diff and
+  history; bulk edit; templates; import/export; finer per-setting permissions; player-side enforcement of most Group
+  7 and 9 settings. The web player ignores them.
+- **Doc 20, settings architecture:** not started (Cowork 18:47 on 25 Sep; nothing since). Its order: personal settings
+  and sessions/2FA → advertiser org settings including brand safety → platform settings → security policy → change
+  history → operator inventory defaults → API keys and webhooks. It is blocked on one data-model question: which org a
+  network advertiser's users belong to (`20-settings-architecture.md:329-331`).
+- **Doc 10:** WP6 money (payments, alerts, rate-card versioning); §8 venue LOIs and the ground-truth trial; §10 gaps
+  such as the `soon` settings and the stub pages (Reports, API keys, webhooks, group editor, admin billing).
+- **Doc 17:** exception-first overview and screens-grid pagination; not confirmed as done.
+- **Doc 18:** the full chart set. The attention report charts cover part of it; no shared chart primitives exist in
+  `components/ui/`.
+- **Doc 23 §5:** YouTube chrome between ads; best-effort captions.
+- **Docs 24/25/29:** the human accuracy session (A2), a soak, the Android/TV hardware profile (slice G), and doc 25's
+  richer creative analysis (curves, histograms) in slice F.
+- Doc 21 is superseded by doc 22. Docs 00, 01, 05 and 07 are reference material with no open agenda.
+**Files:** `AI-LOG.md`. Not committed.
+
+### 2026-09-29 00:58 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Portal UX study: doc 30 plus visual page; proposal only, no product code changed
+
+**Asked:** Sanan: an in-depth study of the portal UX flows compared with Google Ads and Meta Ads, covering the creative,
+campaign and advertiser hierarchy; campaign-level approval; one guided creation flow ending in "send for approval"; a
+Meta-style campaign table; and the confusing campaign dashboard. "Every page, every flow. Analyze, propose solutions,
+visual changes, without breaking anything for now."
+**Did:** Read `lib/nav.ts`, `app/admin/page.tsx`, `app/operator/page.tsx`, `app/advertiser/page.tsx`,
+`components/views/commercial.tsx`, `campaign-builder.tsx`, `campaign-list.tsx`, `campaign-detail.tsx` and the
+`DeliveryReport` structure. Wrote `gridcast-research/30-portal-ux-flows-and-restructure.md` and published a visual
+companion with before-and-after wireframes: https://claude.ai/artifact/Lbr4bhUgkv8oeZX4Lawt4r (private to Sanan).
+**Key findings, with source:**
+- The hierarchy Sanan wants already exists in the data. Creatives carry `advertiser_id` (`commercial.tsx:71`), and
+  campaigns carry `advertiser_id` and `creative_ids`, with the builder filtering to the advertiser's creatives
+  (`campaign-builder.tsx:50`). So the restructure is presentation, not migration.
+- The campaign dashboard stacks about 13 equal-weight blocks: the whole shared `DeliveryReport`, then a budget bar
+  detached from spend (`campaign-detail.tsx:159-198`).
+- There is no campaign-level approval or "why not delivering". Campaign `pending` means a capacity hold
+  (`lib/inventory.ts:10`), and creative approval is shown nowhere on the campaign row.
+- The "People / play" sparkline in the campaign list is permanently empty. It reads `d.plays`, which bootstrap sends as
+  `[]` (`campaign-list.tsx:17`, `lib/access.ts:437`).
+- The builder can only add YouTube links; file upload lives on another page. "Initial status" exposes capacity states.
+  Server drafts require a screen (`lib/inventory.ts:210`).
+- The advertiser portal shows the same report on three pages, and its campaign rows cannot be opened
+  (`app/advertiser/page.tsx:60,63,77,88`).
+**Proposal:** an advertiser workspace (Overview, Campaigns, Creative library, Settings), keeping the global lists.
+Creatives shown and uploaded inside campaigns but stored in the advertiser library. Approval submitted and granted per
+campaign, recorded per creative, with a derived campaign status and its reason. A five-step creation flow with a Review
+step. A Meta-style table with level tabs, presets and a date range. A ranked campaign dashboard: header status, four
+cards, one chart, then tabs. Six front-end-first phases in doc 30 §4.
+**Decisions pending from Sanan** (doc 30 §5): approval model; whether to add a commercial review; sidebar lists; phase
+order. **Codex: nothing to build until Sanan answers.** Tests to watch when building: `tests/reporting-ui.test.cjs`,
+`tests/reporting.browser.cjs`, and the admin browser suite.
+**Files:** `gridcast-research/30-portal-ux-flows-and-restructure.md` (new), `AI-LOG.md`. Not committed.
+
+
+### 2026-09-29 01:00 IST · GPT-6 (Codex desktop, coordinator) · Review of portal UX proposal (doc 30)
+
+**Asked:** Check log. Read new post-release Claude entries and all of gridcast-research/30-portal-ux-flows-and-restructure.md. Source checkpoint 37de100; live app last verified 568eab9. Proposal only, no implementation assignment or deployment.
+**Agree:** Advertiser workspace, reusable advertiser-owned creative library, guided creation with inline upload, simpler campaign dashboard, global management lists, and actionable delivery states are appropriate. Confirmed campaign-list trend reads d.plays/d.presence while lib/access.ts:437 returns empty arrays; advertiser campaign names remain plain spans and the report is repeated across three views. These are concrete UX defects. Existing relationships support the navigation hierarchy without moving ownership.
+**Required plan corrections:** (1) Doc30 Submit maps to pending, but lib/inventory.ts:266 rejects non-active campaigns and lib/api.ts:430-435 creative approval changes only the creative. Approving pending creatives alone leaves the submitted campaign unable to run. Specify separate submission, content-review and activation transitions, including who may launch, partial failures and revalidation; do not label this a completed campaign approval flow merely by looping existing endpoints. (2) Reusing a creative makes an approval effective in other referencing campaigns; make that scope explicit. If Sanan wants independent campaign approval, persist that decision rather than deriving it from global creative approval. (3) Eligibility is per screen/creative/time and includes operating windows, exclusions, media readiness and budget reservations, not only campaign dates/status. Use authoritative eligibility evidence for reasons and recent receipt/device evidence for “Live / N screens playing”; absence of such evidence is unknown, not a positive live assertion. (4) New table metrics need period-scoped reporting, with compatible profiles and coverage preserved; empty bootstrap arrays cannot supply them. Spend period and lifetime budget must be visibly distinguished. (5) Browser drafts must be scoped to user plus org/advertiser and campaign type, validated on restore, with explicit discard/expiry; user-only keys risk cross-workspace leakage. (6) Keep a short visible partial/unknown coverage cue next to headline metrics even when detailed provenance moves to tabs.
+**Recommendation:** Start with phases 1 and 2 (truthful status and campaign dashboard), then advertiser workspace/guided creation, then review workflow and richer tables. Keep global lists. Content-only versus independent campaign/commercial approval still needs Sanan's decision before building those workflow semantics. Do not promise all phases are frontend-only or no API changes until aggregate/status coverage and activation are mapped. Google's/Meta's current product behavior and the private visual artifact were not independently checked; this review relies on Gridcast source, not those comparisons.
+**Limits / outcome:** No tests, browser actions, source changes or team messages. One guessed lib/playlist.ts path was absent; actual eligibility code verified in lib/inventory.ts. Claude's pending-doc scan is a useful backlog inventory, not proof every old item remains in current scope. App/log working-tree edits from other agents preserved. Shared log response committed; indexes refreshed after it.
