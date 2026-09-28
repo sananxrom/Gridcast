@@ -127,7 +127,7 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
           {inventoryError&&<p role="alert" className="mb-2 text-sm text-destructive">{inventoryError}. Close and reopen the editor to retry.</p>}
           <div className="mb-3 max-h-52 overflow-y-auto rounded-lg border border-border/60">
             {screenPool.map((s: any) => (
-              <label key={s.id} className="flex cursor-pointer items-center gap-2.5 border-b border-border/50 px-3 py-2 text-[13px] last:border-0 hover:bg-black/[0.02]">
+              <label key={s.id} className="flex cursor-pointer items-center gap-2.5 border-b border-border/50 px-3 py-2 text-[13px] last:border-0 hover:bg-black/[0.02] dark:hover:bg-white/[0.03]">
                 <input type="checkbox" checked={f.screen_ids.includes(s.id)} onChange={() => setF({ ...f, screen_ids: tick(f.screen_ids, s.id) })} />
                 <span className="flex-1 truncate">{s.name} <span className="text-muted-foreground">{s.address}</span></span>
                 <span className="font-mono text-[12px] text-muted-foreground">{inr(s.slot_price_month)}/mo</span>

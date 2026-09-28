@@ -5,6 +5,7 @@ import { SidebarNav, type NavGroupData, type NavItemData, type OrgOption } from 
 import { CommandPalette, type CmdItem } from './command-palette';
 import { cn } from '@/lib/utils';
 import { TopProgress } from './loader';
+import { ThemeToggle } from './theme-toggle';
 import { api, session } from '@/lib/client';
 
 export type Crumb = string | { label: string; go?: string };
@@ -81,6 +82,7 @@ export function AppShell({
               <span className="flex-1 text-left">Search…</span>
               <kbd className="rounded border border-border/60 px-1 font-mono text-[10px]">⌘K</kbd>
             </button>
+            <ThemeToggle />
             <div className="relative">
               <button onClick={() => setMenuOpen(!menuOpen)}
                 className="grid size-8 place-items-center rounded-full border border-primary/25 bg-primary/10 text-[11px] font-semibold text-primary">

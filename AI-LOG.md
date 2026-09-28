@@ -4924,3 +4924,30 @@ it in the next release (`npm run build`, then deploy) or ask Sanan to commit.
 **Concrete correction before release:** components/views/delivery-report.tsx:277 switches the heatmap label to primary-foreground at 60 percent coverage, but the primary background is translucent (alpha 0.552 at that point). Using actual app/globals.css tokens composited over the card and the standard sRGB luminance calculation gives approximately 2.21:1 in light mode and 3.30:1 in dark mode at 60 percent, below 4.5:1 for this small text. Brand-colour change is reasonable; the fixed foreground switch needs a contrast-safe fill/label combination across the full heatmap range. Claude explicitly did not visually inspect this heatmap because demo data lacked attention rows.
 **Next:** Correct the heatmap contrast and inspect populated data in both themes; then production build before any release because Claude's local dev run rewrote .next. No need to rerun unrelated CV suites for these UI changes. This review does not initiate a deployment or another task.
 **Files / outcome:** AI-LOG.md only; source review plus standalone contrast calculation, no browser/cloud/device changes. Preserve all Claude implementation files and unrelated changes.
+
+### 2026-09-28 22:44 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Heatmap contrast corrected after Codex 22:41
+
+**Asked:** Sanan: check the log. Codex 22:41 found that my heatmap label switch to `text-primary-foreground` at 60%
+coverage fails contrast: 2.21 in light and 3.30 in dark, because the fill is translucent. **Correct, and my error.** I
+switched the text colour without computing it against the composited fill.
+**Computed this turn** (WCAG sRGB luminance, the actual `app/globals.css` tokens, primary composited over the card):
+- In light mode, normal `--foreground` stays at 4.5 or above up to alpha 0.8 (5.01), and `--primary-foreground` only
+  reaches it at alpha 1.0.
+- In dark mode, `--foreground` stays above 4.5 up to alpha 0.5 (4.86) and falls to 3.88 at 0.6; `--primary-foreground`
+  only reaches it from 0.7.
+- So no single switch point works in both themes.
+**Fix:** always use the default foreground text and cap the fill at alpha 0.50:
+`hsl(var(--primary) / ${0.06+0.44*pct/100})` (`components/views/delivery-report.tsx:277`). The worst case is 100%
+coverage, giving 8.31 in light and 4.86 in dark. Lower coverage is lighter, so higher contrast. The 6% to 50% range
+still reads as a heatmap. `tsc --noEmit` exit 0.
+**Still not done:** a visual check with populated attention data in both themes. The local demo has no attention rows,
+and I did not seed any. The contrast is established by calculation, not by eye. Rebuild before release, because my
+earlier `next dev` rewrote `.next/`.
+**Files:** `components/views/delivery-report.tsx`, `AI-LOG.md`. Not committed; all dark-mode files remain released.
+
+
+### 2026-09-28 22:46 IST · GPT-6 (Codex desktop, coordinator) · Dashboard dark mode checked for requested push
+
+**Asked:** Sanan: check and push. Read Claude's 22:44 heatmap correction and verified the released dashboard/sign-in changes.
+**Verified:** Corrected heatmap uses default text with alpha 0.06–0.50. Independent sRGB calculation over every integer percentage from 0 through 100 confirms minimum contrast 8.31:1 light and 4.86:1 dark against actual card tokens. npm run build completed successfully, including lint/typechecking and all 15 static pages; git diff --check passed. No new populated-browser visual check performed; Claude's previous visual checks and that limit remain recorded. An initial guessed reporting test filename did not exist; discovered actual tests/reporting.browser.cjs without running an unrelated suite.
+**Scope:** Commit Claude's eight released application files including new theme-toggle.tsx, plus shared log; preserve unrelated CLAUDE.md and untracked documents/plugins. No further code correction needed. Base a7a61f4; coordinator proceeding with requested branch push, not a Firebase rollout. Last verified deployed app remains 8c23323 / 0.10.4.

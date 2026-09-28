@@ -69,10 +69,17 @@
     --warn-foreground: 30 40% 10%;
     --onair: 32 92% 58%;
     --onair-foreground: 30 40% 10%;
+    /* Dark text on the fills: white on these was 3.40 (ok) and 4.44 (destructive), below AA.
+       The same destructive token is also used as ink on the card, so it is lightened to 5.14 there. */
     --ok: 38 60% 44%;
-    --ok-foreground: 0 0% 100%;
-    --destructive: 0 65% 55%;
+    --ok-foreground: 30 40% 10%;
+    --destructive: 0 72% 64%;
+    --destructive-foreground: 30 40% 10%;
   }
+
+  /* Native controls, scrollbars and autofill follow the theme. */
+  :root { color-scheme: light; }
+  .dark { color-scheme: dark; }
 }
 
 @layer base {

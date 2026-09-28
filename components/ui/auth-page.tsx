@@ -2,6 +2,7 @@
 import React from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { BrandLogo } from './brand-mark';
+import { ThemeToggle } from './theme-toggle';
 import { cn } from '@/lib/utils';
 
 /**
@@ -15,6 +16,7 @@ export function AuthLayout({ children, quote, by }: {
 }) {
   return (
     <main className="relative md:h-screen md:overflow-hidden lg:grid lg:grid-cols-2">
+      <ThemeToggle className="absolute right-4 top-4 z-20" />
       {/* brand column */}
       <div className="relative hidden h-full flex-col overflow-hidden border-r border-border bg-muted/60 p-10 lg:flex">
         <div className="absolute inset-0 z-10 bg-gradient-to-t from-background to-transparent" />
