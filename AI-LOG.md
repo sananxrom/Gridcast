@@ -4870,3 +4870,57 @@ stay intact either way.
 **Correction to blocked semantics:** lib/player-queue.ts:39-55 creates a blocked placeholder with error “Playback was interrupted before its delivery record was completed.” when an unfinished storage reservation expires. Such a record need not have reached the server at all. The flush path at :166-176 also blocks retry-window expiry and most 4xx responses, but 401 is handled as an authorization/retry error and 429 remains retryable. Therefore Claude's expired-or-server-rejected explanation is incomplete. Interrupted placeholders, expired completed receipts and rejected completed receipts must be distinguished from their stored error/event/attempt fields before proposing a fix. No cause assigned to the actual seven without their export.
 **Next evidence:** Inspect the original Safari pairing's saved queue through /player/maintenance, preserving every row; group all seven by error, attempts, reservation_interrupted and available receipt provenance. This is a recommended next investigation, not a completed export or a newly assigned build. Cafe attention coverage still needs a new field sample with the deployed telemetry; the historical decline is not diagnosed.
 **Outcome / limits:** Source/log review only; no browser or device access, tests, application changes, deployment, pairing changes or deletion. Narrow shell source read was truncated in the telemetry portion; queue classification evidence was visible and is the basis of this correction. AI-LOG.md append only; preserve Claude's uncommitted review and unrelated working-tree files.
+
+### 2026-09-28 22:33 IST · claude-opus-5.5 (Claude Code desktop, Mac) · CLAIMING files for dashboard dark mode (Sanan asked Claude to build this one)
+
+**Sanan:** "i need a dark mode on my dashboard, toggle top right. you build this one, you are better at UI. ask questions,
+confirm tasks then build." Answers: Light/Dark toggle that starts from the system setting; remembered per browser
+(localStorage, no server change); all dashboards plus the sign-in page; the player untouched.
+**Coordinator / Builder: please do not edit these until I log that I am done:** `app/layout.tsx`,
+`components/ui/app-shell.tsx`, new `components/ui/theme-toggle.tsx`, `app/globals.css` (dark tokens only), the sign-in
+page, and dark-variant class fixes in dashboard components found by the audit. I will list the exact files at the end.
+No server, API, player, receipt or billing changes.
+
+### 2026-09-28 22:39 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Dashboard dark mode built; files released
+
+**Asked:** Sanan: dark mode for the dashboard, toggle top right; Claude builds this one. Decisions: Light/Dark toggle
+that starts from the system setting, remembered per browser, on all dashboards plus the sign-in page, player
+untouched.
+**Did:**
+- `components/ui/theme-toggle.tsx` (new): sun/moon button with `aria-label` "Switch to dark/light mode" and a focus
+  ring. It writes `localStorage.gc_theme`. Until the user picks, it keeps following system changes. It renders an
+  empty same-size placeholder until mounted, so there is no hydration mismatch or wrong icon.
+- `app/layout.tsx`: a small inline script in `<head>` applies `dark` before first paint, so there is no white flash.
+  It skips any path starting `/player`. It is a fixed string with no user input, so the XSS warning on
+  `dangerouslySetInnerHTML` does not apply.
+- `components/ui/app-shell.tsx`: toggle placed between Search and the avatar. `components/ui/auth-page.tsx`: toggle
+  top right on sign-in (also covers `/control`, which uses the same layout).
+- `app/globals.css`: three dark-token contrast fixes, computed with WCAG formulas. `--ok-foreground` goes to warm
+  near-black (3.40 → 5.04); `--destructive` becomes `0 72% 64%` (ink on card 3.91 → 5.14) with a near-black
+  `--destructive-foreground` (4.44 → 5.09). Also `color-scheme` light/dark so native date pickers, scrollbars and
+  autofill follow. Light tokens are unchanged.
+- `components/views/delivery-report.tsx:277`: the attention heatmap used off-brand green `rgba(34,197,94,…)`. It now
+  uses `hsl(var(--primary) / a)`, with `text-primary-foreground` from 60% so cell text stays readable in both themes.
+- `components/views/campaign-builder.tsx:172`, `campaign-detail.tsx:130`: row hover was `hover:bg-black/[0.02]`
+  only; added `dark:hover:bg-white/[0.03]`.
+- Audit: no other hard-coded light colours in dashboard code. Existing components already carried `dark:` variants.
+**Verified:** `tsc --noEmit` exit 0. Visual check in the in-app browser against a throwaway local demo (`next dev`
+on port 4031, random local demo secrets in my scratchpad, signed in as the seeded admin through the local API): sign-in
+in both themes; admin overview, All screens, Campaigns and a campaign detail in dark; toggle persists across reload;
+no console errors; `/player` gets no `dark` class with `gc_theme=dark`. I stopped the server and deleted the
+`data/db.json` it created; `data/` did not exist before. `next dev` rewrote the local `.next/` cache, so rebuild
+before any deploy. The heatmap was not visible (demo has no attention data). Operator and advertiser portals share the
+same shell and components but were not opened. Not run: full test suites, production build, deploy.
+**Files released** for the team: `app/layout.tsx`, `app/globals.css`, `components/ui/theme-toggle.tsx` (new),
+`components/ui/app-shell.tsx`, `components/ui/auth-page.tsx`, `components/views/delivery-report.tsx`,
+`components/views/campaign-builder.tsx`, `components/views/campaign-detail.tsx`. Not committed. Coordinator: include
+it in the next release (`npm run build`, then deploy) or ask Sanan to commit.
+
+
+### 2026-09-28 22:41 IST · GPT-6 (Codex desktop, coordinator) · Review of Claude's dashboard dark mode
+
+**Asked:** Check log. Read Claude's 22:33 claim and 22:39 completion; reviewed the eight application files' diff plus new theme-toggle.tsx against HEAD 9547d2f. Files released by Claude; no application edits made by coordinator.
+**Assessment:** Dashboard/sign-in toggle, browser persistence and pre-paint theme script match the logged scope. Player entry via location.href performs a fresh navigation and is excluded by the script. Claude reports typecheck and local visual checks; coordinator did not rerun them. This remains uncommitted application work, not deployed; last verified production 0.10.4 / 8c23323.
+**Concrete correction before release:** components/views/delivery-report.tsx:277 switches the heatmap label to primary-foreground at 60 percent coverage, but the primary background is translucent (alpha 0.552 at that point). Using actual app/globals.css tokens composited over the card and the standard sRGB luminance calculation gives approximately 2.21:1 in light mode and 3.30:1 in dark mode at 60 percent, below 4.5:1 for this small text. Brand-colour change is reasonable; the fixed foreground switch needs a contrast-safe fill/label combination across the full heatmap range. Claude explicitly did not visually inspect this heatmap because demo data lacked attention rows.
+**Next:** Correct the heatmap contrast and inspect populated data in both themes; then production build before any release because Claude's local dev run rewrote .next. No need to rerun unrelated CV suites for these UI changes. This review does not initiate a deployment or another task.
+**Files / outcome:** AI-LOG.md only; source review plus standalone contrast calculation, no browser/cloud/device changes. Preserve all Claude implementation files and unrelated changes.
