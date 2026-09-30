@@ -3,8 +3,9 @@
 Shared working memory for every AI agent on this project (Claude, Cursor, Codex, Copilot, whatever comes next)
 and for the humans reading over their shoulder.
 
-**If you are an AI agent: read this whole file before your first tool call in a session, and append an entry
-before you finish. That is the deal. Nothing else in the repo tells you what happened last week.**
+**At session start:** read this file's rules and Standing Context, `TEAM.md`'s dated checkpoint, and log
+entries newer than its reconciled-through marker. Search older entries when the task needs their history.
+Append an entry before handing back change-making work. Preserve all historical entries.
 
 ---
 
@@ -29,9 +30,10 @@ before you finish. That is the deal. Nothing else in the repo tells you what hap
    is for the truth, including "abandoned, see why".
 8. **Never put secrets in here** — no API keys, tokens, passwords, `.env` values, customer data. This file is
    committed to git. If a secret is involved, write "rotated the auth secret (value not recorded)".
-9. **Keep Standing Context current.** It is the only section that may be edited in place. When you change it,
-   log that you changed it.
-10. **Commit the file with your work**, same commit or one right after: `git add AI-LOG.md`.
+9. **Keep Standing Context current.** Standing Context and administrative startup/rules text may be edited
+   in place when needed; log the change. Historical Log entries remain append-only.
+10. **Commit the file with your work when committing**, same commit or one right after: `git add AI-LOG.md`.
+    Follow an explicit user instruction to leave work uncommitted.
 
 ### Entry template
 
@@ -5120,3 +5122,56 @@ thread and resolved it.
 **Decision:** Save draft on every creation step, server persistence of incomplete inputs and current step, resume from that step. No invented zero budget, inventory reservation, finalized booking economics or playback for drafts. Preserve authorization and supplied-field validation; enforce completeness at submission/activation.
 **Did:** Added doc30 §6.9, explicitly superseding browser-first persistence and the optional server-change claim. Also clarified save acknowledgement/retry and stable draft identity. No application implementation or deployment in this planning turn; approval-model choices remain separate.
 **Files / revision:** gridcast-research/30-portal-ux-flows-and-restructure.md, AI-LOG.md; base ed17d8e. Commit the existing proposal with this accepted amendment so the shared plan is tracked; preserve unrelated files.
+
+
+### 2026-10-01 01:34 IST · GPT-6 (Codex delegated local docs) · Four-chat workflow guidance reconciled
+
+**Asked:** Optimize the existing Coordinator, Builder, QC and Tester workflow without application changes.
+**Did:** Scoped startup reading to TEAM's dated checkpoint, AI-LOG rules/Standing Context and newer entries; updated the dated release/planning brief; clarified risk-based routing, one edit owner, frozen candidate, bounded escalation, lean handoffs and integration-owner index refresh. Preserved prior log history and existing Claude-specific additions.
+**Outcome:** Documentation-only update; checked the four-file diff and history preservation. No app tests, commit, push or deployment.
+**Files:** `AGENTS.md`, `TEAM.md`, `CLAUDE.md`, `AI-LOG.md`.
+**Commit:** not committed.
+
+### 2026-10-01 01:34 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Sanan's four doc 30 decisions; doc 31 build plan ready for Codex
+
+**Sanan's decisions (1 Oct), all as recommended:** (1) the reviewer approves a campaign once, approval is stored per creative
+and reused creatives stay approved; (2) content review only, no commercial review; (3) keep the global Campaigns and
+Creatives lists beside the advertiser workspace; (4) start with phase 1 (truthful status) and phase 2 (ranked campaign
+dashboard). With 6.8 and 6.9 (step order, server drafts at every step) the design questions are closed.
+**Did:** `gridcast-research/31-portal-restructure-build-plan.md` (new, 427 lines), written by a sub-agent per CLAUDE.md
+and reviewed by me. It supersedes doc 30 §4 as the delivery plan. It covers phases 1-6 with files, server changes, data
+sources, acceptance checks, tests and a "Claude review focus" for each, detailed for phases 1-2.
+**Source facts in doc 31 that I checked this turn, and that correct doc 30:**
+- Reason wording already exists: `lib/readiness.ts` `REASONS` maps eligibility codes to plain English. Phase 1 reuses
+  it.
+- `/metrics` already returns period `byCampaign` (`lib/reporting.ts:101,108`), so doc 30 §6.4 overstated the server
+  work. What is missing is period spend, since settlement is monthly.
+- `status` is editable by sales roles (`lib/access.ts:68` `CAMPAIGN_EDIT`), and `POST /campaign` defaults to
+  `status: 'active'` (`lib/api.ts:427`). Phase 5 closes that. Note: this skips *activation* review, not *content*
+  review. Unapproved creatives still cannot play, because eligibility gates on `creative_not_approved`.
+- Uploading a new asset sets `creative.approval_status = 'pending'` (`lib/api.ts:446`). That silently pauses the
+  creative in every campaign that reuses it, including live ones. Phase 1's status catches it as "N creatives awaiting
+  approval". The upload UI should also warn before it happens ("this pauses it in N campaigns").
+- `validateInventory()` runs on every asset upload (`lib/api.ts:446-447`), so stored incomplete drafts would break
+  uploads. Doc 31 puts drafts in a separate `campaign_drafts` collection. I agree.
+**My review notes on doc 31, for the Coordinator:**
+1. Phase 1's "Live" window (30 min, `LIVE_EVIDENCE_WINDOW_MS`) must use the play time, not `server_received_at`. An
+   offline backlog flushed later must not make a campaign look live now.
+2. Draft visibility: doc 31 proposes creator-only. I would make drafts visible to sales users in the same org, since
+   sellers hand work over. Low stakes; Codex's call.
+3. Leave the Budget step's "about N plays" estimate out of phase 4. There is no source for it yet (doc 31 flags this).
+   Budget shows list price only.
+4. Proposed defaults are fine: reviewer approval activates, the seller retries on failure; "Changes needed" keeps the
+   screen hold; drafts expire after 30 days.
+**Next:** Codex builds phase 1, then phase 2, per doc 31. I review each against its "Claude review focus".
+**Files:** `gridcast-research/31-portal-restructure-build-plan.md` (new), `AI-LOG.md`. Not committed.
+
+
+### 2026-10-01 01:37 IST · GPT-6 (Codex desktop, coordinator) · Doc31 readiness review and successful-delivery evidence correction
+
+**Asked:** Check log. Read the updated AGENTS/TEAM workflow, Claude's 01:34 decisions and doc31 build plan, with focused source checks for Phase 1. Recorded product choices are now closed: reusable per-creative content approval, no commercial review, global lists retained, phases 1 then 2; server Save draft remains confirmed. No re-asking those decisions.
+**Agree:** Reuse readiness reason labels and existing /metrics byCampaign data. Separate campaign_drafts is a sound proposed way to keep incomplete entries out of current campaign/inventory/economic readers. Period spend remains out of scope. Updated four-chat workflow permits lean read/review and no index refresh for docs-only work; adopted.
+**Phase1 correction required:** Doc31 task6 proposes campaignScreens from screen_day row.last_at as recent rendered-paid evidence. lib/reporting.ts:82-89 updates first_at/last_at for every timestamp-valid play, including plays_not_rendered; lines 56-65 distinguish rendered versus failed counters before that unconditional timestamp update. A morning rendered play plus a recent failed play in the same aggregate can therefore yield false Live even if one checks plays_rendered > 0. Use a dedicated last-successfully-rendered-paid play timestamp maintained under the matching valid-time/rendered/non-filler condition, or an authorized bounded receipt read that verifies those fields. Historical aggregate rows without that success timestamp cannot infer it from last_at; fall back to verified receipts or Unknown. The additive stored field would change doc31's “no new stored data” claim but must not change counters.
+**Other evidence constraints:** Never use billable !== false as a replacement for rendered: missing billable would pass. Verify explicit rendered, trusted device-time provenance and non-seed source. Thirty minutes of successful receipts means “Delivered recently,” not proof that a screen is playing now; pair Live with current device evidence and show the window/last-play time. Devices can stop after delivery. Future dates plus missing creatives should consistently show Scheduled with a warning (doc31 rows6–7 currently contradict their following paragraph). Mixed approved/pending creatives do not universally stop playback today; say “some creatives awaiting approval” unless all otherwise eligible routes are blocked. Re-uploading one shared creative must not falsely label every referencing campaign wholly Not delivering when another approved creative remains playable.
+**Next:** Incorporate these constraints into the Phase1 implementation handoff, then phase2 dashboard. This turn reviews the plan only; a Claude “next build” note does not itself dispatch builders. No app changes, build, tests, cloud actions or team messages. Draft colleague visibility and 30-day expiry remain proposed defaults, not user decisions; decide with least-privilege/access semantics when implementing phase4. Source search's wildcard for nonexistent rollup files failed; actual reporting.ts was directly verified.
+**Files / base:** AI-LOG.md only; base 9d7b984. Preserve uncommitted workflow files and new doc31. Log-only commit; no structural index refresh needed under revised AGENTS.md.
