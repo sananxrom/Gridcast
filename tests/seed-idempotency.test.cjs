@@ -81,7 +81,7 @@ test('screen retry after pairing preserves live device credentials and does not 
  assert.equal(reused.screen.id,paired.screen.id);assert.equal(reused.pairing,null);assert.equal(reused.reused,true);
  assert.deepEqual(f.data(),snapshot);assert.equal(f.writes(),writes);
  assert.equal(f.data().screens.find(s=>s.id===created.screen.id).pairing_code_hash,undefined);
- expectStatus(await f.call('GET',`playlist/${created.screen.id}`,{},paired.token),200);
+ expectStatus(await f.call('GET',`playlist/${created.screen.id}?protocol=3`,{},paired.token),200);
  expectStatus(await f.call('POST','pair',{code:created.pairing.code}),400);
 });
 

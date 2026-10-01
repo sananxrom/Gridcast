@@ -246,12 +246,12 @@ test('Firestore adapter atomically claims diagnostic, deduplicates concurrent re
  const f=fixture({['devices/'+deviceId]:{id:deviceId,org_id:'a',screen_id:'sa',status:'online',expires_at:new Date(now+864e5).toISOString(),token_hash:crypto.createHash('sha256').update(token).digest('hex')},'screens/sa':{id:'sa',org_id:'a',status:'active'}});
  let assignment;
  await f.store.transact({...f.context,method:'POST',path:['screen','sa','test']},async()=>{
-   const d=await f.store.read(); assignment=diagnostics.requestDiagnostic(d,d.screens[0],d.users[0],{config:{model:'coco-ssd',sample_interval_s:2,count_ceiling:50},config_version:1},now);await f.store.write(d);
+   const d=await f.store.read(); assignment=diagnostics.requestDiagnostic(d,d.screens[0],d.users[0],{config:{camera_source:'local',confidence_min:.4,count_ceiling:50,camera_fail_mode:'continue'},config_version:1},now);await f.store.write(d);
  });
  const commercial=JSON.stringify(Object.entries(f.database.rows).filter(([k])=>/^(plays|presence|campaigns)\//.test(k)));
  const context={method:'POST',path:['diagnostic','start'],deviceId,assignmentId:assignment.id};
  const call=async(path,body,at)=>f.store.transact({...context,path:['diagnostic',path]},async()=>{
-   const d=await f.store.read(),result=devices.deviceRoute(d,'POST',['diagnostic',path],body,token,{playlist:()=>({items:[],config:{},config_version:1}),now:at});
+   const d=await f.store.read(),result=devices.deviceRoute(d,'POST',['diagnostic',path],body,token,{playlist:()=>({items:[],config:{camera_source:'local',confidence_min:.4,count_ceiling:50,camera_fail_mode:'continue'},config_version:1}),now:at,playerProtocol:3});
    if(result.changed)await f.store.write(d);return result;
  });
  const startBody={assignment_id:assignment.id,run_uid:'atomic_integration'};
@@ -376,4 +376,18 @@ test('metrics scope operator, advertiser, admin organisation, campaign and scree
  const scoped=await allReportPages(f,{...f.context,uid:'admin',orgId:'b'});assert.equal(scoped.length,102);assert.ok(scoped.every(r=>r.org_id==='b'));
  const campaign=await allReportPages(f,{...f.context,reportCampaign:'campaign1',reportScreen:'sa'});assert.equal(campaign.length,1052);assert.ok(campaign.every(r=>r.campaign_id==='campaign1'&&r.screen_id==='sa'));
  const foreign=await allReportPages(f,{...f.context,reportScreen:'sb',orgId:'b'});assert.equal(foreign.length,0,'operator hints cannot change authenticated org');
+});
+
+test('advertiser heartbeat snapshot includes only projected devices for authorised campaign targets', async () => {
+ const f=fixture({
+  'users/viewer':{id:'viewer',org_id:'a',role:'advertiser_viewer',advertiser_id:'adv'},
+  'campaigns/c':{id:'c',org_id:'a',advertiser_id:'adv',screen_ids:['sb'],creative_ids:[]},
+  'devices/remote':{id:'remote',org_id:'b',screen_id:'sb',status:'paired',last_heartbeat_at:'2026-10-01T06:00:00Z',token_hash:'secret'},
+  'devices/unrelated':{id:'unrelated',org_id:'a',screen_id:'sa',status:'paired',token_hash:'secret2'},
+ });
+ const snapshot=await f.store.transact({...f.context,uid:'viewer'},()=>f.store.read());
+ assert.deepEqual(snapshot.devices,[{id:'remote',screen_id:'sb',status:'paired',last_heartbeat_at:'2026-10-01T06:00:00Z'}]);
+ const reads=f.database.reads.filter(q=>typeof q==='object'&&q.collection==='devices');
+ assert.equal(reads.length,1);assert.deepEqual(reads[0].filters,[['screen_id','==','sb']]);
+ assert.equal(f.database.commits.length,0);
 });

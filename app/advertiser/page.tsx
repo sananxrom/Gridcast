@@ -3,7 +3,7 @@ import { DeliveryReport, useDeliveryReport } from '@/components/views/delivery-r
 import React, { useEffect, useMemo, useState } from 'react';
 import { tabFor } from '@/lib/roles';
 import { api, session, type SessionUser } from '@/lib/client';
-import { inr, isLive, fmtDate } from '@/lib/utils';
+import { inr, fmtDate } from '@/lib/utils';
 import { advertiserNav } from '@/lib/nav';
 import { AppShell, PageHead, SectionHead, type Crumb } from '@/components/ui/app-shell';
 import { DataTable } from '@/components/ui/table';
@@ -16,12 +16,17 @@ import type { CmdItem } from '@/components/ui/command-palette';
 import { BootLoader } from '@/components/ui/loader';
 import { ProfilePage } from '@/components/views/account';
 import { useDirtyForm, SaveBar } from '@/components/ui/form';
+import { campaignStatus } from '@/lib/campaign-status';
+import { CampaignStatusBadge, useCampaignEvidence, useNow, usePeriodicRefresh } from '@/components/views/campaign-status-badge';
 
 export default function Advertiser() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [d, setD] = useState<any>(null);
   const [view, setView] = useState('overview');
   const report = useDeliveryReport({ enabled: !!user && view !== 'profile' });
+  const evidence = useCampaignEvidence(null, !!user && view === 'overview');
+  const now = useNow();
+  usePeriodicRefresh(() => api(`/bootstrap?user=${user?.id}`, undefined, { quiet: true }).then(setD), !!user && view === 'overview');
 
   useEffect(() => {
     const u = session.get();
@@ -66,7 +71,7 @@ export default function Advertiser() {
           { label: 'Paid plays · selected dates', num: true, render: (c: any) => report.data?.byCampaign[c.id]?.plays_rendered ?? (report.data?.coverage.complete ? 0 : '—') },
           { label: 'Lifetime budget used', num: true, render: (c: any) => { const p = c.committed_budget ? Math.round(c.accrued_spend / c.committed_budget * 100) : 0;
             return <div className="flex flex-col items-end gap-1"><span className="whitespace-nowrap">{inr(c.accrued_spend)} / {inr(c.committed_budget)}</span><Progress value={p} hot={p >= 80} className="w-20" /></div>; } },
-          { label: 'Status', render: (c: any) => isLive(c) ? <Badge variant="onair" blip>live</Badge> : <Badge variant="muted">{c.status}</Badge> },
+          { label: 'Status', render: (c: any) => <CampaignStatusBadge status={campaignStatus({ campaign: c, creatives: d.creatives, screens: d.screens, advertiser: d.advertisers.find((a: any) => a.id === c.advertiser_id), reportScreens: evidence.loaded ? (evidence.campaignScreens[c.id] ?? {}) : null, reportLoaded: evidence.loaded, now })} /> },
         ]} rows={mine} rowId={(c: any) => c.id} exportName="my-campaigns" empty="No campaigns yet" />
       </>)}
 

@@ -67,6 +67,65 @@ test('sales operator can read campaign list without redacted invoice data',async
   await h.page.route('**/api/bootstrap**',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({...h.boot('a'),caps:['sales']})}));
   await h.page.addInitScript(()=>localStorage.setItem('gc_user',JSON.stringify({id:'sales',org_id:'a',role:'sales',name:'Sales user',orgName:'Operator Alpha'})));
   await h.page.goto(base+'/operator#campaigns');await h.page.getByRole('button',{name:'Sales campaign',exact:true}).waitFor();assert.equal(await h.page.getByRole('columnheader',{name:'Invoice',exact:true}).count(),0);
+  assert.equal(await h.page.getByRole('columnheader',{name:'People / play',exact:true}).count(),0);
+  await h.page.getByRole('button',{name:'Campaign status: Draft',exact:true}).waitFor();
+ }finally{await h.browser.close();}
+});
+
+test('campaign status popover explains partial delivery and re-ages a stale live heartbeat',async()=>{
+ const h=await harness();try{
+  const now=Date.now(),day=86400000;
+  const today=new Date(now+330*60000).toISOString().slice(0,10),end=new Date(now+8*day+330*60000).toISOString().slice(0,10);
+  h.screen._status={state:'live',label:'Live',device:{last_heartbeat_at:new Date(now-10_000).toISOString()}};
+  h.advertisers.push({id:'status-adv',org_id:'a',name:'Status client',status:'active'});
+  h.creatives.push({id:'status-cr',org_id:'a',advertiser_id:'status-adv',name:'Status creative',duration_s:10,approval_status:'approved'});
+  h.campaigns.push({id:'status-campaign',org_id:'a',advertiser_id:'status-adv',name:'Status campaign',campaign_type:'own',screen_ids:['screen-a','screen-b'],creative_ids:['status-cr'],rate_type:'per_play',rate_value:1,accrued_spend:0,committed_budget:100,status:'active',starts_at:today,ends_at:end});
+  const successAt=new Date(now-10*60000).toISOString();
+  await h.page.route('**/api/metrics**',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({campaignScreens:{'status-campaign':{'screen-a':successAt}},has_more:false,next_cursor:null})}));
+  // This only changes the hash of the harness's existing admin URL; reload to fetch the seeded campaign.
+  await h.page.goto(base+'/admin?org=a#campaigns');await h.page.reload();
+  const live=h.page.getByRole('button',{name:'Campaign status: Live · 1 of 2 screens',exact:true});await live.waitFor({timeout:8000}).catch(async error=>{throw new Error(`${error.message}\nFixture campaigns:\n${JSON.stringify(h.campaigns)}\nRendered:\n${(await h.page.locator('body').innerText()).slice(-2200)}\nRequests:\n${JSON.stringify(h.requests.slice(-8))}`);});await live.click();
+  let detail=await h.page.locator('[data-radix-popper-content-wrapper]').innerText();
+  assert.match(detail,/Last successful paid play/);assert.match(detail,/Delivered in last 30 min\s+1 of 2 screens/);assert.match(detail,/Online now\s+1 of 2 screens/);assert.match(detail,/delivery report summary \(yesterday and today\)/);
+  await h.page.screenshot({path:'/tmp/gridcast-phase1-status-partial.png',fullPage:true});
+
+  // A stale `_status.state=live` must not outlive its heartbeat timestamp.
+  h.screen._status.device.last_heartbeat_at=new Date(Date.now()-91_000).toISOString();
+  await h.page.reload();
+  const stale=h.page.getByRole('button',{name:'Campaign status: Unknown · delivered recently, but no screen is online now',exact:true});await stale.waitFor();await stale.click();
+  detail=await h.page.locator('[data-radix-popper-content-wrapper]').innerText();
+  assert.match(detail,/Delivered in last 30 min\s+1 of 2 screens/);assert.match(detail,/Online now\s+0 of 2 screens/);assert.match(detail,/Last successful paid play/);
+  await h.page.screenshot({path:'/tmp/gridcast-phase1-status-aged.png',fullPage:true});
+ }finally{await h.browser.close();}
+});
+
+test('sales and advertiser campaign status accepts sanitized heartbeat age without exposing raw device time',async()=>{
+ const h=await harness(),errors=[];h.page.on('pageerror',e=>errors.push(e.message));try{
+  const now=Date.now(),today=new Date(now+330*60000).toISOString().slice(0,10),end=new Date(now+8*86400000+330*60000).toISOString().slice(0,10);
+  const observedAt=new Date(now).toISOString(),successAt=new Date(now-5*60000).toISOString();
+  h.screen._status={state:'live',label:'Live',observed_at:observedAt,age_s:10};
+  h.advertisers.push({id:'status-adv',org_id:'a',name:'Status client',status:'active'});
+  h.creatives.push({id:'status-cr',org_id:'a',advertiser_id:'status-adv',name:'Status creative',duration_s:10,approval_status:'approved'});
+  h.campaigns.push({id:'status-campaign',org_id:'a',advertiser_id:'status-adv',name:'Status campaign',campaign_type:'own',screen_ids:['screen-a'],creative_ids:['status-cr'],rate_type:'per_play',rate_value:1,accrued_spend:0,committed_budget:100,status:'active',starts_at:today,ends_at:end});
+  await h.page.route('**/api/bootstrap**',route=>{
+   const userId=new URL(route.request().url()).searchParams.get('user'),data=h.boot(userId==='sales'?'a':null);
+   data.caps=userId==='sales'?['sales']:[];
+   return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(data)});
+  });
+  await h.page.route('**/api/metrics**',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({totals:{plays_rendered:0,plays_billable:0,plays_not_rendered:0,plays_filler:0,presence_sum:0,presence_n:0,airtime_ms:0},byScreen:{},byCampaign:{},byCreative:{},daily:{},hourly:{},attentionProfiles:{},attention_page:{has_more:false,next_cursor:null},coverage:{started_at:null,complete:false},last_at:null,rows:0,has_more:false,next_cursor:null,campaignScreens:{'status-campaign':{'screen-a':successAt}}})}));
+
+  await h.page.addInitScript(()=>localStorage.setItem('gc_user',JSON.stringify({id:'sales',org_id:'a',role:'sales',name:'Sales user',orgName:'Operator Alpha'})));
+  await h.page.goto(base+'/operator#campaigns');
+  let status=h.page.getByRole('button',{name:'Campaign status: Live · 1 of 1 screens',exact:true});await status.waitFor();await status.click();
+  let popover=await h.page.locator('[data-radix-popper-content-wrapper]').innerText();
+  assert.match(popover,/Online now\s+1 of 1 screens/);assert.match(popover,/delivery report summary \(yesterday and today\)/);assert.ok(!popover.includes(observedAt));
+
+  await h.page.addInitScript(()=>localStorage.setItem('gc_user',JSON.stringify({id:'advertiser-user',org_id:'a',role:'advertiser_viewer',name:'Advertiser user',orgName:'Status client',advertiser_id:'status-adv'})));
+  await h.page.goto(base+'/advertiser#overview');
+  status=h.page.getByRole('button',{name:'Campaign status: Live · 1 of 1 screens',exact:true});await status.waitFor();await status.click();
+  popover=await h.page.locator('[data-radix-popper-content-wrapper]').innerText();
+  assert.match(popover,/Online now\s+1 of 1 screens/);assert.match(popover,/delivery report summary \(yesterday and today\)/);assert.ok(!popover.includes(observedAt));
+  assert.deepEqual(errors,[]);
  }finally{await h.browser.close();}
 });
 

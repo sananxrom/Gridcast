@@ -5250,3 +5250,50 @@ invariants that currently have no live test.
 **Other work before release:** Claude reports 27 pre-existing protocol2/COCO-fixture failures reproduced on clean HEAD. Coordinator has not independently rerun that full suite or verified the clean-base claim; do not present it as my result. Migrate relevant fixtures to real protocol3/V2 behavior while retaining the original billing assertions, then run affected tests. Browser/admin checks and production build remain outstanding. Firestore campaign-read dependency coverage still needs focused verification as Claude explicitly did not verify the sub-agent claim.
 **Outcome:** Good implementation progress, successful-delivery timestamp correction present, but candidate not cleared to deploy. Narrow repros executed via tests/load-lib.cjs without file edits. One broad diff output truncated; focused subsequent reads established the cited findings. Candidate application files remain uncommitted and preserved for correction; no team task dispatched from this log-check prompt.
 **Files / base:** AI-LOG.md only appended; base 231d45a, candidate includes lib/campaign-status.ts and components/views/campaign-status-badge.tsx. Preserve workflow/doc31 and all other shared changes.
+
+### 2026-10-01 10:18 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Reply to Codex 10:04: three Phase 1 defects accepted and fixed (sub-agent); Firestore read coverage verified
+
+**Codex's three defects were real, and my 09:56 review missed them.** In source before the fix: `_status.state === 'live'`
+was trusted without re-ageing (`campaign-status.ts:128`); the recent check had no upper bound (`:126`); and the blocker
+compared against `byScreen.size`, not the targeted screens (`:144`).
+**Fixed (sub-agent; reviewed in source by me), uncommitted:**
+- Online now is re-aged from `device.last_heartbeat_at` (fallback `observed_at - age_s`) at `now`, with
+  `ONLINE_HEARTBEAT_MS = 90_000` and `STALLED_HEARTBEAT_MS = 900_000` matching `lib/api.ts:113`
+  (`deviceStateAt`, `campaign-status.ts:115-120`). A bare `state` with no timestamp is unknown, never online.
+- Future evidence beyond `CLOCK_TOLERANCE_MS = 120_000` is dropped on both the receipt and `campaignScreens` paths
+  (`usable()`, `:143`).
+- A campaign-wide blocker requires every visible targeted screen to have a decision, all ineligible (`:183`).
+- `useNow(30 s)` re-evaluates the badges. `usePeriodicRefresh(60 s, skipped while the tab is hidden)` refetches
+  `/campaign/:id` on the detail page (it never overwrites the edit form) and bootstrap on admin and operator, only on
+  `campaigns` and `c/*` views.
+- 4 new regression tests cover (a) a stale live snapshot, (b) partial decision coverage, (c) tomorrow's timestamp, plus
+  constant parity.
+**Checks (sub-agent):** `npx tsc --noEmit` exit 0; `node --test tests/campaign-status.test.cjs tests/reporting.test.cjs`
+gives 34/34.
+**Firestore read coverage for `GET campaign/:id` eligibility, verified by the sub-agent with line refs, answering
+Codex's open point:** admin is unscoped (`lib/firestore-store.ts:163`, collections loaded unfiltered at `:224-254`,
+settings at `:360`). Operator uses the same org-scoped path as `GET screen/:id`: configs at `:237`, org-filtered domain
+at `:244`, network campaigns via `participant_org_ids` at `:260`, screen orgs at `:264`, referenced
+advertisers and creatives at `:353`/`:355`, settings subset at `:364`. Advertisers get no eligibility
+(`lib/api.ts:372`).
+**Cost note for the Coordinator:** the 60 s bootstrap refetch on admin and operator campaign views adds Firestore reads while
+those pages are open. That is acceptable for the test fleet; revisit (a lightweight status endpoint) before many users.
+**Still open before release (Codex):** port the 27 protocol-2 / COCO regression fixtures to protocol 3 / V2, keeping
+their billing assertions; browser and admin suites; production build. Phase 1 files remain released to Codex.
+
+### 2026-10-01 10:28 IST · GPT-6 (Codex desktop, coordinator) · Phase 1 release preparation and review corrections
+
+**Asked:** Review the 10:13 entry, fix the 27 test fixtures, then release Phase 1. Relevant Claude entry is 10:18.
+**Did:** Reviewed Claude's three fixes. Delegated stale fixture migration to Builder, independent source review to QC, and mocked admin/reporting browser checks to Tester. Corrected additional role-specific delivery evidence: advertiser/sales receive only state/age/observation time, advertiser also receives public screen lifecycle status, detail reads include refreshed status, advertiser overview polls while visible. Firestore advertiser reads project heartbeat fields only for authorized campaign targets, including cross-org targets; no token/config exposure. Added projection and complete projected-screen-to-Live regressions.
+**Checks so far:** Initial production build passed; initial browser suites 13/13 passed before these role fixes. New visibility tests 2/2 pass and new Firestore projection case passes. QC confirmed the role corrections and identified no remaining blocker in those paths. Builder reduced full-suite failures from 27 to 3; remaining config/diagnostic fixtures and asynchronous recovery test are being resolved without weakening billing assertions. Unmeasured billing fixtures remain explicit; measured V2 acceptance retains separate coverage and the integration journey now uses valid V2 provenance.
+**Failures/limits:** Initial Firebase lookup exposed expired authentication; user completed a fresh sign-in successfully (no secrets recorded). Early focused Firestore run had the stale diagnostic fixture failure; Builder migrated it. Served local build predates role fixes and must be rebuilt before final browser verification. Not yet committed, pushed or deployed.
+**Files/base:** `lib/access.ts`, `lib/api.ts`, `lib/firestore-store.ts`, `app/advertiser/page.tsx`, `tests/campaign-status-visibility.test.cjs`, `tests/firestore-store.test.cjs`, Claude Phase 1 candidate and Builder fixture files; base `7edb244`.
+**Open:** Finish checks, index once, scoped commit/push and exact-SHA Firebase rollout. Phase 2 not started.
+
+### 2026-10-01 10:31 IST · GPT-6 (Codex desktop, coordinator) · Phase 1 candidate cleared for release
+
+**Outcome:** Builder final full suite: 340 passed, 0 failed, 5 existing skips. Remaining authorization fixtures now use current config schema and protocol 3; recovery fixture computes real SHA-256 deterministically rather than relying on WebCrypto thread scheduling. Assertions preserved. Final production build passed. Tester final mocked browser suites: 15/15 (13 admin, 2 reporting), including status evidence and sanitized role status. These exercised the uncommitted candidate on base `7edb244`, not the unchanged base commit itself. QC fixed the new mock's stale bootstrap after hash navigation with a reload; initial failure was test setup. No application changes after final build.
+**Review:** QC confirmed role status projection and authorized cross-org advertiser heartbeat loading. Coordinator caught and fixed advertiser's missing lifecycle status, with full projected-screen-to-Live regression; no device secrets or configuration added to advertiser output.
+**Indexes:** Shared graph published (4314 nodes, 11244 edges; existing partial parse at app-shell line 101), SymDex refreshed with zero errors. Generated indexes remain outside Git. Firebase authentication and current traffic read verified; release not yet live.
+**Files:** Phase 1 app/status/reporting files, tests, doc31, AI-LOG. Unrelated AGENTS/CLAUDE/TEAM workflow changes and other untracked documents preserved outside release staging.
+**Next:** Scoped commit/push, exact-SHA Firebase rollout and traffic/build verification.

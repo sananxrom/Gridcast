@@ -144,3 +144,18 @@ test('advertiser keeps historical venues backed by settlement even when targetin
  assert.deepEqual(detail.byScreen.map(r=>r.screen.id).sort(),[f.a,f.b].sort());
  assert.equal(detail.campaign.accrued_spend,333);assert.equal(hasKey(boot,'owner_share_pct'),false);
 });
+
+test('campaign detail eligibility never includes another organisation\'s screen',async()=>{
+ const f=networkFixture();
+ const op=expectStatus(await f.call('GET','campaign/network-campaign',{},f.token('u_op1')),200);
+ assert.ok(Array.isArray(op.eligibility)&&op.eligibility.length>0);
+ assert.deepEqual([...new Set(op.eligibility.map(e=>e.screen_id))],[f.a]);
+ for(const e of op.eligibility) assert.deepEqual(Object.keys(e).sort(),['creative_id','eligible','reason','screen_id','warnings']);
+ assert.equal(JSON.stringify(op.eligibility).includes(f.b),false);
+ const other=expectStatus(await f.call('GET','campaign/network-campaign',{},f.token('u_op2')),200);
+ assert.deepEqual([...new Set(other.eligibility.map(e=>e.screen_id))],[f.b]);
+ const admin=expectStatus(await f.call('GET','campaign/network-campaign',{},f.token('u_admin')),200);
+ assert.deepEqual(new Set(admin.eligibility.map(e=>e.screen_id)),new Set([f.a,f.b]));
+ const viewer=expectStatus(await f.call('GET','campaign/network-campaign',{},f.token('network-viewer')),200);
+ assert.equal(viewer.eligibility,null);
+});

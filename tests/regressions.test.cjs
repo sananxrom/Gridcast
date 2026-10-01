@@ -120,7 +120,7 @@ new Function('require','module','exports', ts.transpileModule(
   { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }
 ).outputText)(name=>name.startsWith('.')?require('./load-lib.cjs')(name.slice(2)):require(name), deviceModule, deviceModule.exports);
 const { issuePairing, deviceRoute } = deviceModule.exports;
-const MODEL = 'coco-ssd@2.2.3/lite_mobilenet_v2';
+const MODEL = null;
 
 function deviceFixture() {
   let now = Date.parse('2026-09-24T00:00:00.000Z');
@@ -128,9 +128,9 @@ function deviceFixture() {
     screens: [{ id:'screen1', org_id:'org1', status:'active', has_camera:true }],
     devices: [], device_assignments: [], plays: [], presence: [],
     campaigns: [{ id:'campaign1', org_id:'org1', advertiser_id:'adv1', committed_budget:1000000000,rate_type:'per_play', rate_value:9, accrued_spend:0 }] };
-  const config = { model:'coco-ssd', sample_interval_s:2, count_ceiling:50, camera_fail_mode:'continue' };
+  const config = { camera_source:'local', confidence_min:.4, count_ceiling:50, camera_fail_mode:'continue' };
   let plan = { items:[{ campaign_id:'campaign1', creative_id:'creative1', duration_s:10, youtube_id:'x', rate_value:9 }], config, config_version:3 };
-  const options = () => ({ now, playerProtocol:2, clientKey: crypto.randomUUID(), playlist: () => JSON.parse(JSON.stringify(plan)) });
+  const options = () => ({ now, playerProtocol:3, clientKey: crypto.randomUUID(), playlist: () => JSON.parse(JSON.stringify(plan)) });
   const call = (method, route, body={}, token) => { const r = deviceRoute(db, method, route.split('/'), body, token, options()); return { ...r, status: r?.status || 200 }; };
   const code = issuePairing(db, db.screens[0], now);
   const paired = call('POST','pair',{ code: code.code }).body;
@@ -140,7 +140,7 @@ function deviceFixture() {
     campaign_id:'campaign1', creative_id:'creative1', config_version:3,
     started_at_device:'2026-09-24T00:00:00.000Z', ended_at_device:'2026-09-24T00:00:10.000Z',
     playing_duration_ms:10000, media_started_s:0, media_ended_s:10, ended_reason:'ended',
-    server_clock_offset_ms:0, measured:true, avg_persons:2, sample_count:5, model_ver: MODEL, ...patch });
+    server_clock_offset_ms:0, measured:false, avg_persons:null, sample_count:0, model_ver:MODEL, ...patch });
   return { db, call, paired, assignment, event, advance: n => { now += n }, mutatePlaylist: fn => fn(plan) };
 }
 

@@ -14,6 +14,8 @@ import { Card } from '@/components/ui/card';
 import { Input, Select, Field, Label } from '@/components/ui/input';
 import { Thumb, Empty } from './bits';
 import { Skeleton } from '@/components/ui/loader';
+import { campaignStatus } from '@/lib/campaign-status';
+import { CampaignStatusBadge, useNow, usePeriodicRefresh } from './campaign-status-badge';
 
 export function CampaignDetail({ id, boot, onGo, onChanged }: {
   id: string; boot: any; onGo: (g: string) => void; onChanged: () => void;
@@ -29,6 +31,9 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
   const platform=(boot.caps??[]).includes('platform');
 
   const load = () => api(`/campaign/${id}`).then(x => { if (currentId.current !== id) return; setD(x); setF({ ...x.campaign }); });
+  const now = useNow();
+  // Refresh receipts/eligibility while viewing (not editing, so the form is never clobbered).
+  usePeriodicRefresh(() => api(`/campaign/${id}`, undefined, { quiet: true }).then(x => { if (currentId.current === id) setD(x); }), !!d && !edit);
   useEffect(() => {setD(null);setEdit(false);setErr('');load().catch(e=>{if(currentId.current===id)setErr(e.message);}); /* eslint-disable-next-line */ }, [id]);
   useEffect(()=>{
     let current=true;setInventory(null);setInventoryError('');
@@ -78,6 +83,9 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
   const tick = (arr: string[], v: string) => arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v];
   const mine = [...boot.creatives,...(inventory?.creatives??[])].filter((cr:any,i:number,rows:any[])=>rows.findIndex(x=>x.id===cr.id)===i).filter((x: any) => x.advertiser_id === c.advertiser_id);
 
+  // Device status comes from bootstrap screens (heartbeat _status); detail screen views do not carry it for every role.
+  const statusScreens = d.byScreen.map((r:any)=>({...r.screen,_status:r.screen?._status??boot.screens?.find((s:any)=>s.id===r.screen?.id)?._status}));
+  const status = campaignStatus({ campaign: c, creatives: d.byCreative.map((r:any)=>r.creative), screens: statusScreens, advertiser: d.advertiser, receipts: d.plays, decisions: Array.isArray(d.eligibility) ? d.eligibility : null, now });
   const diagnosticTimes = d.plays.map((p:any)=>Date.parse(p.ended_at || p.started_at)).filter(Number.isFinite).sort((a:number,b:number)=>a-b);
   const diagnosticDate = (at:number) => new Date(at).toLocaleString('en-IN', {timeZone:'Asia/Kolkata'});
   const diagnosticWindow = diagnosticTimes.length ? `${diagnosticDate(diagnosticTimes[0])} – ${diagnosticDate(diagnosticTimes[diagnosticTimes.length-1])} IST` : 'No dated receipts loaded';
@@ -89,7 +97,7 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
         sub={<>{d.advertiser?.name} · {d.org?.name} · <span className="font-mono">{c.starts_at} → {c.ends_at}</span></>}
         back={{ label: 'Campaigns', go: 'campaigns', onGo }}
         actions={<>
-          <Badge variant={c.status === 'active' ? 'ok' : 'muted'}>{c.status}</Badge>
+          <CampaignStatusBadge status={status} />
           {c.campaign_type === 'network' && <Badge variant="default">network</Badge>}
           {mayEdit && <Button variant="outline" size="sm" onClick={() => setEdit(!edit)}>Edit</Button>}
           {mayEdit && <Button variant="outline" size="sm" onClick={toggleStatus}>{c.status === 'active' ? 'Pause' : 'Resume'}</Button>}

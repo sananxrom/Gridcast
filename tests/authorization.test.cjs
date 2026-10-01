@@ -104,7 +104,13 @@ test('capabilities and field allowlists reject escalation and ownership reassign
 });
 
 test('configuration layer privilege, target ownership and bulk atomicity',async()=>{
- const f=fixture(), d=f.data(), t=f.token('u_op1'), sid=d.screens[0].id, foreign=d.screens.find(s=>s.org_id==='org_tricity').id;
+ const f=fixture();
+ f.change(db=>{
+  // The seed retains historical V1 keys; this test exercises authorization against the current schema.
+  db.configs.find(c=>c.id==='cfg_base').values={confidence_min:0.45};
+  db.configs.find(c=>c.id==='cfg_s17').values={count_ceiling:50};
+ });
+ const d=f.data(), t=f.token('u_op1'), sid=d.screens[0].id, foreign=d.screens.find(s=>s.org_id==='org_tricity').id;
  for(const [p,b,status] of [
  ['config',{layer:'platform',values:{confidence_min:0.01}},403],
  ['config/cfg_s17',{layer:'platform'},403],['config/cfg_base/delete',{},404],
@@ -269,10 +275,10 @@ test('screen diagnostic human request, ownership, readback and revoke follow rea
  const detail=expectStatus(await f.call('GET',`screen/${sid}`,{},admin),200);
  assert.ok(detail.diagnostic_assignments.some(x=>x.id===a.id));
  // Seed campaigns reserve this screen: diagnostic waits instead of stealing a slot.
- const start=expectStatus(await f.call('POST','diagnostic/start',{assignment_id:a.id,run_uid:'integration_run'},paired.token),200);
+ const start=expectStatus(await f.call('POST','diagnostic/start?protocol=3',{assignment_id:a.id,run_uid:'integration_run'},paired.token),200);
  assert.equal(start.waiting,true);
  expectStatus(await f.call('POST',`screen/${sid}/test/${a.id}/revoke`,{},admin),200);
- expectStatus(await f.call('POST','diagnostic/start',{assignment_id:a.id,run_uid:'integration_run'},paired.token),409);
+ expectStatus(await f.call('POST','diagnostic/start?protocol=3',{assignment_id:a.id,run_uid:'integration_run'},paired.token),409);
  assert.equal(JSON.stringify([f.data().plays,f.data().presence,f.data().campaigns]),commercial);
  assert.ok(f.data().audit.some(x=>x.entity==='diagnostic_assignments' && x.actor_id==='u_admin'));
 });
@@ -340,4 +346,14 @@ test('creative editing protects ownership, media provenance and approval while r
  expectStatus(await f.call('POST',`creative/${id}`,{name:'Uploaded renamed'},admin),200);
  f.change(d=>{d.advertisers.find(a=>a.id===original.advertiser_id).status='archived';});
  expectStatus(await f.call('POST',`creative/${id}`,{name:'Blocked'},admin),409);
+});
+
+test('campaign detail eligibility covers only the operator\'s own targeted screens and this campaign',async()=>{
+  const f=fixture(), t=f.token('u_op1');
+  const body=expectStatus(await f.call('GET','campaign/cmp_1',{},t),200);
+  const d=f.data(), own=new Set(d.screens.filter(s=>s.org_id==='org_sec17').map(s=>s.id));
+  assert.ok(Array.isArray(body.eligibility));
+  for(const e of body.eligibility){assert.ok(own.has(e.screen_id),e.screen_id);assert.ok(body.campaign.screen_ids.includes(e.screen_id));assert.ok(body.campaign.creative_ids.includes(e.creative_id));}
+  assert.equal(body.eligibility.length,body.campaign.screen_ids.length*body.campaign.creative_ids.length);
+  expectStatus(await f.call('GET','campaign/cmp_1',{},f.token('u_op2')),404);
 });

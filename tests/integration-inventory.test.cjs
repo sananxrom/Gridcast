@@ -33,7 +33,7 @@ function fixture(options = {}) {
   const media = load(path.join(root,'lib/media.ts'));
   const call = async (method, route, body = {}, token) => {
     const [p,q] = route.split('?');
-    const r = await api.handle(method,p.split('/'),new URLSearchParams(q || (p.startsWith('playlist/') ? 'protocol=2' : '')),body,token);
+    const r = await api.handle(method,p.split('/'),new URLSearchParams(q || (p.startsWith('playlist/') ? 'protocol=3' : '')),body,token);
     return {...r,status:r.status || 200};
   };
   return { env, auth, media, call, data:()=>clone(saved), writes:()=>writes,
@@ -175,7 +175,11 @@ test('one real admin identity completes an empty-org commercial journey through 
  const playlist=expectStatus(await f.call('GET',`playlist/${screen.id}`,{},paired.token),200);
  assert.equal(playlist.readiness.code,'eligible');const item=playlist.items[0];assert.equal(item.campaign_id,campaign.id);assert.equal(item.creative_id,creative.id);assert.ok(item.asset_url.startsWith('/api/media?grant='));
  const ended=Date.now(),duration=item.duration_s*1000;
- const report={assignment_id:item.assignment_id,play_uid:'journey_play_0001',seq_no:1,campaign_id:campaign.id,creative_id:creative.id,config_version:playlist.config_version,started_at_device:new Date(ended-duration).toISOString(),ended_at_device:new Date(ended).toISOString(),playing_duration_ms:duration,media_started_s:0,media_ended_s:item.duration_s,ended_reason:'ended',server_clock_offset_ms:0,measured:true,avg_persons:2,sample_count:5,model_ver:'coco-ssd@2.2.3/lite_mobilenet_v2'};
+ const {presenceV2Summary}=require('./load-lib.cjs')('vision/attention-v2-contracts');
+ const {PRESENCE_V2_PROFILE}=require('./load-lib.cjs')('vision/presence-v2-profile');
+ const seconds=duration/1000;
+ const summary=presenceV2Summary({body_observed_s:seconds,body_saturated_s:0,face_observed_s:seconds,face_saturated_s:0,attention_observed_s:seconds,expression_observed_s:seconds,presence_person_s:2*seconds,attention_person_s:seconds,smile_person_s:0,face_observable_person_s:2*seconds,expression_observable_person_s:2*seconds,estimated_impressions:2,attentive_impressions:1,tracked_visits:2,right_censored_visits:0,longest_look_s:seconds},duration,'default',null);
+ const report={assignment_id:item.assignment_id,play_uid:'journey_play_0001',seq_no:1,campaign_id:campaign.id,creative_id:creative.id,config_version:playlist.config_version,started_at_device:new Date(ended-duration).toISOString(),ended_at_device:new Date(ended).toISOString(),playing_duration_ms:duration,media_started_s:0,media_ended_s:item.duration_s,ended_reason:'ended',server_clock_offset_ms:0,measured:true,avg_persons:2,sample_count:5,model_ver:PRESENCE_V2_PROFILE.body_model,measurement_binding_id:item.measurement_binding_id,presence_profile_id:item.measurement_profile,attention:summary};
  expectStatus(await f.call('POST','play',report,paired.token),200);
  const detail=expectStatus(await f.call('GET',`screen/${screen.id}`,{},admin),200);
  assert.equal(detail.recent.length,1);assert.equal(detail.recent[0].presence.avg_persons,2);assert.equal(detail.recent[0].presence.model_ver,report.model_ver);

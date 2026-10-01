@@ -125,7 +125,7 @@ function receiptFixture() {
   let now=Date.parse('2026-09-30T18:29:00Z');
   const db={...f.db,orgs:[{...f.org,status:'active'},{id:'origin1',status:'active'}],screens:[{...f.screen,status:'active',has_camera:true}],campaigns:[f.campaign],devices:[],device_assignments:[],plays:[],presence:[]};
   const item={...f.assignment,campaign_id:f.campaign.id,creative_id:'creative1',duration_s:10,youtube_id:'video1'};
-  const call=(method,path,body={},token)=>deviceRoute(db,method,path.split('/'),body,token,{now,playerProtocol:2,clientKey:crypto.randomUUID(),playlist:()=>({items:[item],config:{model:'coco-ssd',sample_interval_s:2,count_ceiling:50,camera_fail_mode:'continue'},config_version:1})});
+  const call=(method,path,body={},token)=>deviceRoute(db,method,path.split('/'),body,token,{now,playerProtocol:3,clientKey:crypto.randomUUID(),playlist:()=>({items:[item],config:{camera_source:'local',confidence_min:.4,count_ceiling:50,camera_fail_mode:'continue'},config_version:1})});
   const paired=call('POST','pair',{code:issuePairing(db,db.screens[0],now).code}).body;
   const offered=call('GET','playlist/screen1',{},paired.token).body.items[0];
   const event=(overrides={})=>({play_uid:crypto.randomUUID(),seq_no:1,assignment_id:offered.assignment_id,campaign_id:f.campaign.id,creative_id:'creative1',config_version:1,started_at_device:'2026-09-30T18:29:00Z',ended_at_device:'2026-09-30T18:29:10Z',playing_duration_ms:10000,media_started_s:0,media_ended_s:10,ended_reason:'ended',server_clock_offset_ms:0,measured:false,avg_persons:null,sample_count:0,model_ver:null,...overrides});

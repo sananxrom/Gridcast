@@ -216,7 +216,7 @@ test('two device transactions cannot reserve the same last paid play, and retry 
  const token2=`gcp_${second.id}.`+crypto.randomBytes(32).toString('base64url');second.token_hash=crypto.createHash('sha256').update(token2).digest('hex');
  f.database.rows[`devices/${second.id}`]=second;
  const grant=(device,token)=>f.store.transact({method:'GET',path:['playlist',device.screen_id],deviceId:device.id},async()=>{
-  const d=await f.store.read(); const result=deviceRoute(d,'GET',['playlist',device.screen_id],{},token,{now:f.now,playerProtocol:2,playlist:()=>({items:[{campaign_id:'cn',creative_id:'cr',duration_s:10,youtube_id:'abcdefghijk',rate_type:'per_play',rate_value:1}],config:{},config_version:1})});
+  const d=await f.store.read(); const result=deviceRoute(d,'GET',['playlist',device.screen_id],{},token,{now:f.now,playerProtocol:3,playlist:()=>({items:[{campaign_id:'cn',creative_id:'cr',duration_s:10,youtube_id:'abcdefghijk',rate_type:'per_play',rate_value:1}],config:{},config_version:1})});
   if(result.changed)await f.store.write(d); return result;
  });
  const [a,b]=await Promise.all([grant(f.device,f.token),grant(second,token2)]);
@@ -238,7 +238,7 @@ test('Enterprise emulator loads approved own-org filler and records image eviden
   const batch=database.batch();for(const [key,row] of Object.entries(f.database.rows))batch.create(database.doc(key),row);await batch.commit();
   const response=await store.transact({method:'GET',path:['playlist','sa'],deviceId:f.device.id},async()=>{
    const d=await store.read();assert.ok(d.creatives.some(c=>c.id==='house'));assert.ok(!d.creatives.some(c=>c.id==='foreign-house'));assert.ok(d.assets.some(a=>a.id==='house-asset'));
-   const r=deviceRoute(d,'GET',['playlist','sa'],{},f.token,{now,playerProtocol:2,playlist:()=>({items:[],filler_items:[{campaign_id:null,kind:'filler',creative_id:'house',media_type:'image',width:1920,height:1080,duration_s:20,asset_id:'house-asset'}],config:{},config_version:1})});if(r.changed)await store.write(d);return r;
+   const r=deviceRoute(d,'GET',['playlist','sa'],{},f.token,{now,playerProtocol:3,playlist:()=>({items:[],filler_items:[{campaign_id:null,kind:'filler',creative_id:'house',media_type:'image',width:1920,height:1080,duration_s:20,asset_id:'house-asset'}],config:{},config_version:1})});if(r.changed)await store.write(d);return r;
   });
   assert.equal(response.body.items.length,0);assert.equal(response.body.filler_items.length,1);const item=response.body.filler_items[0];assert.ok(item.max_plays>0);
   const body={...f.body,play_uid:'filler-image-0001',seq_no:100,assignment_id:item.assignment_id,campaign_id:null,creative_id:'house',started_at_device:new Date(now).toISOString(),ended_at_device:new Date(now+20000).toISOString(),playing_duration_ms:20000,media_evidence:'image_decode',decoded_width:1920,decoded_height:1080,visible_duration_ms:20000};now+=21000;
@@ -261,7 +261,7 @@ test('Enterprise SDK serializes two screens reserving the final campaign rupee',
  try{
   const batch=database.batch();for(const [key,row] of Object.entries(f.database.rows))batch.create(database.doc(key),row);await batch.commit();
   const grant=(device,token)=>store.transact({method:'GET',path:['playlist',device.screen_id],deviceId:device.id},async()=>{
-   const d=await store.read();const result=deviceRoute(d,'GET',['playlist',device.screen_id],{},token,{now:f.now,playerProtocol:2,playlist:()=>({items:[{campaign_id:'cn',creative_id:'cr',duration_s:10,youtube_id:'abcdefghijk',rate_type:'per_play',rate_value:1}],config:{},config_version:1})});if(result.changed)await store.write(d);return result;
+   const d=await store.read();const result=deviceRoute(d,'GET',['playlist',device.screen_id],{},token,{now:f.now,playerProtocol:3,playlist:()=>({items:[{campaign_id:'cn',creative_id:'cr',duration_s:10,youtube_id:'abcdefghijk',rate_type:'per_play',rate_value:1}],config:{},config_version:1})});if(result.changed)await store.write(d);return result;
   });
   const results=await Promise.all([grant(f.device,f.token),grant(second,token2)]);
   assert.equal(results.flatMap(r=>r.body.items).reduce((n,i)=>n+i.max_plays,0),1);

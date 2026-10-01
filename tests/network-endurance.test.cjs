@@ -14,8 +14,8 @@ test('simulated 72h: assignment rotation, 48h report backlog, ACK loss and month
  const terms=freezeEconomics(campaign,screen,org);
  const db={orgs:[org,{id:'gridcast',status:'active'}],screens:[screen],campaigns:[campaign],devices:[],device_assignments:[],plays:[],presence:[],settlement_buckets:[]};
  const creatives=['creative-a','creative-b'];
- const playlist=(s,_device,index=0)=>({items:[{...terms,campaign_id:campaign.id,creative_id:creatives[creativeRotationIndex(s.id,index,0,2)],youtube_id:'synthetic-fixture',duration_s:10}],config:{model:'coco-ssd',sample_interval_s:2,count_ceiling:50,camera_fail_mode:'continue'},config_version:1,rotation_version:'stable-content-v1'});
- const call=(method,path,body={},token)=>{assert.ok(now>=lastRequestAt,'server time never rewinds');lastRequestAt=now;const r=deviceRoute(db,method,path.split('/'),body,token,{now,playerProtocol:2,playlist,clientKey:'endurance-fixture'});assert.ok(r);return {...r,status:r.status??200};};
+ const playlist=(s,_device,index=0)=>({items:[{...terms,campaign_id:campaign.id,creative_id:creatives[creativeRotationIndex(s.id,index,0,2)],youtube_id:'synthetic-fixture',duration_s:10}],config:{camera_source:'local',confidence_min:.4,count_ceiling:50,camera_fail_mode:'continue'},config_version:1,rotation_version:'stable-content-v1'});
+ const call=(method,path,body={},token)=>{assert.ok(now>=lastRequestAt,'server time never rewinds');lastRequestAt=now;const r=deviceRoute(db,method,path.split('/'),body,token,{now,playerProtocol:3,playlist,clientKey:'endurance-fixture'});assert.ok(r);return {...r,status:r.status??200};};
  const ok=r=>{assert.equal(r.status,200,JSON.stringify(r.body));return r.body;};
  const paired=ok(call('POST','pair',issuePairing(db,screen,now)));
  const pending=[],issued=[],accepted=[];let duplicateCount=0;
@@ -82,7 +82,7 @@ test('three continuous hours switch from exhausted paid budget to filler without
  const db={orgs:[org],screens:[screen],campaigns:[campaign],devices:[],device_assignments:[],plays:[],presence:[],settlement_buckets:[]};
  const items=[{campaign_id:campaign.id,creative_id:'paid-video',asset_id:'paid-asset',duration_s:10,rate_type:'per_play',rate_value:.01}],filler_items=[{campaign_id:null,creative_id:'house-video',asset_id:'house-asset',duration_s:10,kind:'filler'}];
  const playlist=()=>({items,filler_items,config:{camera_fail_mode:'continue',sample_interval_s:2,count_ceiling:50},config_version:1});
- const call=(method,path,body={},token)=>deviceRoute(db,method,path.split('/'),body,token,{now,playerProtocol:2,playlist,clientKey:'continuous-endurance'});
+ const call=(method,path,body={},token)=>deviceRoute(db,method,path.split('/'),body,token,{now,playerProtocol:3,playlist,clientKey:'continuous-endurance'});
  const paired=call('POST','pair',issuePairing(db,screen,now)).body;
  const offered=call('GET',`playlist/${screen.id}`,{},paired.token).body;
  const paid=offered.items[0],filler=offered.filler_items[0];assert.equal(paid.max_plays,360);

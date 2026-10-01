@@ -230,6 +230,7 @@ export function createFirestoreStore(database: Firestore) {
           continue;
         }
         if (deviceRequest && collection === 'users') continue;
+        if (actor?.role === 'advertiser_viewer' && collection === 'devices') continue;
         if (collection === 'configs') {
           if (globalPage) {
             const p = await page(tx,'configs',[],context); snapshot.configs=p.items;
@@ -261,6 +262,17 @@ export function createFirestoreStore(database: Firestore) {
         snapshot.campaigns = [...new Map([...snapshot.campaigns,...network].map((c: any) => [c.id,c])).values()];
       }
       if (actor?.role === 'advertiser_viewer') await referenced(tx,'screens',snapshot.campaigns.flatMap((c: any) => c.screen_ids || []),snapshot.screens);
+      // Advertiser campaigns may target another organisation's screens. Read only heartbeat
+      // projection for those authorised targets, never the receiver's full device records.
+      if (actor?.role === 'advertiser_viewer' && context.method === 'GET' && ['bootstrap','campaign'].includes(context.path[0])) {
+        const targets = [...new Set<string>(snapshot.campaigns.flatMap((c: any) => c.screen_ids || []))];
+        for (const screenId of targets) {
+          const result = await tx.get(database.collection('devices').where('screen_id','==',screenId)
+            .select('id','screen_id','status','last_heartbeat_at').limit(DOMAIN_LIMIT + 1));
+          if (result.docs.length > DOMAIN_LIMIT) throw new StoreError(503, 'Too many screen devices');
+          snapshot.devices.push(...result.docs.map((d: any) => d.data()));
+        }
+      }
       await referenced(tx,'orgs',snapshot.screens.map((s: any) => s.org_id),snapshot.orgs);
       // Keep the true authenticated actor and their organisation even in another organisation's context.
       if (actor && !snapshot.users.some((u: any) => u.id === actor.id)) snapshot.users.push(actor);

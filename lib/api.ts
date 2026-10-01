@@ -108,10 +108,10 @@ const resolveFor = (screen: any) => cfg.resolve(screen, db.groups || [], db.conf
 
 export function screenStatus(screen: any) {
   const dev = db.devices.find((d: any) => d.screen_id === screen.id && d.status !== 'revoked');
-  if (!dev) return { state: 'unpaired', label: 'not paired', device: null, age_s: null };
+  if (!dev) return { state: 'unpaired', label: 'not paired', device: null, age_s: null, observed_at: new Date().toISOString() };
   const age = (Date.now() - new Date(dev.last_heartbeat_at).getTime()) / 1000;
   const state = age < 90 ? 'live' : age < 900 ? 'stalled' : 'offline';
-  return { state, label: state === 'live' ? 'on air' : state === 'stalled' ? 'not responding' : 'offline', device: dev, age_s: Math.round(age) };
+  return { state, label: state === 'live' ? 'on air' : state === 'stalled' ? 'not responding' : 'offline', device: dev, age_s: Math.round(age), observed_at: new Date().toISOString() };
 }
 
 type Res = { status?: number; body: any };
@@ -365,11 +365,24 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     const c = campaignView(db,original,actor);
     const plays = db.plays.filter((x: any) => x.campaign_id === c.id && (isAdmin || actor.role === ADVERTISER || x.org_id === actor.org_id));
     const byPlay = Object.fromEntries(db.presence.map((x: any) => [x.play_id, x]));
+    // Read-only delivery explanation for targeted screens the viewer may see. campaignView already scopes a
+    // network campaign to the viewer's screens; non-admins are further limited to their own organisation's
+    // screens. Advertisers get none: their snapshot lacks the other campaigns and configs a decision needs.
+    let eligibility: any[] | null = null;
+    if (actor.role !== ADVERTISER) {
+      try {
+        eligibility = c.screen_ids.map((id: string) => db.screens.find((s: any) => s.id === id))
+          .filter((s: any) => s && (isAdmin || s.org_id === actor.org_id))
+          .flatMap((s: any) => playlistFor(s).decisions.filter((x: any) => x.campaign_id === c.id)
+            .map((x: any) => ({ screen_id: s.id, creative_id: x.creative_id, eligible: x.eligible, reason: x.reason, warnings: x.warnings })));
+      } catch { eligibility = null; }
+    }
     return { body: {
+      eligibility,
       settlement_buckets:settlementView(db,actor,c.id), history: db.history || { complete: true, scope: 'local_demo' }, campaign: c, advertiser: advertiserView(db.advertisers.find((a: any) => a.id === c.advertiser_id), actor),
       org: orgView(db.orgs.find((o: any) => o.id === c.org_id), actor), totals: null, totals_source: '/api/metrics',
       byScreen: [...new Set([...c.screen_ids,...plays.map((p: any) => p.screen_id),...settlementView(db,actor,c.id).map((b: any) => b.screen_id)])].map((id: string) => db.screens.find((s: any) => s.id === id)).filter(Boolean)
-        .map((s: any) => ({ screen: screenView(s, actor) })),
+        .map((s: any) => ({ screen: screenView({ ...s, _status: screenStatus(s) }, actor) })),
       byCreative: c.creative_ids.map((id: string) => db.creatives.find((x: any) => x.id === id)).filter(Boolean)
         .map((cr: any) => ({ creative: cr })),
       plays: plays.slice(-300).reverse().map((p: any) => ({ ...p, presence: byPlay[p.id] || null })),

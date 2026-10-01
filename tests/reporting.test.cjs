@@ -128,3 +128,35 @@ test('metrics authorization rejects foreign organisation, foreign campaign, fore
  assert.throws(()=>authorize(db,{...actor,must_change:true},'GET',['metrics'],{},new URLSearchParams()),e=>e.status===403);
  assert.throws(()=>authorize(db,{...actor,role:'advertiser_viewer',advertiser_id:'ad'},'GET',['metrics'],{},new URLSearchParams('campaign=cb')),e=>e.status===404);
 });
+
+test('last_success_at moves only for valid-time rendered paid plays and never changes counters',()=>{
+ const f=fixture(),t0=Date.parse('2026-09-25T05:00:00Z');
+ const row=accrue(f,{},t0);assert.equal(row.last_success_at,new Date(t0).toISOString());
+ // A later failed play moves last_at but not last_success_at.
+ accrue(f,{rendered:false,billable:false,nonbillable_reasons:['error']},t0+60000);
+ assert.equal(row.last_at,new Date(t0+60000).toISOString());assert.equal(row.last_success_at,new Date(t0).toISOString());
+ // Invalid time and filler never set it.
+ const invalid=fixture(),bad=accrue(invalid,{timestamp_valid:false},Date.parse('2000-01-01T00:00:00Z'));assert.equal(Object.hasOwn(bad,'last_success_at'),false);
+ const filler=fixture();filler.assignment.kind='filler';const fr=accrue(filler,{campaign_id:null,creative_id:'filler'},t0);assert.equal(Object.hasOwn(fr,'last_success_at'),false);
+ // Rendered but non-billable is still a delivered paid play.
+ const nb=fixture(),nbr=accrue(nb,{billable:false,nonbillable_reasons:['camera_required']},t0);assert.equal(nbr.last_success_at,new Date(t0).toISOString());
+ // Out-of-order arrival keeps the latest.
+ accrue(f,{},t0-3600000);assert.equal(row.last_success_at,new Date(t0).toISOString());
+ assert.equal(row.plays_rendered,2);assert.equal(row.plays_not_rendered,1);
+});
+
+test('campaignScreens is additive: built from last_success_at only, every other summary field identical',()=>{
+ const f=fixture(),t0=Date.parse('2026-09-25T05:00:00Z');
+ accrue(f,{},t0);accrue(f,{screen_id:'screen2'},t0+1000);accrue(f,{screen_id:'screen3',rendered:false,billable:false},t0+2000);
+ f.assignment.kind='filler';accrue(f,{campaign_id:null,creative_id:'filler'},t0+3000);
+ const range={from:'2026-09-25',to:'2026-09-25'};
+ const s=summarizeReport(f.db.screen_day,range,f.db.reporting_coverage);
+ assert.deepEqual(s.campaignScreens,{campaign:{screen:new Date(t0).toISOString(),screen2:new Date(t0+1000).toISOString()}});
+ // Historical rows without the field: no evidence, and identical counters.
+ const legacy=JSON.parse(JSON.stringify(f.db.screen_day)).map(r=>{delete r.last_success_at;return r;});
+ const old=summarizeReport(legacy,range,f.db.reporting_coverage);
+ assert.deepEqual(old.campaignScreens,{});
+ const {campaignScreens:a,...rest}=s,{campaignScreens:b,...oldRest}=old;
+ assert.deepEqual(rest,oldRest);
+ assert.equal(s.last_at,new Date(t0+3000).toISOString());
+});

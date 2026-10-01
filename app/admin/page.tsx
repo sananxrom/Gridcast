@@ -20,6 +20,8 @@ import { GroupManager } from '@/components/views/groups';
 import { CampaignDetail } from '@/components/views/campaign-detail';
 import { CameraReadiness } from '@/components/views/camera-readiness';
 import { CampaignList } from '@/components/views/campaign-list';
+import { approvalAlerts, blockedAlerts } from '@/lib/campaign-status';
+import { usePeriodicRefresh } from '@/components/views/campaign-status-badge';
 import { CampaignBuilder } from '@/components/views/campaign-builder';
 import type { CmdItem } from '@/components/ui/command-palette';
 import { BootLoader } from '@/components/ui/loader';
@@ -52,6 +54,8 @@ export default function Admin() {
   },[]);
 
   const reload = useCallback(async () => { if (user) await Promise.all([load(scopeRef.current),loadOrgs()]); }, [user,load,loadOrgs]);
+  // Screen _status is a bootstrap snapshot; refresh it while campaign status is on screen.
+  usePeriodicRefresh(() => load(scopeRef.current), !!user && (view === 'campaigns' || view.startsWith('c/')));
   useEffect(() => {
     const u = session.get();
     if (!u || tabFor(u.role) !== 'platform') { location.href = '/'; return; }
@@ -101,7 +105,8 @@ export default function Admin() {
   const alerts = [
     ...measurementAlerts,
     ...offline.map((s: any) => ({ kind: 'Screen', tone: 'destructive', text: `${s.name} (${orgName(s.org_id)}) is ${s._status?.label}`, go: 's/' + s.id })),
-    ...pending.map((c: any) => ({ kind: 'Approval', tone: 'warn', text: `${c.name} awaiting platform approval`, go: 'approvals' })),
+    ...approvalAlerts(d, pending, 'approvals', (c: any) => `${c.name} awaiting platform approval`),
+    ...blockedAlerts(d),
   ];
   const nav = adminNav({ inbox: alerts.length, approvals: pending.length });
   const orgs = [{ id: 'all', name: 'All organisations', type: 'gridcast' }, ...orgDirectory.map((o: any) => ({ id: o.id, name: o.name, type: o.type }))];

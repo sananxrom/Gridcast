@@ -59,6 +59,12 @@ export function accrueScreenDay(db: any, play: any, assignment: any, playedAt: n
     delta.plays_rendered = 1; delta.plays_billable = Number(play.billable === true);
     delta.airtime_ms = play.playing_duration_ms;
     if (presence.measured && !play.measurement_binding_id) { delta.presence_n = 1; delta.presence_sum = presence.avg_persons; }
+    // Delivery evidence only: the latest valid-time, rendered, paid play. Never set from failed plays,
+    // filler or receive times, so it can back a "delivered recently" claim that last_at cannot.
+    if (play.rendered === true) {
+      const success = new Date(at).toISOString();
+      if (!row.last_success_at || success > row.last_success_at) row.last_success_at = success;
+    }
     const a = play.attention;
     if (a && play.attention_status === 'accepted') {
       acceptedAttention=a;
@@ -101,6 +107,8 @@ export function summarizeReport(rows: any[], range: {from:string,to:string}, cov
   const byScreen: Record<string,ReportCounters> = {}, byCampaign: Record<string,ReportCounters> = {}, byCreative: Record<string,ReportCounters> = {};
   const daily: Record<string,ReportCounters> = {}, hourly: Record<string,ReportCounters> = {}, dayHours: Record<string,ReportCounters> = {};
   let last_at: string | null = null;
+  // campaign → screen → latest successful paid play time; rows without the field give no evidence.
+  const campaignScreens: Record<string,Record<string,string>> = {};
   const attentionProfiles:Record<string,any>={};
   const add = (map: Record<string,ReportCounters>,key: string, row: any) => { map[key] ||= emptyCounters(); addCounters(map[key],row); };
   for (const row of rows) {
@@ -109,6 +117,10 @@ export function summarizeReport(rows: any[], range: {from:string,to:string}, cov
     for (const [hour,value] of Object.entries(row.hours || {})) add(hourly,hour,value);
     for (const [hour,value] of Object.entries(row.day_hours || {})) add(dayHours,hour,value);
     if (row.last_at && (!last_at || row.last_at > last_at)) last_at = row.last_at;
+    if (row.campaign_id && typeof row.last_success_at === 'string') {
+      const screens = campaignScreens[row.campaign_id] ||= {};
+      if (!screens[row.screen_id] || row.last_success_at > screens[row.screen_id]) screens[row.screen_id] = row.last_success_at;
+    }
   }
   for(const value of attentionRows){
     const key=createHash('sha256').update(JSON.stringify([value.profile,value.manifest_sha256,value.pipeline_sha256])).digest('hex');
@@ -126,5 +138,5 @@ export function summarizeReport(rows: any[], range: {from:string,to:string}, cov
   // Complete describes writer coverage, not receipt finality: devices can report 72h late.
   const started = coverage?.started_at || null;
   const complete = !!started && Date.parse(range.from+'T00:00:00+05:30') >= Date.parse(started);
-  return {totals,byScreen,byCampaign,byCreative,daily,hourly,dayHours,attentionProfiles,last_at,coverage:{started_at:started,complete},rows:rows.length};
+  return {totals,byScreen,byCampaign,byCreative,daily,hourly,dayHours,attentionProfiles,last_at,campaignScreens,coverage:{started_at:started,complete},rows:rows.length};
 }

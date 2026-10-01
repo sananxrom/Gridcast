@@ -29,6 +29,8 @@ import { CampaignList } from '@/components/views/campaign-list';
 import { Settlement } from '@/components/views/settlement';
 import { CampaignBuilder } from '@/components/views/campaign-builder';
 import type { CmdItem } from '@/components/ui/command-palette';
+import { approvalAlerts, blockedAlerts } from '@/lib/campaign-status';
+import { usePeriodicRefresh } from '@/components/views/campaign-status-badge';
 
 export default function Operator() {
   const [user, setUser] = useState<SessionUser | null>(null);
@@ -42,6 +44,8 @@ export default function Operator() {
     const who = u ?? user; if (!who) return;
     setD(await api(`/bootstrap?user=${who.id}`));
   }, [user]);
+  // Screen _status is a bootstrap snapshot; refresh it while campaign status is on screen.
+  usePeriodicRefresh(() => reload(), !!user && (view === 'campaigns' || view.startsWith('c/')));
 
   useEffect(() => {
     const u = session.get();
@@ -83,8 +87,8 @@ export default function Operator() {
       .map((s: any) => ({ kind: 'Screen', tone: 'destructive', text: `${s.name} is ${s._status?.label}`, go: 's/' + s.id })),
     ...d.campaigns.filter((c: any) => c.committed_budget && c.accrued_spend / c.committed_budget >= 0.8 && c.status === 'active')
       .map((c: any) => ({ kind: 'Budget', tone: 'warn', text: `${c.name} is at ${Math.round(c.accrued_spend / c.committed_budget * 100)}% of budget`, go: 'c/' + c.id })),
-    ...d.creatives.filter((c: any) => c.approval_status === 'pending' && c.org_id === user.org_id)
-      .map((c: any) => ({ kind: 'Approval', tone: 'warn', text: `${c.name} is awaiting approval`, go: 'creatives' })),
+    ...approvalAlerts(d, d.creatives.filter((c: any) => c.approval_status === 'pending' && c.org_id === user.org_id), 'creatives', (c: any) => `${c.name} is awaiting approval`),
+    ...blockedAlerts(d),
   ];
 
   const caps: string[] = d.caps ?? [];

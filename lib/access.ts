@@ -368,9 +368,11 @@ export function orgView(o: any, actor: any) {
 }
 export function screenView(s: any, actor: any) {
   if (!s) return null;
-  if (actor.role === ADVERTISER) return pick(s, ['id','org_id','name','venue_name','venue_type','address','size_in','orientation','aspect','photo_url']);
+  // These screens are already scoped by the caller. Share freshness, never raw device/config details.
+  const publicStatus = s._status ? pick(s._status, ['state','age_s','observed_at']) : undefined;
+  if (actor.role === ADVERTISER) return { ...pick(s, ['id','org_id','name','status','venue_name','venue_type','address','size_in','orientation','aspect','photo_url']), ...(publicStatus ? { _status: publicStatus } : {}) };
   const out = { ...s };
-  if (!can(actor.role, 'screens')) { delete out.code; delete out._status; delete out.exclusions; delete out.priced_against; }
+  if (!can(actor.role, 'screens')) { delete out.code; if (publicStatus) out._status = publicStatus; else delete out._status; delete out.exclusions; delete out.priced_against; }
   if (!can(actor.role, 'money')) delete out.owner_share_pct;
   if (!can(actor.role, 'sales') && !can(actor.role, 'money')) for (const k of SCREEN_MONEY) delete out[k];
   if (actor.role !== PLATFORM_ADMIN) { delete out.attention_settings; delete out.attention_calibration; }
