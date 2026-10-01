@@ -1,21 +1,17 @@
 'use client';
-import { DeliveryReport, useDeliveryReport } from '@/components/views/delivery-report';
+import { useDeliveryReport } from '@/components/views/delivery-report';
 import React, { useEffect, useRef, useState } from 'react';
 import { defaultSlotsPerLoop, physicalCapacity } from '@/lib/inventory';
-import { Settlement } from './settlement';
 import { api } from '@/lib/client';
-import { inr, inrRate, fmtDate } from '@/lib/utils';
-import { PageHead, SectionHead } from '@/components/ui/app-shell';
-import { DataTable } from '@/components/ui/table';
-import { Stat, Progress } from '@/components/ui/stat';
+import { inr, inrRate } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input, Select, Field, Label } from '@/components/ui/input';
-import { Thumb, Empty } from './bits';
 import { Skeleton } from '@/components/ui/loader';
 import { campaignStatus } from '@/lib/campaign-status';
-import { CampaignStatusBadge, useNow, usePeriodicRefresh } from './campaign-status-badge';
+import { useNow, usePeriodicRefresh } from './campaign-status-badge';
+import { CampaignDashboard } from './campaign-dashboard';
 
 export function CampaignDetail({ id, boot, onGo, onChanged }: {
   id: string; boot: any; onGo: (g: string) => void; onChanged: () => void;
@@ -57,7 +53,6 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
   const screenPool=network ? [...(inventory?.screens??[]),...d.byScreen.map((r:any)=>r.screen)].filter((screen:any,i:number,rows:any[])=>rows.findIndex(x=>x.id===screen.id)===i).filter((s:any)=>c.screen_ids.includes(s.id)||(s.network_available===true&&s.network_slots>0&&inventory?.orgs?.some((o:any)=>o.id===s.org_id&&o.status==='active'))) : boot.screens.filter((s:any)=>s.org_id===c.org_id);
   const slotsFor=(screen:any)=>f.bookings?.find((b:any)=>b.screen_id===screen.id)?.rotation_weight??f.bookings?.find((b:any)=>b.screen_id===screen.id)?.slots_per_loop??1;
   const mayMoney = (boot.caps ?? []).includes('money');
-  const pct = c.committed_budget ? Math.round((c.accrued_spend / c.committed_budget) * 100) : 0;
   const rate = c.rate_type === 'flat'
     ? `${inr(c.committed_budget)} flat`
     : `${inrRate(c.rate_value)} per play`;
@@ -86,23 +81,15 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
   // Device status comes from bootstrap screens (heartbeat _status); detail screen views do not carry it for every role.
   const statusScreens = d.byScreen.map((r:any)=>({...r.screen,_status:r.screen?._status??boot.screens?.find((s:any)=>s.id===r.screen?.id)?._status}));
   const status = campaignStatus({ campaign: c, creatives: d.byCreative.map((r:any)=>r.creative), screens: statusScreens, advertiser: d.advertiser, receipts: d.plays, decisions: Array.isArray(d.eligibility) ? d.eligibility : null, now });
-  const diagnosticTimes = d.plays.map((p:any)=>Date.parse(p.ended_at || p.started_at)).filter(Number.isFinite).sort((a:number,b:number)=>a-b);
-  const diagnosticDate = (at:number) => new Date(at).toLocaleString('en-IN', {timeZone:'Asia/Kolkata'});
-  const diagnosticWindow = diagnosticTimes.length ? `${diagnosticDate(diagnosticTimes[0])} – ${diagnosticDate(diagnosticTimes[diagnosticTimes.length-1])} IST` : 'No dated receipts loaded';
 
   return (
     <>
-      <PageHead
-        title={c.name}
-        sub={<>{d.advertiser?.name} · {d.org?.name} · <span className="font-mono">{c.starts_at} → {c.ends_at}</span></>}
-        back={{ label: 'Campaigns', go: 'campaigns', onGo }}
+      <CampaignDashboard d={d} report={report} status={status} mayMoney={mayMoney} scopedNetwork={scopedNetwork} rate={rate} onGo={onGo}
         actions={<>
-          <CampaignStatusBadge status={status} />
           {c.campaign_type === 'network' && <Badge variant="default">network</Badge>}
           {mayEdit && <Button variant="outline" size="sm" onClick={() => setEdit(!edit)}>Edit</Button>}
           {mayEdit && <Button variant="outline" size="sm" onClick={toggleStatus}>{c.status === 'active' ? 'Pause' : 'Resume'}</Button>}
-        </>}
-      />
+        </>}>
 
       {scopedNetwork && <Card className="mb-4 p-4 text-sm text-muted-foreground">Gridcast manages this network campaign. Delivery and amounts below cover your organisation’s screens only.</Card>}
       {!edit && err && <p role="alert" className="mb-3 text-sm text-destructive">{err}</p>}
@@ -164,46 +151,7 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
         </Card>
       )}
 
-      {typeof c.accrued_spend==='number'&&<Stat metric="recorded_campaign_accrual" period={{from:'',to:'',label:'Campaign lifetime · visible records'}} label={scopedNetwork?"Lifetime gross on your screens":"Lifetime spend"} value={inr(c.accrued_spend)} hint={scopedNetwork?"Recorded accrual on your screens · independent of report dates":`of ${inr(c.committed_budget)} · independent of report dates · new bookings: ${rate}`} />}
-      <DeliveryReport report={report} screens={d.byScreen.map((r:any)=>r.screen)} campaigns={[c]} creatives={d.byCreative.map((r:any)=>r.creative)} />
-      {c.committed_budget!=null&&<Progress className="mt-3" value={pct} hot={pct >= 80} />}
-      {mayMoney&&<><SectionHead>Verified settlement</SectionHead><Settlement buckets={d.settlement_buckets??[]} campaigns={[c]} screens={d.byScreen.map((r:any)=>r.screen)}/></>}
-
-      <SectionHead>Screen bookings</SectionHead>
-      <DataTable
-        cols={[
-          { label: 'Screen', render: (r: any) => <><div className="font-medium">{r.screen.name}</div><div className="text-[12px] text-muted-foreground">{r.screen.address}</div></> },
-          { label: 'Venue', render: (r: any) => <Badge variant="muted">{r.screen.venue_type}</Badge> },
-          {label:'Booking',render:(r:any)=>{const b=c.bookings?.find((x:any)=>x.screen_id===r.screen.id);return b?<span className="text-xs">{b.rotation_weight ?? b.slots_per_loop ?? 1} turns / round<br/>{b.rate_type==='per_play'&&typeof b.rate_value==='number'?`${inrRate(b.rate_value)} / play`:b.rate_type==='flat'?'Agreed flat rate':'Rate unavailable'}</span>:<span className="text-xs text-muted-foreground">Legacy booking</span>;}},
-        ]}
-        rows={d.byScreen.map((r:any)=>({screen:r.screen}))} rowId={(r: any) => r.screen.id} exportName="campaign-screens" empty="No screens on this campaign" />
-
-      <SectionHead>Assigned creatives</SectionHead>
-      <p className="mb-3 text-xs text-muted-foreground">Creative delivery is shown in the selected-period report above. Rotation is not a controlled A/B experiment: differences may reflect screen, time and audience.</p>
-      <DataTable
-        cols={[
-          { label: 'Creative', render: (r: any) => <div className="flex items-center gap-3"><Thumb id={r.creative.youtube_id} w={58} /><div><div className="font-medium">{r.creative.name}</div><div className="font-mono text-[11.5px] text-muted-foreground">{r.creative.duration_s}s</div></div></div> },
-          { label: 'Approval', render: (r: any) => <Badge variant={r.creative.approval_status === 'approved' ? 'ok' : r.creative.approval_status === 'rejected' ? 'destructive' : 'warn'}>{r.creative.approval_status}</Badge> },
-        ]}
-        rows={d.byCreative.map((r:any)=>({creative:r.creative}))} rowId={(r: any) => r.creative.id} exportName="campaign-creatives" empty="No creatives on this campaign" />
-
-      <details className="mt-5 rounded-xl border border-border p-4">
-      <summary className="cursor-pointer text-sm font-semibold">Play diagnostics · {d.plays.length} newest available receipts</summary>
-      <p className="mb-2 mt-3 text-xs text-muted-foreground">Loaded receipt window: {diagnosticWindow}. This limited window is independent of the selected report dates.</p>
-      <p className="mb-3 text-xs text-muted-foreground">Recent diagnostic records only. This table is not full delivery history and does not determine the report totals above. Reports can include incomplete or non-billable playback; each row shows its evidence.</p>
-      <DataTable
-        cols={[
-          { label: 'When', render: (p: any) => <span className="font-mono text-[12px] text-muted-foreground">{fmtDate(p.ended_at, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span> },
-          { label: 'Screen', render: (p: any) => d.byScreen.find((s: any) => s.screen.id === p.screen_id)?.screen.name ?? '—' },
-          { label: 'Creative', render: (p: any) => d.byCreative.find((c2: any) => c2.creative.id === p.creative_id)?.creative.name ?? '—' },
-          { label: 'Duration', num: true, render: (p: any) => `${Math.round(p.duration_ms / 1000)}s` },
-          {label:'Evidence',render:(p:any)=><span className="text-xs text-muted-foreground">{p.source==='seed'?'synthetic demo':p.source||'unknown source'} · {p.billable===true?'billable':p.billable===false?'non-billable':'billing unverified'}<br/>{p.presence?.measured?p.presence.model_ver||'model unspecified':'not measured'}</span>},
-          { label: 'People present', num: true, render: (p: any) => p.presence?.measured
-              ? <><b>{p.presence.avg_persons.toFixed(1)}</b> <span className="text-[11.5px] text-muted-foreground">({p.presence.sample_count})</span></>
-              : <span className="text-muted-foreground">not measured</span> },
-        ]}
-        rows={d.plays} rowId={(p: any) => p.id} exportName="limited-recent-diagnostics" empty="No plays recorded yet — pair a player to one of these screens" />
-      </details>
+      </CampaignDashboard>
     </>
   );
 }

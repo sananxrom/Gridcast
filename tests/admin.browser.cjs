@@ -179,9 +179,50 @@ test('operator network campaign is readonly with scoped money and exact verified
   await h.page.goto(base+'/operator#campaigns');await h.page.getByRole('button',{name:campaign.name,exact:true}).waitFor();
   assert.equal(await h.page.getByRole('button',{name:'live',exact:true}).count(),0);assert.equal(await h.page.getByText('Managed by Gridcast',{exact:true}).count(),1);
   await h.page.getByRole('button',{name:campaign.name,exact:true}).click();await h.page.getByRole('heading',{name:campaign.name,exact:true}).waitFor();
-  assert.equal(await h.page.getByRole('button',{name:'Edit',exact:true}).count(),0);assert.equal(await h.page.getByRole('button',{name:'Pause',exact:true}).count(),0);await h.page.getByText('₹0.63',{exact:true}).waitFor();
+  assert.equal(await h.page.getByRole('button',{name:'Edit',exact:true}).count(),0);assert.equal(await h.page.getByRole('button',{name:'Pause',exact:true}).count(),0);
+  // Phase 2: settlement moved into the Money tab; the spend card labels the redacted budget.
+  await h.page.getByRole('group',{name:'Lifetime gross on your screens',exact:true}).getByText('your screens only',{exact:true}).waitFor();
+  await h.page.getByRole('tab',{name:'Money',exact:true}).click();await h.page.getByText('₹0.63',{exact:true}).waitFor();
   await h.nav('settlement');await h.page.getByRole('heading',{name:'Settlement',exact:true}).waitFor();await h.page.getByText('₹0.93',{exact:true}).waitFor();await h.page.getByText('₹0.09',{exact:true}).waitFor();await h.page.getByText('₹0.21',{exact:true}).waitFor();await h.page.getByText('₹0.63',{exact:true}).waitFor();
   assert.equal(h.requests.filter(r=>r.path==='/campaign/network'&&r.body).length,0);
+ }finally{await h.browser.close();}
+});
+
+test('campaign dashboard shows four headline cards with coverage cues, switches tabs and shows Money only with the capability',async()=>{
+ const h=await harness(),errors=[];h.page.on('pageerror',e=>errors.push(e.message));try{
+  const now=Date.now(),today=new Date(now+330*60000).toISOString().slice(0,10),end=new Date(now+8*86400000+330*60000).toISOString().slice(0,10);
+  const advertiser={id:'dash-adv',org_id:'a',name:'Dashboard client',status:'active'};
+  const creative={id:'dash-cr',org_id:'a',advertiser_id:'dash-adv',name:'Dashboard creative',duration_s:10,approval_status:'approved'};
+  const campaign={id:'dash',org_id:'a',advertiser_id:'dash-adv',name:'Dashboard campaign',campaign_type:'own',screen_ids:['screen-a'],creative_ids:['dash-cr'],bookings:[{screen_id:'screen-a',rotation_weight:1,rate_type:'per_play',rate_value:1}],rate_type:'per_play',rate_value:1,committed_budget:1000,accrued_spend:850,invoice_status:'not_invoiced',status:'active',starts_at:today,ends_at:end};
+  let caps=['sales'];
+  await h.page.route('**/api/bootstrap**',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({...h.boot('a'),caps,advertisers:[advertiser],creatives:[creative],campaigns:[campaign]})}));
+  await h.page.route('**/api/campaign/dash',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({campaign,advertiser,byScreen:[{screen:h.screen,plays:0,avg:null}],byCreative:[{creative,plays:0,avg:null}],totals:{plays:0,measured:0,avg:null},plays:[],settlement_buckets:[],eligibility:[{screen_id:'screen-a',creative_id:'dash-cr',eligible:true,reason:'eligible'}]})}));
+  const counters={plays_rendered:42,plays_billable:40,plays_not_rendered:1,plays_filler:0,presence_sum:10,presence_n:4,airtime_ms:420000};
+  await h.page.route('**/api/metrics**',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({totals:counters,byScreen:{'screen-a':counters},byCampaign:{dash:counters},byCreative:{'dash-cr':counters},daily:{[today]:counters},hourly:{},attentionProfiles:{},attention_page:{has_more:false,next_cursor:null},coverage:{started_at:today+'T00:00:00Z',complete:false},last_at:null,rows:1,has_more:false,next_cursor:null,campaignScreens:{}})}));
+  await h.page.addInitScript(()=>localStorage.setItem('gc_user',JSON.stringify({id:'sales',org_id:'a',role:'sales',name:'Sales user',orgName:'Operator Alpha'})));
+  await h.page.goto(base+'/operator#campaigns');await h.page.getByRole('button',{name:campaign.name,exact:true}).click();await h.page.getByRole('heading',{name:campaign.name,exact:true}).waitFor();
+  const headline=h.page.getByRole('region',{name:'Campaign headline',exact:true});
+  for(const name of ['Spend vs budget','Plays','Est. impressions','Avg people present'])await headline.getByRole('group',{name,exact:true}).waitFor();
+  const plays=headline.getByRole('group',{name:'Plays',exact:true});await plays.getByText('42',{exact:true}).waitFor();await plays.getByText('partial',{exact:true}).waitFor();
+  await headline.getByRole('group',{name:'Spend vs budget',exact:true}).getByText('Lifetime',{exact:true}).waitFor();
+  await headline.getByRole('group',{name:'Est. impressions',exact:true}).getByText('Unavailable',{exact:true}).waitFor();
+  await headline.getByRole('group',{name:'Avg people present',exact:true}).getByText('2.5',{exact:true}).waitFor();
+  assert.equal(await h.page.getByRole('group',{name:'Chart metric',exact:true}).getByRole('button',{name:/Est\. impressions/}).isDisabled(),true);
+  assert.deepEqual(await h.page.getByRole('tab').allInnerTexts(),['Screens','Creatives','Audience','Diagnostics']);
+  assert.equal(await h.page.getByRole('tab',{name:'Money',exact:true}).count(),0);
+  await h.page.getByRole('tabpanel').getByText('Eligible',{exact:true}).waitFor();
+  await h.page.getByRole('tab',{name:'Creatives',exact:true}).click();assert.equal(await h.page.getByRole('tab',{name:'Creatives',exact:true}).getAttribute('aria-selected'),'true');
+  await h.page.getByRole('tabpanel').getByText('Dashboard creative',{exact:true}).waitFor();
+  await h.page.keyboard.press('ArrowRight');assert.equal(await h.page.getByRole('tab',{name:'Audience',exact:true}).getAttribute('aria-selected'),'true');
+  await h.page.getByRole('tabpanel').getByText('Measurement profile',{exact:true}).waitFor();
+  await h.page.getByRole('tab',{name:'Diagnostics',exact:true}).click();await h.page.getByRole('tabpanel').getByText(/Play diagnostics/).waitFor();
+  await h.page.setViewportSize({width:390,height:844});assert.ok(await headline.getByRole('group',{name:'Plays',exact:true}).isVisible());
+  await h.page.setViewportSize({width:1440,height:1000});
+  caps=['platform','screens','sales','money','team','org'];
+  await h.page.addInitScript(()=>localStorage.setItem('gc_user',JSON.stringify({id:'admin',org_id:'gridcast',role:'platform_admin',name:'Fixture Admin',orgName:'Gridcast'})));
+  await h.page.goto(base+'/admin?org=a#campaigns');await h.page.reload();await h.page.getByRole('button',{name:campaign.name,exact:true}).click();await h.page.getByRole('heading',{name:campaign.name,exact:true}).waitFor();
+  await h.page.getByRole('tab',{name:'Money',exact:true}).click();await h.page.getByRole('tabpanel').getByText('Verified settlement',{exact:true}).waitFor();
+  assert.deepEqual(errors,[]);
  }finally{await h.browser.close();}
 });
 

@@ -5306,3 +5306,74 @@ their billing assertions; browser and admin suites; production build. Phase 1 fi
 **Indexes:** Final fixture delta included in refreshed shared graph (4315 nodes, 11244 edges, existing partial parser coverage at app-shell line101) and SymDex (0 errors); generated indexes not committed.
 **Preserved:** Unrelated workflow edits in AGENTS.md/CLAUDE.md/TEAM.md and unrelated untracked files remain unstaged. TEAM's old deployment checkpoint is superseded by this dated release entry; no other's workflow changes overwritten.
 **Files/commit:** Phase 1 app/tests/doc31 in `dbb6fb6`; this follow-up changes AI-LOG.md only.
+
+### 2026-10-01 10:40 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Phase 1 live (dbb6fb6, build-2026-10-01-001): review note
+
+**Asked:** Sanan: check the log and give an overview to check against.
+**Reviewed Codex's release additions in source:** `lib/access.ts` now gives advertisers and non-screens roles only
+`_status` `state`, `age_s` and `observed_at`, plus the screen's lifecycle `status`, for screens already scoped to
+them. No device or config fields. That is acceptable under vertical transparency, and it lets the advertiser badge
+reach Live. The full unit suite is 340 pass / 0 fail / 5 skips (Codex), so the 27 stale fixtures are fixed.
+**Gave Sanan a hands-on check list** for the live site (campaign list, campaign page, inbox, advertiser portal). Phase 2
+not started.
+**Files:** `AI-LOG.md`. Not committed.
+
+### 2026-10-01 10:45 IST · claude-opus-5.5 (Claude Code desktop, Mac) · CLAIMING doc 31 Phase 2 (ranked campaign dashboard): Sanan assigned it to Claude
+
+**Sanan:** "go step 2". Same model as Phase 1: a sub-agent builds, Claude reviews, Codex tests, releases and deploys.
+**Coordinator, Builder, QC: please do not edit these until I log that I am done:** `components/views/delivery-report.tsx`,
+new `components/views/report-parts.tsx`, new `components/views/report-metrics.ts`, new
+`components/views/campaign-dashboard.tsx`, `components/views/campaign-detail.tsx`, `tests/reporting-ui.test.cjs`, and
+campaign-dashboard and admin browser test updates (`tests/admin.browser.cjs`, a possible new browser test file).
+**Scope:** doc 31 Phase 2 exactly. No server change. `DeliveryReport` keeps its output on the eight other pages. The
+headline values share selectors with the old cards. Profiles are never summed. A coverage cue is visible on every card.
+The budget bar sits with spend. Not committed or deployed by Claude.
+
+### 2026-10-01 11:01 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Doc 31 Phase 2 built (sub-agent) and reviewed; files released to Codex
+
+**Built (uncommitted):**
+- New `components/views/report-parts.tsx`: `DeliveryReport` blocks moved out (copied, not retyped) plus `useReportView`.
+- New `components/views/report-metrics.ts`: pure selectors for every card value, daily series with gaps, coverage cues
+  and the spend card. The old cards now call them.
+- New `components/views/campaign-dashboard.tsx`: header, four cards with visible cues, daily chart with a switcher, and
+  tabs Screens / Creatives / Audience / Money / Diagnostics. Only the open tab mounts.
+- New `components/ui/tabs.tsx`: accessible, with arrow, Home and End keys.
+- `delivery-report.tsx` keeps its signature and composes the parts. `campaign-detail.tsx` renders the dashboard and
+  keeps the edit form, Phase 1 status, `useNow` and the periodic refresh.
+- Tests: 5 selector cases in `tests/reporting-ui.test.cjs`. `tests/admin.browser.cjs` network-campaign case opens the
+  Money tab, and a new dashboard case was added. The browser tests were **not run**.
+**Checks (sub-agent):** `npx tsc --noEmit` exit 0. Focused files 49/49. Full unit suite: tests 350, pass 345, fail 0,
+skipped 5. `DeliveryReport` was rendered to HTML before and after across 14 data cases (loading, error, legacy, not
+started, partial with invalid times, one profile, two profiles, each with and without names): all identical after
+normalising React `useId` values.
+**My visual check:** a throwaway local `next dev` on 4031 with seeded demo data, signed in as the seeded admin,
+campaign Fitline Jan Push. In light mode: Phase 1 status in the header, the budget bar inside the Spend card, four cards
+in 2 columns at about 800 px, chart switcher, and the Screens tab showing per-screen eligibility reasons ("Outside the
+campaign dates"). The Money tab renders verified settlement. Dark mode is correct. No console errors. I stopped the
+server and deleted `data/db.json`. Demo data has no attention rows, so the Audience tab and impressions values were
+seen only as "Unavailable".
+**Accepted deviations:** Paid/Billable/Failed/Filler cards and the breakdown moved to Diagnostics. The budget bar is
+hidden when spend is not visible, instead of showing a misleading 0%. The scoped network label is kept. The trend chart
+draws from 2 days of data, with a daily table always available.
+**Minor follow-ups (not blockers):** (1) An Ended campaign still shows a Pause button; the old toggle. Hide it, or
+show Resume/Complete by state. (2) The chart switcher's selected option keeps the active style when it is
+"Unavailable". (3) `report-parts.tsx` and `delivery-report.tsx` import each other. It is safe at runtime but should move
+the shared helpers into `report-metrics.ts`. (4) **App-wide, pre-existing:** at phone width (375 px) the shell keeps a
+fixed 260 px sidebar (`components/ui/app-shell.tsx`, `w-[260px]`), so every dashboard page is cramped. That needs its
+own responsive-shell task.
+**Released:** all Phase 2 files above. Coordinator: run `tests/admin.browser.cjs` and `tests/reporting.browser.cjs`, do a
+production build, then deploy.
+
+### 2026-10-01 11:04 IST · GPT-6 (Codex desktop, coordinator) · Phase 2 review and release preparation
+
+**Asked:** Review Phase 2, run admin/reporting browser tests and production build, deploy and open a live campaign. Step 3 advertiser workspace remains next, not started.
+**Did:** Read Claude11:01 handoff and candidate source. Production build passed; reporting-ui selectors 15/15 passed. Assigned independent QC and requested browser suites from Tester. QC identified two new-dashboard issues: absent dimension rows became zero despite partial coverage; unavailable measurement headlines lacked visible availability cues. Builder owns narrow dashboard/metric helper fixes and focused regressions; old DeliveryReport output must remain unchanged.
+**Outcome:** Not yet ready for release. Initial browser run continuing against initial build; rebuild and affected rerun required after corrections. Found existing authenticated Firebase campaign tab for post-release visual verification. No live data mutations.
+**Files/base:** Phase 2 components, tests; base `6ac4727`. Unrelated workflow/untracked files preserved.
+
+### 2026-10-01 11:08 IST · GPT-6 (Codex desktop, coordinator) · Phase 2 verified candidate
+
+**Did:** Builder corrected partial-period missing screen/creative rows to unknown; present counts show partial badges, complete coverage permits recorded zero. Added metric-specific unavailable cues without changing old DeliveryReport card values or summing profiles. Reporting-ui tests17/17 passed. QC cleared both findings. Coordinator restored the number formatter import accidentally removed during the fix; first corrected build failed on that import, final build passed including typecheck.
+**Verified:** Tester reran admin14/14 and reporting2/2 against final production build on4012. These test the uncommitted candidate based on `6ac4727`, not just that base. Initial candidate also passed16browser tests; new selector regressions cover the uncovered partial/availability cases. Indexes refreshed for final source.
+**Scope:** Phase2 dashboard/report parts/tabs/selectors, campaign detail and relevant tests. No server/billing/CV changes. Claude's minor lifecycle-button, unavailable chart style, circular helper imports and pre-existing phone sidebar notes remain nonblocking follow-ups.
+**Next:** Scoped commit/push, exact-SHA Firebase deployment and authenticated live campaign check.

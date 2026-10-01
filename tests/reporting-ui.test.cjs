@@ -162,3 +162,134 @@ test('no collection coverage exports unknown figures, never measured or delivery
   assert.equal(row[3], '');
   for (let i = 6; i < row.length; i++) assert.equal(row[i], '', `unknown column ${i} was fabricated`);
 });
+
+// Phase 2: headline selectors shared by the full report cards and the campaign dashboard.
+function metrics() {
+  const { lib } = fixture(), loadLib = require('./load-lib.cjs');
+  const mod = { exports: {} };
+  const code = ts.transpileModule(fs.readFileSync(path.join(root, 'components/views/report-metrics.ts'), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText;
+  new Function('require', 'module', 'exports', code)(name => name === '@/components/views/delivery-report' ? lib : name === '@/lib/utils' ? loadLib('utils') : require(name), mod, mod.exports);
+  return { lib, m: mod.exports };
+}
+// The card expressions exactly as DeliveryReport rendered them before the split (value, then hint), for comparison.
+function oldCards(lib, data, selectedAttention) {
+  const number = value => value.toLocaleString('en-IN'), formatAverage = c => (c.presence_n > 0 ? c.presence_sum / c.presence_n : null)?.toFixed(1) ?? 'Unmeasured';
+  const rows = [
+    ['plays_rendered', number(data.totals.plays_rendered), 'Completed paid play receipts'],
+    ['plays_billable', number(data.totals.plays_billable), 'Passed every billing check'],
+    ['plays_not_rendered', number(data.totals.plays_not_rendered), 'Paid receipts not rendered'],
+    ['plays_filler', number(data.totals.plays_filler), 'Separate from advertiser delivery'],
+    ['presence_avg', selectedAttention?.totals.body_observed_ms?lib.attentionPeopleRate(selectedAttention.totals.presence_person_ms,selectedAttention.totals.body_observed_ms).toFixed(1):selectedAttention?'Unavailable':formatAverage(data.totals), selectedAttention?`${(selectedAttention.totals.body_observed_ms/60000).toFixed(1)} body-observed min · ${selectedAttention.profile}`:`${number(data.totals.presence_n)} legacy measured / ${number(data.totals.plays_rendered)} paid plays`],
+    ['attention_avg_people', selectedAttention?.totals.attention_observed_ms?lib.attentionPeopleRate(selectedAttention.totals.looking_person_ms,selectedAttention.totals.attention_observed_ms).toFixed(1):'Unavailable', selectedAttention?`${(selectedAttention.totals.attention_observed_ms/60000).toFixed(1)} assessable min / ${(selectedAttention.totals.attention_unknown_ms/60000).toFixed(1)} unknown min`:'No accepted attention analytics'],
+    ['estimated_impressions', selectedAttention?.totals.body_observed_ms?number(selectedAttention.totals.estimated_impressions):'Unavailable', selectedAttention?`${(selectedAttention.totals.body_observed_ms/60000).toFixed(1)} body-observed min`:'No accepted attention analytics'],
+    ['attentive_impressions', selectedAttention?.totals.attention_observed_ms?number(selectedAttention.totals.attentive_impressions):'Unavailable', selectedAttention?`${(selectedAttention.totals.attention_observed_ms/60000).toFixed(1)} assessable min`:'No accepted attention analytics'],
+  ];
+  return Object.fromEntries(rows.map(([metric, value, hint]) => [metric, { value: data.coverage.started_at ? value : '—', hint: data.coverage.started_at ? hint : 'No daily summaries collected yet' }]));
+}
+function newCards(m, data, selected) {
+  return { plays_rendered: m.paidDeliveredCard(data), plays_billable: m.billableCard(data), plays_not_rendered: m.failedCard(data), plays_filler: m.fillerCard(data), presence_avg: m.presenceCard(data, selected), attention_avg_people: m.lookingCard(data, selected), estimated_impressions: m.estimatedImpressionsCard(data, selected), attentive_impressions: m.attentiveImpressionsCard(data, selected) };
+}
+
+test('headline selectors produce exactly the strings the old report cards showed', () => {
+  const { lib, m } = metrics();
+  const counted = { ...zero(), plays_rendered: 12345, plays_billable: 12000, plays_not_rendered: 3, plays_filler: 7, presence_sum: 25, presence_n: 10 };
+  const noBody = { ...attentionCounters(3), body_observed_ms: 0, attention_observed_ms: 0 };
+  const series = (name, counters) => ({ ...profilePage(1).attentionProfiles.series, profile: name, totals: counters });
+  const cases = {
+    legacyMeasured: page({ totals: counted }),
+    legacyUnmeasured: page({ totals: { ...counted, presence_n: 0, presence_sum: 0 } }),
+    notStarted: page({ totals: zero(), coverage: { started_at: null, complete: false } }),
+    profile: page({ totals: counted, attentionProfiles: { one: series('presence-v2/x', attentionCounters(4)) } }),
+    profileWithoutObservation: page({ totals: counted, attentionProfiles: { one: series('attention-v1/y', noBody) } }),
+    profileNotStarted: page({ totals: zero(), coverage: { started_at: null, complete: false }, attentionProfiles: { one: series('v1', attentionCounters(2)) } }),
+  };
+  for (const [name, data] of Object.entries(cases)) {
+    const { profile } = m.selectAttention(data, '');
+    assert.deepEqual(newCards(m, data, profile), oldCards(lib, data, profile), name);
+  }
+  assert.equal(m.presenceCard(cases.legacyUnmeasured).value, 'Unmeasured', 'legacy without measurement is not 0');
+  assert.equal(m.estimatedImpressionsCard(cases.legacyMeasured).value, 'Unavailable', 'no profile means unavailable impressions');
+  assert.equal(m.estimatedImpressionsCard(cases.profileWithoutObservation, m.selectAttention(cases.profileWithoutObservation, '').profile).value, 'Unavailable');
+  assert.equal(m.paidDeliveredCard(cases.notStarted).value, '—');
+  assert.equal(m.estimatedImpressionsCard(cases.profileNotStarted, m.selectAttention(cases.profileNotStarted, '').profile).value, '—');
+  assert.equal(m.paidDeliveredCard(cases.legacyMeasured).value, (12345).toLocaleString('en-IN'));
+  assert.equal(m.rowPeople(counted, undefined, false), '2.5');
+  assert.equal(m.rowPeople(counted, undefined, true), 'Unavailable', 'selected profile without a row is unavailable, not legacy');
+  assert.equal(m.rowPeople(counted, attentionCounters(4), true), (12000 / 32000).toFixed(2));
+});
+
+test('multiple profiles are selected one at a time and never summed', () => {
+  const { lib, m } = metrics();
+  const a = { ...profilePage(1).attentionProfiles.series, profile: 'attention-v1/a', totals: attentionCounters(3) };
+  const b = { ...profilePage(1).attentionProfiles.series, profile: 'presence-v2/b', totals: attentionCounters(7) };
+  const data = page({ attentionProfiles: { b, a } });
+  const first = m.selectAttention(data, '');
+  assert.deepEqual(first.keys, ['a', 'b']); assert.equal(first.key, 'a', 'default is the first sorted key, as before');
+  assert.equal(m.estimatedImpressionsCard(data, first.profile).value, '3');
+  const chosen = m.selectAttention(data, 'b');
+  assert.equal(m.estimatedImpressionsCard(data, chosen.profile).value, '7', 'selected profile only, not 3 + 7');
+  assert.deepEqual(newCards(m, data, chosen.profile), oldCards(lib, data, chosen.profile));
+  assert.equal(m.selectAttention(data, 'missing').key, 'a');
+  assert.deepEqual(m.profileCues(data, chosen.keys, chosen.profile).map(c => c.text), ['profile: presence-v2/b · 2 profiles']);
+  assert.deepEqual(m.profileCues(page({ attentionProfiles: { a } }), ['a'], a), [], 'one measured profile, complete coverage: no cue');
+});
+
+test('period breakdown plays distinguish partial rows, unknown rows, and complete zero', () => {
+  const { m } = metrics();
+  const partial = page({ coverage: { started_at: '2026-01-01T00:00:00Z', complete: false },
+    byScreen: { screen: { ...zero(), plays_rendered: 4 } }, byCreative: { creative: { ...zero(), plays_rendered: 7 } } });
+  assert.deepEqual(m.periodBreakdownPlays(partial, partial.byScreen.screen), { value: '4', cue: 'recorded · partial' });
+  assert.deepEqual(m.periodBreakdownPlays(partial, partial.byCreative.creative), { value: '7', cue: 'recorded · partial' });
+  assert.deepEqual(m.periodBreakdownPlays(partial), { value: '—', cue: 'unknown · partial' }, 'missing rows stay unknown before full period coverage');
+  const complete = page({ coverage: { started_at: '2026-01-01T00:00:00Z', complete: true } });
+  assert.deepEqual(m.periodBreakdownPlays(complete), { value: '0' }, 'a complete period proves a missing row means zero');
+  assert.deepEqual(m.periodBreakdownPlays(page({ coverage: { started_at: null, complete: false } })), { value: '—' });
+});
+
+test('profile cues explain unavailable impression and people headlines with one or no profile', () => {
+  const { m } = metrics();
+  const noBody = { ...profilePage(0).attentionProfiles.series, profile: 'presence-v2/no-observations', totals: attentionCounters(0) };
+  const oneProfile = page({ attentionProfiles: { one: noBody } });
+  assert.deepEqual(m.profileCues(oneProfile, ['one'], noBody, 'impressions').map(c => c.text), ['no body observations']);
+  assert.deepEqual(m.profileCues(oneProfile, ['one'], noBody, 'people').map(c => c.text), ['no body observations']);
+  const noMeasurements = page();
+  assert.deepEqual(m.profileCues(noMeasurements, [], undefined, 'impressions').map(c => c.text), ['no accepted profile data']);
+  assert.deepEqual(m.profileCues(noMeasurements, [], undefined, 'people').map(c => c.text), ['no presence measurements']);
+  const legacyMeasured = page({ totals: { ...zero(), presence_n: 2, presence_sum: 3 } });
+  assert.deepEqual(m.profileCues(legacyMeasured, [], undefined, 'impressions').map(c => c.text), ['no accepted profile data']);
+  assert.deepEqual(m.profileCues(legacyMeasured, [], undefined, 'people'), [], 'available legacy people averages need no unavailable cue');
+});
+
+test('dashboard cues show partial, unstarted and invalid-time coverage next to the value', () => {
+  const { m } = metrics();
+  assert.deepEqual(m.playsCues(page()), []);
+  assert.deepEqual(m.playsCues(page({ coverage: { started_at: '2026-01-01T00:00:00Z', complete: false } })).map(c => c.text), ['partial']);
+  assert.deepEqual(m.playsCues(page({ coverage: { started_at: null, complete: false } })).map(c => c.text), ['no daily summaries yet']);
+  assert.deepEqual(m.playsCues(page({ totals: { ...zero(), plays_time_invalid: 1200 } })).map(c => c.text), [`${(1200).toLocaleString('en-IN')} receipts had invalid times`]);
+});
+
+test('spend card keeps lifetime spend, labels a redacted budget and never invents spend', () => {
+  const { m } = metrics();
+  const own = m.spendCard({ accrued_spend: 850, committed_budget: 1000 }, false, '₹1.00 per play');
+  assert.equal(own.value, '₹850'); assert.equal(own.pct, 85); assert.equal(own.bar, true); assert.equal(own.hot, true);
+  assert.equal(own.hint, 'of ₹1,000 · independent of report dates · new bookings: ₹1.00 per play');
+  assert.deepEqual(own.cues.map(c => c.text), ['Lifetime']);
+  const scoped = m.spendCard({ accrued_spend: 0.93, reporting_scope: 'organisation' }, true, '—');
+  assert.equal(scoped.label, 'Lifetime gross on your screens'); assert.equal(scoped.bar, false, 'no budget bar without a visible budget');
+  assert.deepEqual(scoped.cues.map(c => c.text), ['Lifetime', 'your screens only']);
+  const hidden = m.spendCard({ committed_budget: 1000 }, false, '—');
+  assert.equal(hidden.value, 'Unavailable'); assert.equal(hidden.bar, false); assert.deepEqual(hidden.cues.map(c => c.text), ['Lifetime', 'not visible to you']);
+});
+
+test('dashboard daily series keep missing days as gaps and use one profile', () => {
+  const { m } = metrics();
+  const period = { from: '2026-01-01', to: '2026-01-03' };
+  const legacy = { ...page({ coverage: { started_at: '2026-01-01T18:30:00Z', complete: false } }), daily: [{ date: '2026-01-02', ...zero(), plays_rendered: 4, presence_n: 2, presence_sum: 3 }, { date: '2026-01-03', ...zero(), plays_rendered: 5 }], hourly: [] };
+  assert.deepEqual(m.dailyPlayRows(legacy, period).map(r => r.value), [null, 4, 5], 'before coverage is a gap, recorded plays as-is');
+  assert.deepEqual(m.dailyPeopleRows(legacy, period).map(r => r.value), [null, 1.5, null], 'unmeasured day is a gap, not zero');
+  assert.deepEqual(m.dailyImpressionRows(legacy, period).map(r => r.value), [null, null, null]);
+  assert.equal(m.hasValues(m.dailyImpressionRows(legacy, period)), false, 'switcher disables impressions without a profile');
+  const profile = profilePage(2).attentionProfiles.series;
+  assert.deepEqual(m.dailyPeopleRows(legacy, period, profile).map(r => r.value), [null, 6000 / 16000, null]);
+  assert.deepEqual(m.dailyImpressionRows(legacy, period, profile).map(r => r.value), [null, 2, null]);
+});
