@@ -173,6 +173,8 @@ function MediaPlaceholder({ image, label }: { image: boolean; label: string }) {
 function CreativeCard({ c, used, ended, canManage, onEdit, onChanged }: { c: any; used: number; ended: number; canManage: boolean; onEdit: () => void; onChanged: () => unknown }) {
   const [step, setStep] = useState<'idle' | 'confirm' | 'upload'>('idle');
   const m = mediaOf(c), image = c.media_type === 'image';
+  const hasUploads=Array.isArray(c.assets)&&c.assets.length>0, youtubeOnly=!!c.youtube_id&&!hasUploads;
+  const uploadLabel=hasUploads?'Add variation':youtubeOnly?'Replace active media':'Upload media';
   const warning = `Uploading a new file sends this creative back to review. It needs approval before it can play in any of its ${plural(used, 'unended visible campaign')}.`;
   return <Card role="group" aria-label={`Creative ${c.name}`} className="flex h-full flex-col gap-2 p-3">
     {c.youtube_id && !m.variations ? <Thumb id={c.youtube_id} className="!w-full" />
@@ -188,14 +190,14 @@ function CreativeCard({ c, used, ended, canManage, onEdit, onChanged }: { c: any
     <div className="text-[12px] text-muted-foreground">Used in {plural(used, 'visible campaign')}{ended > 0 && <span> · +{ended} ended</span>}</div>
     {canManage && step === 'idle' && <div className="mt-auto flex flex-wrap gap-2 pt-1">
       <Button size="sm" variant="outline" aria-label={`Edit creative ${c.name}`} onClick={onEdit}>Edit</Button>
-      <Button size="sm" variant="outline" aria-label={`Upload file for ${c.name}`} onClick={() => setStep(used > 0 ? 'confirm' : 'upload')}>Upload file</Button>
+      <Button size="sm" variant="outline" aria-label={`${uploadLabel} for ${c.name}`} onClick={() => setStep(used > 0 ? 'confirm' : 'upload')}>{uploadLabel}</Button>
     </div>}
     {canManage && step !== 'idle' && used > 0 && <p role="note" className="rounded-md bg-warn/12 p-2 text-[12px] text-warn">{warning}</p>}
     {canManage && step === 'confirm' && <div className="flex flex-wrap gap-2">
       <Button size="sm" onClick={() => setStep('upload')}>Continue to upload</Button>
       <Button size="sm" variant="ghost" onClick={() => setStep('idle')}>Cancel</Button>
     </div>}
-    {canManage && step === 'upload' && <CreativeUpload creativeId={c.id} mediaType={image ? 'image' : 'video'} defaultOpen className="min-w-0 max-w-none"
+    {canManage && step === 'upload' && <CreativeUpload creativeId={c.id} mediaType={image ? 'image' : 'video'} imageDuration={c.duration_s} replaceMode={youtubeOnly?'replace_all':'append'} operationLabel={uploadLabel} defaultOpen className="min-w-0 max-w-none"
       onClose={() => setStep('idle')} onUploaded={() => onChanged()} />}
   </Card>;
 }
@@ -238,7 +240,7 @@ export function NewCreative({ a, onChanged, onClose, onCreated }: { a: any; onCh
           {upload === 'done' && <p className="mb-3 text-sm">“{created.name}” now has its {label}. It awaits platform approval before it can play.</p>}
           {upload === 'failed' && <p role="alert" className="mb-3 text-sm text-destructive">The upload did not complete{uploadError ? `: ${uploadError}` : ''}. “{created.name}” was kept and shows as “No media yet” in the library. Try again here or from its card.</p>}
           {upload === 'skipped' && <p className="mb-3 text-sm">No file was uploaded. “{created.name}” is in the library as “No media yet”. Use Upload file on its card when the file is ready.</p>}
-          {upload !== 'skipped' && <CreativeUpload creativeId={created.id} mediaType={label} defaultOpen hideUploadError
+          {upload !== 'skipped' && <CreativeUpload creativeId={created.id} mediaType={label} imageDuration={created.duration_s} defaultOpen hideUploadError operationLabel="Upload media"
             onUploaded={async () => { setUpload('done'); setUploadError(''); await onChanged(); }}
             onError={message => { setUpload('failed'); setUploadError(message); }}
             onClose={() => setUpload(u => u === 'done' ? u : 'skipped')} />}

@@ -13,37 +13,67 @@ import {Thumb, Empty} from './bits';
 import {CreativeUpload} from './creative-upload';
 import {AdvertiserWorkspace} from './advertiser-workspace';
 function CreativeEditor({row,onClose,onChanged}:{row:any;onClose:()=>void;onChanged:()=>void}) {
-  const [f,setF]=useState({name:row.name??'',category:row.category??'general',url:row.youtube_id??'',duration:String(row.duration_s??(row.media_type==='image'?20:10))});
-  const [error,setError]=useState(''),[busy,setBusy]=useState(false);
-  const uploaded=!!row.assets?.length, image=row.media_type==='image';
+  type Source = 'youtube'|'video'|'image';
+  const hasAssets=Array.isArray(row.assets)&&row.assets.length>0;
+  const currentSource:Source=row.media_type==='image'?'image':hasAssets?'video':row.youtube_id&&row.purpose!=='filler'?'youtube':'video';
+  const [f,setF]=useState<{name:string;category:string;source:Source;url:string;youtubeDuration:string;imageDuration:string}>({
+    name:row.name??'',category:row.category??'general',source:currentSource,url:currentSource==='youtube'?row.youtube_id??'':'',
+    youtubeDuration:String(currentSource==='youtube'?row.duration_s??10:10),imageDuration:String(row.media_type==='image'?row.duration_s??20:20),
+  });
+  const [error,setError]=useState(''),[busy,setBusy]=useState(false),[uploading,setUploading]=useState(false),[fileSelected,setFileSelected]=useState(false);
+  const hasCurrentMedia=hasAssets||!!row.youtube_id;
+  const pendingUploadSwitch=f.source!=='youtube'&&f.source!==currentSource;
+  const uploadMetadata={...(f.name.trim()!==row.name?{name:f.name.trim()}:{}),...(f.category.trim()!==(row.category??'general')?{category:f.category.trim()}:{})};
   const save=async()=>{setError('');setBusy(true);try{
     const patch:any={};
     if(f.name.trim()!==row.name)patch.name=f.name.trim();
     if(f.category.trim()!==(row.category??'general'))patch.category=f.category.trim();
-    if(image && Number(f.duration)!==row.duration_s) {
-      if(!Number.isFinite(Number(f.duration))||Number(f.duration)<1||Number(f.duration)>600)throw new Error('Image display time must be between 1 and 600 seconds.');
-      patch.duration_s=Number(f.duration);
-    }
-    if(!uploaded&&!image&&row.purpose!=='filler'){
+    if(f.source==='youtube') {
+      if(row.purpose==='filler')throw new Error('Filler must use uploaded media.');
       const id=f.url.trim()?ytId(f.url.trim()):'';
-      if(f.url.trim()&&!id)throw new Error('Enter a valid YouTube URL or video ID.');
-      if(row.youtube_id&&!id)throw new Error('Enter a YouTube video; the existing source cannot be removed here.');
-      if(id&&id!==row.youtube_id)patch.youtube_id=id;
-      if(id&&Number(f.duration)!==row.duration_s)patch.duration_s=Number(f.duration);
+      const duration=Number(f.youtubeDuration);
+      const youtubeChanged=currentSource!=='youtube'||id!==row.youtube_id||duration!==Number(row.duration_s??10);
+      if(youtubeChanged) {
+        if(!id)throw new Error('Enter a valid YouTube URL or video ID.');
+        if(!Number.isFinite(duration)||duration<=0||duration>86400)throw new Error('Enter an expected video duration greater than zero.');
+        patch.source='youtube';patch.youtube_id=id;patch.duration_s=duration;
+      }
+    } else if(currentSource==='image'&&f.source==='image'&&Number(f.imageDuration)!==row.duration_s) {
+      const duration=Number(f.imageDuration);
+      if(!Number.isFinite(duration)||duration<1||duration>600)throw new Error('Image display time must be between 1 and 600 seconds.');
+      patch.duration_s=duration;
     }
     await api(`/creative/${row.id}`,patch);await onChanged();onClose();
   }catch(e){setError((e as Error).message);}finally{setBusy(false);}};
+  const image=f.source==='image';
   return <Card className="mb-4 p-5" aria-label="Edit creative"><h3 className="mb-3 font-semibold">Edit creative</h3>
     <div className="grid gap-3 sm:grid-cols-2">
-      <Field label="Name"><Input aria-label="Edit creative name" maxLength={200} value={f.name} onChange={e=>setF({...f,name:e.target.value})}/></Field>
-      <Field label="Category"><Input aria-label="Edit creative category" maxLength={200} value={f.category} onChange={e=>setF({...f,category:e.target.value})}/></Field>
-      {image&&<Field label="Display seconds"><Input aria-label="Edit creative duration" type="number" min="1" max="600" step="0.1" value={f.duration} onChange={e=>setF({...f,duration:e.target.value})}/></Field>}
-      {!uploaded&&!image&&row.purpose!=='filler'&&<><Field label="YouTube URL or video ID"><Input aria-label="Edit creative video" value={f.url} onChange={e=>setF({...f,url:e.target.value})}/></Field><Field label="Expected seconds"><Input aria-label="Edit creative duration" type="number" min="0.001" max="86400" step="any" value={f.duration} onChange={e=>setF({...f,duration:e.target.value})}/></Field></>}
+      <Field label="Name"><Input disabled={uploading||busy} aria-label="Edit creative name" maxLength={200} value={f.name} onChange={e=>setF({...f,name:e.target.value})}/></Field>
+      <Field label="Category"><Input disabled={uploading||busy} aria-label="Edit creative category" maxLength={200} value={f.category} onChange={e=>setF({...f,category:e.target.value})}/></Field>
+      <Field label="Media source"><Select disabled={uploading||busy} aria-label="Edit creative source" value={f.source} onChange={e=>{setFileSelected(false);setF({...f,source:e.target.value as Source});}}>
+        <option value="video">Upload video · MP4 / WebM</option><option value="image">Upload image · PNG / JPEG / WebP</option>
+        {row.purpose!=='filler'&&<option value="youtube">YouTube · online only</option>}
+      </Select></Field>
+      {f.source==='youtube'&&<>
+        <Field label="YouTube URL or video ID"><Input disabled={uploading||busy} aria-label="Edit creative video" value={f.url} onChange={e=>setF({...f,url:e.target.value})}/></Field>
+        <Field label="Expected seconds"><Input disabled={uploading||busy} aria-label="Edit creative duration" type="number" min="0.001" max="86400" step="any" value={f.youtubeDuration} onChange={e=>setF({...f,youtubeDuration:e.target.value})}/></Field>
+      </>}
+      {image&&<Field label="Display seconds"><Input disabled={uploading||busy} aria-label="Edit creative duration" type="number" min="1" max="600" step="0.1" value={f.imageDuration} onChange={e=>setF({...f,imageDuration:e.target.value})}/></Field>}
     </div>
-    <p className="mt-3 text-sm text-muted-foreground">Category, media or display-time changes require platform approval again and pause new delivery of this creative until approved. Renaming keeps its approval.</p>
-    {uploaded&&<p className="mt-2 text-sm text-muted-foreground">{image?"Image dimensions come from the uploaded file. Its visible display time is set above.":"Video dimensions and duration come from the uploaded file."} Use Upload {image?"image":"video"} on the row to add a variation.</p>}
+    {f.source==='youtube'
+      ? <p className="mt-3 text-sm text-muted-foreground">YouTube duration is self-reported. Saving this source replaces active uploaded media; the new source returns to platform review.</p>
+      : <div className="mt-3 space-y-2">
+        {pendingUploadSwitch&&<p role="note" className="text-sm text-muted-foreground">Upload a {image?'still image':'video'} to finish switching sources. The current source stays active until the file verifies.</p>}
+        {image&&<p className="text-sm text-muted-foreground">Image dimensions are verified from the file. Display time is set above (default 20 seconds).</p>}
+        {f.source==='video'&&hasAssets&&<p className="text-sm text-muted-foreground">Uploaded video dimensions and duration are verified from the file and cannot be edited here.</p>}
+        <p className="text-sm text-muted-foreground">{hasCurrentMedia?'The current source remains active unless a replacement upload verifies successfully. A successful upload replaces all active media versions.':'Upload a verified media file. It will need platform approval before it can play.'}</p>
+        <CreativeUpload key={`${row.id}:${f.source}`} creativeId={row.id} mediaType={image?'image':'video'} defaultOpen replaceMode="replace_all"
+          imageDuration={Number(f.imageDuration)} metadata={uploadMetadata} operationLabel={hasCurrentMedia?'Save changes & replace active media':'Save changes & upload media'}
+          disabled={busy} onFileSelected={setFileSelected} onBusyChange={setUploading} onUploaded={()=>{onClose();void Promise.resolve(onChanged()).catch(()=>undefined);}} onClose={onClose}/>
+      </div>}
+    <p className="mt-3 text-sm text-muted-foreground">Category, source and display-time changes require platform approval again. Renaming alone keeps approval. Uploads are checked before replacing the active source.</p>
     {error&&<p role="alert" className="mt-3 text-sm text-destructive">{error}</p>}
-    <div className="mt-3 flex gap-2"><Button disabled={busy||!f.name.trim()||!f.category.trim()} onClick={save}>{busy?'Saving…':'Save creative'}</Button><Button disabled={busy} variant="outline" onClick={onClose}>Cancel</Button></div>
+    <div className="mt-3 flex gap-2"><Button disabled={busy||uploading||fileSelected||pendingUploadSwitch||!f.name.trim()||!f.category.trim()} onClick={save}>{busy?'Saving…':'Save creative'}</Button><Button disabled={busy||uploading} variant="outline" onClick={onClose}>Cancel</Button></div>
   </Card>;
 }
 export function Creatives({ d, user, orgId, onChanged }: { d: any; user: SessionUser; orgId: string | null; onChanged: () => void }) {
@@ -104,7 +134,7 @@ export function Creatives({ d, user, orgId, onChanged }: { d: any; user: Session
       { label: 'Length', num: true, render: (c: any) => c.media_type==='image'?`${c.duration_s??20}s display`:c.assets?.length?<span className="text-xs">{c.assets.map((a:any)=>`${a.duration_s ?? (a.duration_ms/1000)}s`).join(' / ')}</span>:c.duration_s?`${c.duration_s}s (reported)`:'—' },
       { label: 'Approval', render: (c: any) => <Badge variant={c.approval_status === 'approved' ? 'ok' : c.approval_status === 'rejected' ? 'destructive' : 'warn'}>{c.approval_status}</Badge> },
       { label: 'Edit', render: (c:any) => can(user.role,'sales')&&(user.role==='platform_admin'||c.org_id===user.org_id)?<Button size="sm" variant="outline" aria-label={`Edit creative ${c.name}`} onClick={()=>setEditing(c)}>Edit</Button>:null },
-      { label: 'Media', render: (c:any) => (user.role==='platform_admin'||c.org_id===user.org_id)?<CreativeUpload creativeId={c.id} mediaType={c.media_type==='image'?'image':'video'} onUploaded={()=>onChanged()}/>:<span className="text-xs text-muted-foreground">Managed by originating organisation</span> },
+      { label: 'Media', render: (c:any) => (user.role==='platform_admin'||c.org_id===user.org_id)?<CreativeUpload creativeId={c.id} mediaType={c.media_type==='image'?'image':'video'} imageDuration={c.duration_s} replaceMode={c.youtube_id&&!c.assets?.length?'replace_all':'append'} operationLabel={c.youtube_id&&!c.assets?.length?'Replace active media':c.assets?.length?'Add variation':'Upload media'} onUploaded={()=>onChanged()}/>:<span className="text-xs text-muted-foreground">Managed by originating organisation</span> },
       { label: 'Review', render: (c:any) => user.role==='platform_admin' ? <div className="flex gap-2">{['approved','rejected'].map(status=><Button key={status} size="sm" variant="outline" disabled={busy||c.approval_status===status} onClick={async()=>{setBusy(true);setErr('');try{await api(`/creative/${c.id}/approve`,{status});await onChanged();}catch(e){setErr((e as Error).message);}finally{setBusy(false);}}}>{status==='approved'?'Approve':'Reject'}</Button>)}</div> : <span className="text-[12px] text-muted-foreground">Reviewed by Gridcast</span> },
     ]} rows={d.creatives} facets={[{label:'Purpose',get:(c:any)=>c.purpose==='filler'?'Filler':'Paid ad'},{label:'Media',get:(c:any)=>c.media_type==='image'?'Image':'Video'}]} rowId={(c: any) => c.id} exportName="creatives" />
   </>);

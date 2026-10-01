@@ -340,9 +340,16 @@ test('creative editing protects ownership, media provenance and approval while r
  assert.equal(edited.approval_status,'pending');assert.equal(edited.youtube_id,'abcdefghijk');assert.equal(edited.metadata_source,'operator_declared');assert.equal(edited.approved_at,undefined);
  assert.ok(f.data().campaigns.find(c=>c.id==='cmp_1').creative_ids.includes(id));
  assert.ok(f.data().audit.some(a=>a.action===`creative/${id}`));
- f.change(d=>{d.creatives.find(c=>c.id===id).assets=[{id:'asset',duration_s:12}];});
+ f.change(d=>{const c=d.creatives.find(c=>c.id===id);c.assets=[{id:'asset',duration_s:12}];c.approval_status='approved';c.approved_at='2026-10-01T00:00:00.000Z';d.assets=[{id:'asset',creative_id:id,org_id:c.org_id,storage_path:'media/org_sec17/old.mp4'}];});
  expectStatus(await f.call('POST',`creative/${id}`,{duration_s:20},admin),400);
  expectStatus(await f.call('POST',`creative/${id}`,{youtube_id:'lmnopqrstuv'},admin),400);
+ const before=structuredClone(f.data());
+ expectStatus(await f.call('POST',`creative/${id}`,{source:'youtube',duration_s:20},admin),400);
+ assert.deepEqual(f.data(),before,'an old YouTube id beside active assets must not be revived implicitly');
+ const switched=expectStatus(await f.call('POST',`creative/${id}`,{source:'youtube',youtube_id:'lmnopqrstuv',duration_s:20},admin),200);
+ assert.equal(switched.media_type,'video');assert.equal(switched.youtube_id,'lmnopqrstuv');assert.deepEqual(switched.assets,[]);
+ assert.equal(switched.approval_status,'pending');assert.equal(switched.approved_at,undefined);
+ assert.equal(f.data().assets[0].storage_path,'media/org_sec17/old.mp4','historical asset rows are retained');
  expectStatus(await f.call('POST',`creative/${id}`,{name:'Uploaded renamed'},admin),200);
  f.change(d=>{d.advertisers.find(a=>a.id===original.advertiser_id).status='archived';});
  expectStatus(await f.call('POST',`creative/${id}`,{name:'Blocked'},admin),409);

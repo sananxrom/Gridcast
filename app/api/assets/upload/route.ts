@@ -12,6 +12,8 @@ export async function POST(req: NextRequest) {
   let stored: any;
   try {
     const form = await req.formData(), file = form.get('file'), creativeId = String(form.get('creative_id') || '');
+    const replaceMode = String(form.get('replace_mode') || 'append');
+    if (!['append','replace_all'].includes(replaceMode)) return NextResponse.json({error:'Choose whether to add a variation or replace active media'},{status:400});
     const permission = await handle('GET',['creative',creativeId,'asset'],new URLSearchParams(),{},token);
     if ((permission.status || 200) >= 400) return NextResponse.json(permission.body,{status:permission.status});
     if (!(file instanceof File) || !file.size || file.size > MAX_VIDEO_BYTES) return NextResponse.json({error:'Select a video up to 25 MB or a still image up to 10 MB'},{status:400});
@@ -20,10 +22,17 @@ export async function POST(req: NextRequest) {
     if (!ext) return NextResponse.json({error:'Use MP4 / WebM video or static PNG / JPEG / WebP images'},{status:400});
     const image = ext === 'png' || ext === 'jpg' || ext === 'webp';
     if (image && file.size > MAX_IMAGE_BYTES) return NextResponse.json({error:'Maximum image size is 10 MB'},{status:413});
-    const bytes = Buffer.from(await file.arrayBuffer()), inspected = image ? await inspectImage(bytes,ext) : {...await inspectVideo(bytes,ext),media_type:'video'};
+    const bytes = Buffer.from(await file.arrayBuffer());
+    const inspected = image
+      ? {...await inspectImage(bytes,ext),duration_s:Number(form.get('image_duration_s') ?? (permission.body.media_type==='image' ? permission.body.duration_s : 20) ?? 20)}
+      : {...await inspectVideo(bytes,ext),media_type:'video'};
+    if (image && (!Number.isFinite(inspected.duration_s) || inspected.duration_s < 1 || inspected.duration_s > 600))
+      return NextResponse.json({error:'Image display time must be between 1 and 600 seconds'},{status:400});
     stored = await storeVideo(bytes,permission.body.org_id,ext);
     const asset = {...stored,...inspected,org_id:permission.body.org_id,creative_id:creativeId,sha256:createHash('sha256').update(bytes).digest('hex'),created_at:new Date().toISOString()};
-    const result = await handle('POST',['creative',creativeId,'asset'],new URLSearchParams(),{proof:sealMedia(asset,'upload')},token);
+    const commit:any={proof:sealMedia(asset,'upload'),replace_mode:replaceMode};
+    for (const key of ['name','category']) if (form.has(key)) commit[key]=String(form.get(key) ?? '');
+    const result = await handle('POST',['creative',creativeId,'asset'],new URLSearchParams(),commit,token);
     if ((result.status || 200)>=400) await removeVideo(stored.storage_path);
     return NextResponse.json(result.body,{status:result.status || 201});
   } catch(e) {

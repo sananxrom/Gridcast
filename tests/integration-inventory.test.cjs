@@ -127,6 +127,31 @@ test('asset metadata cannot be forged through creative body, unsigned proof, wro
  const assetAudit=f.data().audit.find(a=>a.entity==='assets'&&a.entity_id==='asset_test');assert.ok(assetAudit);assert.equal(assetAudit.actor_id,'u_op1');assert.ok(assetAudit.diff.storage_path.changed);assert.ok(!JSON.stringify(assetAudit).includes(asset.storage_path));
 });
 
+test('creative source replacement is atomic, clears active stale media, and retains historical assets',async()=>{
+ const f=fixture(),t=f.token('u_op1'),admin=f.token('u_admin');
+ const cr=expectStatus(await f.call('POST','creative',{org_id:'org_sec17',advertiser_id:'adv_fitline',name:'Old YouTube source',category:'fitness',youtube_id:'abcdefghijk',duration_s:12},t),200);
+ const old={id:'old_video',asset_id:'old_video',creative_id:cr.id,org_id:cr.org_id,media_type:'video',duration_s:12,width:1920,height:1080,aspect:'1920:1080',storage_path:'media/org_sec17/old.mp4',mime:'video/mp4',bytes:100,metadata_source:'server_ffprobe'};
+ f.change(d=>{const c=d.creatives.find(x=>x.id===cr.id);c.assets=[{...old,uri:'gridcast:old_video'}];c.approval_status='approved';c.approved_at='2026-10-01T00:00:00.000Z';d.assets||=[];d.assets.push(old);});
+ const before=f.data();
+ expectStatus(await f.call('POST',`creative/${cr.id}/asset`,{proof:'invalid',replace_mode:'replace_all',name:'Replacement'},t),400);
+ assert.deepEqual(f.data(),before,'invalid proof must leave the approved source and metadata untouched');
+ const missingYoutube=await f.call('POST',`creative/${cr.id}`,{source:'youtube',duration_s:12},t);
+ assert.equal(missingYoutube.status,400,'stale YouTube metadata beside active uploads is never revived');
+ assert.deepEqual(f.data(),before);
+
+ const image={id:'new_image',asset_id:'new_image',creative_id:cr.id,org_id:cr.org_id,media_type:'image',duration_s:24,width:1080,height:1920,aspect:'1080:1920',storage_path:'media/org_sec17/new.png',mime:'image/png',bytes:200,metadata_source:'server_image'};
+ const replaced=expectStatus(await f.call('POST',`creative/${cr.id}/asset`,{proof:f.media.sealMedia(image,'upload'),replace_mode:'replace_all',name:'New image',category:'health'},t),201).creative;
+ assert.equal(replaced.name,'New image');assert.equal(replaced.category,'health');assert.equal(replaced.media_type,'image');assert.equal(replaced.duration_s,24);
+ assert.equal(replaced.youtube_id,undefined);assert.deepEqual(replaced.assets.map(a=>a.asset_id),['new_image']);
+ assert.equal(replaced.approval_status,'pending');assert.equal(replaced.approved_at,undefined);
+ assert.equal(f.data().assets.some(a=>a.asset_id==='old_video'),true,'replaced storage/history rows are retained');
+ expectStatus(await f.call('POST',`creative/${cr.id}/approve`,{},admin),200);
+ const alternate={...image,id:'alternate_image',asset_id:'alternate_image',width:1920,height:1080,aspect:'1920:1080',storage_path:'media/org_sec17/alternate.png'};
+ const varied=expectStatus(await f.call('POST',`creative/${cr.id}/asset`,{proof:f.media.sealMedia(alternate,'upload'),replace_mode:'append'},t),201).creative;
+ assert.deepEqual(varied.assets.map(a=>a.asset_id),['new_image','alternate_image']);
+ assert.equal(varied.approval_status,'pending');assert.equal(varied.approved_at,undefined);
+});
+
 test('privacy removes every old frame route and never returns retained frame payloads',async()=>{
  const f=fixture(),{screen}=await onboard(f);f.change(db=>db.devices.push({id:'legacy',org_id:'org_sec17',screen_id:screen.id,status:'online',last_heartbeat_at:new Date().toISOString(),frame:'data:image/jpeg;base64,private',frame_url:'private',preview_frame:'private'}));
  expectStatus(await f.call('POST',`screen/${screen.id}/frame`,{frame:'bad'},f.token('u_op1')),404);
@@ -191,7 +216,7 @@ test('one real admin identity completes an empty-org commercial journey through 
 
  test('image duration defaults20, uploaded evidence stays verified, changes require reapproval',async()=>{
  const f=fixture(),t=f.token('u_op1');const cr=expectStatus(await f.call('POST','creative',{org_id:'org_sec17',advertiser_id:'adv_fitline',name:'Still image',category:'fitness',media_type:'image'},t),200);assert.equal(cr.duration_s,20);
- const asset={id:'image_test',asset_id:'image_test',creative_id:cr.id,org_id:'org_sec17',media_type:'image',width:1920,height:1080,aspect:'1920:1080',storage_path:'media/org_sec17/image_test.png',mime:'image/png',bytes:100,sha256:'a'.repeat(64),metadata_source:'server_image'};
+ const asset={id:'image_test',asset_id:'image_test',creative_id:cr.id,org_id:'org_sec17',media_type:'image',duration_s:20,width:1920,height:1080,aspect:'1920:1080',storage_path:'media/org_sec17/image_test.png',mime:'image/png',bytes:100,sha256:'a'.repeat(64),metadata_source:'server_image'};
  expectStatus(await f.call('POST',`creative/${cr.id}/asset`,{proof:f.media.sealMedia(asset,'upload')},t),201);
  expectStatus(await f.call('POST',`creative/${cr.id}/approve`,{},f.token('u_admin')),200);
  const changed=expectStatus(await f.call('POST',`creative/${cr.id}`,{duration_s:25},t),200);assert.equal(changed.duration_s,25);assert.equal(changed.approval_status,'pending');assert.equal(changed.assets[0].metadata_source,'server_image');

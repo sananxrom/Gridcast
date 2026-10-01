@@ -315,11 +315,20 @@ export function authorize(db: any, actor: any, method: string, seg: string[], in
   if (entity === 'creative' && id) {
     const creative = own(db.creatives, id, actor);
     if (method === 'POST' && !action) {
-      rejectUnknown(body, ['name','category','youtube_id','duration_s']);
-      if (creative.assets?.length && ('youtube_id' in body || ('duration_s' in body && creative.media_type !== 'image'))) fail(400, 'Uploaded video metadata cannot be edited; upload a new variation instead');
+      rejectUnknown(body, ['name','category','source','youtube_id','duration_s']);
+      if ('source' in body && body.source !== 'youtube') fail(400, 'Choose YouTube or upload a verified media file');
+      const existingYoutubeEdit = body.source === undefined && creative.media_type !== 'image' && !creative.assets?.length && !!creative.youtube_id;
+      if ('youtube_id' in body && body.source !== 'youtube' && !existingYoutubeEdit)
+        fail(400, 'Choose YouTube as the creative source before setting a video ID');
+      if ('duration_s' in body && body.source !== 'youtube' && !existingYoutubeEdit && creative.media_type !== 'image')
+        fail(400, 'Uploaded video metadata comes from the file. Choose YouTube to change the source.');
+      if ((body.source === 'youtube' || existingYoutubeEdit) && creative.purpose === 'filler') fail(400, 'Filler must use uploaded media');
     }
     if (method === 'POST' && db.advertisers.some((a: any) => a.id === creative.advertiser_id && a.status === 'archived')) fail(409, 'Restore this advertiser before changing creatives');
-    if (action === 'asset' && method === 'POST') rejectUnknown(body,['proof']);
+    if (action === 'asset' && method === 'POST') {
+      rejectUnknown(body,['proof','replace_mode','name','category']);
+      if (body.replace_mode !== undefined && !['append','replace_all'].includes(body.replace_mode)) fail(400,'Choose whether to add a variation or replace active media');
+    }
     if (action === 'approve' && !['approved','rejected','pending'].includes(body.status || 'approved')) fail(400, 'Unknown approval state');
   }
   if (entity === 'screen' && id) {

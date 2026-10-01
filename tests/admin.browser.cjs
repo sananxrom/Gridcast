@@ -4,6 +4,7 @@ const fs=require('node:fs');
 const {chromium}=require('playwright');
 const base=process.env.GC_UI_TEST_URL||'http://127.0.0.1:4012';
 const executablePath=[process.env.GC_TEST_BROWSER_PATH,chromium.executablePath(),'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].filter(Boolean).find(fs.existsSync);
+const multipartField=(data,name)=>new RegExp(`name="${name}"\\r\\n\\r\\n([^\\r\\n]*)`).exec(data||'')?.[1];
 async function harness(role='platform_admin') {
  const browser=await chromium.launch({executablePath,headless:true}); const page=await browser.newPage({viewport:{width:1440,height:1000}});
  const user={id:'admin',org_id:'gridcast',role,name:'Fixture Admin',orgName:'Gridcast'};
@@ -20,8 +21,18 @@ async function harness(role='platform_admin') {
   else if(path==='/advertiser'&&body){result={id:'adv-'+advertisers.length,status:'active',...body};advertisers.push(result);}
   else if(path.startsWith('/advertiser/')&&body){const a=advertisers.find(a=>a.id===path.split('/')[2]);if(path.endsWith('/archive'))a.status='archived';else if(path.endsWith('/restore'))a.status='active';else Object.assign(a,body);result=a;}
   else if(path==='/creative'&&body){result={id:'cr-'+creatives.length,approval_status:'pending',...body};creatives.push(result);}
-  else if(path.startsWith('/creative/')&&body){result=creatives.find(c=>c.id===path.split('/')[2]);if(path.endsWith('/approve'))result.approval_status=body.status;else Object.assign(result,body);}
-  else if(path==='/assets/upload'){result={asset:{duration_s:10,width:1280,height:720}};}
+  else if(path.startsWith('/creative/')&&body){result=creatives.find(c=>c.id===path.split('/')[2]);if(path.endsWith('/approve'))result.approval_status=body.status;else if(body.source==='youtube'){
+    Object.assign(result,{media_type:'video',youtube_id:body.youtube_id, duration_s:body.duration_s,...body,assets:[],approval_status:'pending'});delete result.approved_at;delete result.source;
+   }else Object.assign(result,body);}
+  else if(path==='/assets/upload'){
+   const creativeId=multipartField(body.multipart,'creative_id'),replaceMode=multipartField(body.multipart,'replace_mode');
+   const filename=body.multipart.match(/filename="([^"]+)"/)?.[1]??'';
+   const asset={id:`asset-${creativeId}-${requests.length}`,duration_s:10,width:1280,height:720,media_type:/\.(png|jpe?g|webp)$/i.test(filename)?'image':'video'};
+   result={asset};
+   if(replaceMode==='replace_all'){
+    const creative=creatives.find(c=>c.id===creativeId);if(creative){for(const key of ['name','category']){const value=multipartField(body.multipart,key);if(value!==undefined)creative[key]=value;}creative.assets=[asset];creative.media_type=asset.media_type;delete creative.youtube_id;creative.duration_s=asset.media_type==='image'?Number(multipartField(body.multipart,'image_duration_s')||20):asset.duration_s;creative.approval_status='pending';delete creative.approved_at;result.creative={...creative};}
+   }
+  }
   else if(path==='/campaign'&&body){result={id:'campaign-'+campaigns.length,accrued_spend:0,invoice_status:'not_invoiced',...body};campaigns.push(result);}
   // Server drafts (doc 31 Phase 4): create, revisioned save, read, list, discard and submit.
   else if(path==='/campaign-drafts')result={items:drafts.filter(d=>!d.submitted_campaign_id&&(!url.searchParams.get('org')||d.org_id===url.searchParams.get('org')))};
@@ -49,7 +60,7 @@ test('master admin creates client, uploads and approves creative, books campaign
  try {
   await page.getByRole('button',{name:'Add advertiser',exact:true}).click();await page.getByLabel('Advertiser name',{exact:true}).fill('Alpha Client');await page.getByLabel('Advertiser email',{exact:true}).fill('fixture@example.invalid');await page.getByRole('button',{name:'Save advertiser'}).click();await page.getByRole('heading',{name:'Alpha Client',exact:true}).waitFor();
   assert.equal(requests.find(r=>r.path==='/advertiser').body.org_id,'a');await page.screenshot({path:'/tmp/gridcast-admin-advertiser.png',fullPage:true});
-  await nav('creatives');await field('Name').fill('Alpha Video');await page.getByLabel('Creative advertiser').selectOption('adv-1');await page.getByRole('button',{name:'Add creative',exact:true}).click();await page.getByRole('button',{name:'Upload video',exact:true}).click();await page.getByLabel('MP4 or WebM video').setInputFiles({name:'fixture.mp4',mimeType:'video/mp4',buffer:Buffer.from('synthetic mocked upload')});await page.getByRole('button',{name:'Upload selected video'}).click();await page.getByRole('status').waitFor();assert.match(requests.find(r=>r.path==='/assets/upload').body.multipart,/cr-0/);await page.screenshot({path:'/tmp/gridcast-admin-creative.png',fullPage:true});
+  await nav('creatives');await field('Name').fill('Alpha Video');await page.getByLabel('Creative advertiser').selectOption('adv-1');await page.getByRole('button',{name:'Add creative',exact:true}).click();await page.getByRole('button',{name:'Upload video',exact:true}).click();await page.getByLabel('MP4 or WebM video').setInputFiles({name:'fixture.mp4',mimeType:'video/mp4',buffer:Buffer.from('synthetic mocked upload')});await page.getByRole('button',{name:'Upload media',exact:true}).click();await page.getByRole('status').waitFor();assert.match(requests.find(r=>r.path==='/assets/upload').body.multipart,/cr-0/);await page.screenshot({path:'/tmp/gridcast-admin-creative.png',fullPage:true});
   assert.equal(requests.find(r=>r.path==='/creative').body.org_id,'a');await page.getByRole('button',{name:'Approve',exact:true}).click();
   await nav('new');await field('Campaign name').fill('Alpha Campaign');await page.getByLabel('Campaign advertiser').selectOption('adv-1');await page.getByLabel('Starts',{exact:true}).fill('2026-10-01');await page.getByLabel('Ends',{exact:true}).fill('2026-10-31');
   await page.getByRole('button',{name:'Next',exact:true}).click();await page.getByLabel('Use screen Alpha screen').check();
@@ -156,6 +167,56 @@ test('creative editor saves existing row and cancel leaves it unchanged',async()
  }finally{await h.browser.close();}
 });
 
+
+test('global creative editor replaces an approved uploaded source with YouTube and resets approval',async()=>{
+ const h=await harness();try{
+  const advertiser={id:'source-adv',org_id:'a',name:'Source client',status:'active'};
+  const creative={id:'source-cr',org_id:'a',advertiser_id:advertiser.id,purpose:'paid',name:'Uploaded source',category:'general',media_type:'video',duration_s:10,assets:[{id:'asset-old',media_type:'video',width:1280,height:720,duration_s:10}],approval_status:'approved',approved_at:'2026-09-30T10:00:00.000Z'};
+  h.advertisers.push(advertiser);h.creatives.push(creative);
+  await h.page.goto(base+'/admin?org=a#creatives');await h.page.reload();
+  await h.page.getByRole('button',{name:'Edit creative Uploaded source',exact:true}).click();
+  await h.page.getByLabel('Edit creative source',{exact:true}).selectOption('youtube');
+  await h.page.getByLabel('Edit creative video',{exact:true}).fill('dQw4w9WgXcQ');
+  await h.page.getByLabel('Edit creative duration',{exact:true}).fill('13.5');
+  await h.page.getByRole('button',{name:'Save creative',exact:true}).click();
+  await h.page.getByRole('button',{name:'Edit creative Uploaded source',exact:true}).waitFor();
+  const request=h.requests.find(r=>r.path==='/creative/source-cr');assert.equal(request.body.source,'youtube');assert.equal(request.body.youtube_id,'dQw4w9WgXcQ');assert.equal(request.body.duration_s,13.5);
+  const saved=h.creatives.find(c=>c.id==='source-cr');assert.equal(saved.id,creative.id);assert.equal(saved.org_id,advertiser.org_id);assert.equal(saved.advertiser_id,advertiser.id);assert.equal(saved.youtube_id,'dQw4w9WgXcQ');assert.deepEqual(saved.assets,[]);assert.equal(saved.approval_status,'pending');assert.equal(saved.approved_at,undefined);
+ }finally{await h.browser.close();}
+});
+
+test('advertiser library replaces uploaded media in place and saves edited metadata',async()=>{
+ const h=await harness();try{
+  const advertiser={id:'replace-adv',org_id:'a',name:'Replace client',status:'active'};
+  const creative={id:'replace-cr',org_id:'a',advertiser_id:advertiser.id,purpose:'paid',name:'Library replacement',category:'general',media_type:'video',duration_s:10,assets:[{id:'asset-before',media_type:'video',width:1280,height:720,duration_s:10}],approval_status:'approved',approved_at:'2026-09-30T10:00:00.000Z'};
+  h.advertisers.push(advertiser);h.creatives.push(creative);
+  await h.page.goto(base+`/admin?org=a#a/${advertiser.id}`);await h.page.reload();await h.page.getByRole('tab',{name:'Creatives',exact:true}).click();
+  const card=h.page.getByRole('group',{name:/Creative (Library replacement|Replacement keeps name)/});await card.getByRole('button',{name:'Edit creative Library replacement',exact:true}).click();
+  await h.page.getByLabel('Edit creative name',{exact:true}).fill('Replacement keeps name');await h.page.getByLabel('Edit creative category',{exact:true}).fill('seasonal');
+  await h.page.getByLabel('MP4 or WebM video',{exact:true}).setInputFiles({name:'replacement.mp4',mimeType:'video/mp4',buffer:Buffer.from('synthetic replacement upload')});
+  await h.page.getByRole('button',{name:'Save changes & replace active media',exact:true}).click();
+  await card.getByText('pending',{exact:true}).waitFor();
+  const upload=h.requests.find(r=>r.path==='/assets/upload');assert.equal(multipartField(upload.body.multipart,'creative_id'),'replace-cr');assert.equal(multipartField(upload.body.multipart,'replace_mode'),'replace_all');assert.equal(multipartField(upload.body.multipart,'name'),'Replacement keeps name');assert.equal(multipartField(upload.body.multipart,'category'),'seasonal');
+  const saved=h.creatives.find(c=>c.id==='replace-cr');assert.equal(saved.id,creative.id);assert.equal(saved.org_id,advertiser.org_id);assert.equal(saved.advertiser_id,advertiser.id);assert.equal(saved.name,'Replacement keeps name');assert.equal(saved.category,'seasonal');assert.equal(saved.media_type,'video');assert.equal(saved.youtube_id,undefined);assert.equal(saved.assets.length,1);assert.notEqual(saved.assets[0].id,'asset-before');assert.equal(saved.approval_status,'pending');assert.equal(saved.approved_at,undefined);
+ }finally{await h.browser.close();}
+});
+
+test('failed advertiser library replacement preserves the approved active creative',async()=>{
+ const h=await harness();try{
+  const advertiser={id:'failed-replace-adv',org_id:'a',name:'Keep client',status:'active'};
+  const creative={id:'failed-replace-cr',org_id:'a',advertiser_id:advertiser.id,purpose:'paid',name:'Keep approved source',category:'general',media_type:'video',duration_s:10,assets:[{id:'keep-asset',media_type:'video',width:1280,height:720,duration_s:10}],approval_status:'approved',approved_at:'2026-09-30T10:00:00.000Z'};
+  const original=JSON.parse(JSON.stringify(creative)),failedUploads=[];
+  h.advertisers.push(advertiser);h.creatives.push(creative);
+  await h.page.route('**/api/assets/upload',route=>{failedUploads.push(route.request().postData());return route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:'Fixture replacement failure'})});});
+  await h.page.goto(base+`/admin?org=a#a/${advertiser.id}`);await h.page.reload();await h.page.getByRole('tab',{name:'Creatives',exact:true}).click();
+  const card=h.page.getByRole('group',{name:'Creative Keep approved source',exact:true});await card.getByRole('button',{name:'Edit creative Keep approved source',exact:true}).click();
+  await h.page.getByLabel('MP4 or WebM video',{exact:true}).setInputFiles({name:'failed-replacement.mp4',mimeType:'video/mp4',buffer:Buffer.from('synthetic failed replacement')});
+  await h.page.getByRole('button',{name:'Save changes & replace active media',exact:true}).click();
+  await h.page.getByRole('alert').filter({hasText:'Fixture replacement failure'}).waitFor();
+  assert.deepEqual(h.creatives.find(c=>c.id==='failed-replace-cr'),original);assert.equal(h.requests.filter(r=>r.path==='/creative').length,0);
+  assert.equal(multipartField(failedUploads.at(-1),'creative_id'),'failed-replace-cr');assert.equal(multipartField(failedUploads.at(-1),'replace_mode'),'replace_all');
+ }finally{await h.browser.close();}
+});
 
 test('platform network builder keeps Gridcast ownership and books released cross-org screens per play',async()=>{
  const h=await harness();try{
@@ -276,7 +337,7 @@ test('image filler creation defaults to 20 seconds without an advertiser and sup
   const request=h.requests.find(r=>r.path==='/creative');assert.equal(request.body.purpose,'filler');assert.equal(request.body.media_type,'image');assert.equal(request.body.duration_s,20);assert.equal(request.body.advertiser_id,undefined);
   await h.page.getByRole('button',{name:'Upload image',exact:true}).click();
   await h.page.getByLabel('PNG, JPEG or WebP image',{exact:true}).setInputFiles({name:'still.png',mimeType:'image/png',buffer:Buffer.from('mock image upload; real decoding covered separately')});
-  await h.page.getByRole('button',{name:'Upload selected image',exact:true}).click();await h.page.getByRole('status').waitFor();assert.ok(h.requests.some(r=>r.path==='/assets/upload'));
+  await h.page.getByRole('button',{name:'Upload media',exact:true}).click();await h.page.getByRole('status').waitFor();assert.ok(h.requests.some(r=>r.path==='/assets/upload'));
  }finally{await h.browser.close();}
 });
 test('uploaded image display time stays editable and sends a timing change',async()=>{
@@ -303,18 +364,18 @@ test('advertiser workspace shows tabs, library usage, one-step create with uploa
   await h.page.getByRole('tab',{name:'Creatives',exact:true}).click();
   const card=h.page.getByRole('group',{name:'Creative Library spot',exact:true});
   await card.getByText('approved',{exact:true}).waitFor();await card.getByText(/^Used in 1 visible campaign · \+1 ended$/).waitFor();
-  await card.getByRole('button',{name:'Upload file for Library spot',exact:true}).click();
+  await card.getByRole('button',{name:'Replace active media for Library spot',exact:true}).click();
   await card.getByText(/Uploading a new file sends this creative back to review\. It needs approval before it can play in any of its 1 unended visible campaign\./).waitFor();
   await card.getByRole('button',{name:'Cancel',exact:true}).click();
   await h.page.getByRole('button',{name:'+ New creative',exact:true}).click();await h.page.getByLabel('New creative name',{exact:true}).fill('Fresh spot');await h.page.getByRole('button',{name:'Create creative',exact:true}).click();
-  await h.page.getByLabel('MP4 or WebM video',{exact:true}).setInputFiles({name:'fresh.mp4',mimeType:'video/mp4',buffer:Buffer.from('synthetic mocked upload')});await h.page.getByRole('button',{name:'Upload selected video',exact:true}).click();
+  await h.page.getByLabel('MP4 or WebM video',{exact:true}).setInputFiles({name:'fresh.mp4',mimeType:'video/mp4',buffer:Buffer.from('synthetic mocked upload')});await h.page.getByRole('button',{name:'Upload media',exact:true}).click();
   await h.page.getByText(/now has its video/).waitFor();
   const created=h.requests.find(r=>r.path==='/creative').body;assert.equal(created.advertiser_id,'ws-adv');assert.equal(created.org_id,'a');assert.equal(created.purpose,'paid');
   assert.match(h.requests.find(r=>r.path==='/assets/upload').body.multipart,new RegExp(h.creatives.find(c=>c.name==='Fresh spot').id));
   await h.page.getByRole('group',{name:'Creative Fresh spot',exact:true}).getByText('pending',{exact:true}).waitFor();
   await h.page.route('**/api/assets/upload',route=>route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:'Fixture upload failure'})}));
   await h.page.getByRole('button',{name:'Add another',exact:true}).click();await h.page.getByLabel('New creative name',{exact:true}).fill('Broken spot');await h.page.getByRole('button',{name:'Create creative',exact:true}).click();
-  await h.page.getByLabel('MP4 or WebM video',{exact:true}).setInputFiles({name:'broken.mp4',mimeType:'video/mp4',buffer:Buffer.from('synthetic mocked upload')});await h.page.getByRole('button',{name:'Upload selected video',exact:true}).click();
+  await h.page.getByLabel('MP4 or WebM video',{exact:true}).setInputFiles({name:'broken.mp4',mimeType:'video/mp4',buffer:Buffer.from('synthetic mocked upload')});await h.page.getByRole('button',{name:'Upload media',exact:true}).click();
   await h.page.getByText(/was kept and shows as “No media yet”/).waitFor();assert.equal(await h.page.getByText(/Fixture upload failure/).count(),1);
   await h.page.getByRole('group',{name:'Creative Broken spot',exact:true}).getByText('No media yet',{exact:true}).first().waitFor();
   await h.page.getByRole('tab',{name:'Campaigns',exact:true}).click();await h.page.getByRole('button',{name:'+ New campaign',exact:true}).click();
@@ -324,7 +385,7 @@ test('advertiser workspace shows tabs, library usage, one-step create with uploa
   await h.page.getByRole('tab',{name:'Creatives',exact:true}).click();assert.equal(await h.page.getByRole('button',{name:'+ New creative',exact:true}).isDisabled(),true);
   const archivedCard=h.page.getByRole('group',{name:'Creative Archived library item',exact:true});await archivedCard.waitFor();
   assert.equal(await archivedCard.getByRole('button',{name:'Edit creative Archived library item',exact:true}).count(),0);
-  assert.equal(await archivedCard.getByRole('button',{name:'Upload file for Archived library item',exact:true}).count(),0);
+  assert.equal(await archivedCard.getByRole('button',{name:'Replace active media for Archived library item',exact:true}).count(),0);
   await h.page.getByRole('tab',{name:'Campaigns',exact:true}).click();assert.equal(await h.page.getByRole('button',{name:'+ New campaign',exact:true}).isDisabled(),true);
   await h.page.getByRole('tab',{name:'Settings',exact:true}).click();await h.page.getByRole('button',{name:'Restore advertiser',exact:true}).waitFor();
   await h.nav('creatives');await h.page.getByLabel('Creative advertiser',{exact:true}).waitFor();assert.equal(await h.page.getByLabel('Creative advertiser',{exact:true}).locator('option[value="archived-a"]').count(),0);

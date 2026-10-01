@@ -500,15 +500,33 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
   }
   if (seg[0] === 'creative' && seg[2] === 'asset') {
     const creative = db.creatives.find((c: any) => c.id === seg[1]);
-    if (method === 'GET') return { body: { org_id: creative.org_id } };
+    if (method === 'GET') return { body: { org_id: creative.org_id, media_type: creative.media_type || 'video', duration_s: creative.duration_s,
+      has_assets: Array.isArray(creative.assets) && creative.assets.length > 0, has_youtube: !!creative.youtube_id } };
     const asset = openMedia(body.proof || '', 'upload');
     if (!asset || asset.creative_id !== creative.id || asset.org_id !== creative.org_id) throw new AccessError(400, 'Invalid verified asset');
-    if ((asset.media_type || 'video') !== (creative.media_type || 'video')) throw new AccessError(400,'Upload the media type selected for this creative');
-    if ((creative.assets || []).length >= 8) throw new AccessError(400,'A creative may have up to eight media variants');
+    const mediaType = asset.media_type || 'video', replaceMode = body.replace_mode || 'append';
+    if (!['video','image'].includes(mediaType)) throw new AccessError(400,'Upload a verified video or still image');
+    if (mediaType === 'image' && (!Number.isFinite(asset.duration_s) || asset.duration_s < 1 || asset.duration_s > 600)) throw new AccessError(400,'Enter an image display time between 1 and 600 seconds');
+    if (mediaType === 'video' && (!Number.isFinite(asset.duration_s) || asset.duration_s < 1 || asset.duration_s > 600)) throw new AccessError(400,'Upload a video with verified duration between 1 and 600 seconds');
+    const metadata: Record<string,string> = {};
+    for (const key of ['name','category']) if (key in body) {
+      if (typeof body[key] !== 'string' || !body[key].trim() || body[key].trim().length > 200) throw new AccessError(400,`Enter a ${key} of 1–200 characters`);
+      metadata[key] = body[key].trim();
+    }
+    const existingAssets = Array.isArray(creative.assets) ? creative.assets : [];
+    if (replaceMode === 'append' && (mediaType !== (creative.media_type || 'video') || (!existingAssets.length && creative.youtube_id)))
+      throw new AccessError(409,'This upload changes the media source. Choose Replace active media in Edit creative.');
+    if (replaceMode === 'append' && existingAssets.length >= 8) throw new AccessError(400,'A creative may have up to eight media variations');
+    if ((db.assets || []).some((a: any) => (a.asset_id || a.id) === (asset.asset_id || asset.id))) throw new AccessError(409,'This uploaded asset was already attached');
+    const activeAssets = replaceMode === 'replace_all' ? [] : existingAssets;
     db.assets ||= []; db.assets.push(asset);
-    creative.assets ||= []; creative.assets.push({ ...asset, uri: 'gridcast:' + asset.id });
-    if (creative.media_type !== 'image') creative.duration_s = Math.max(...creative.assets.map((a: any) => a.duration_s));
-    creative.aspect = asset.aspect; creative.approval_status = 'pending'; creative.metadata_source = creative.media_type === 'image' ? 'server_image' : 'server_ffprobe';
+    Object.assign(creative,metadata);
+    creative.assets = [...activeAssets, { ...asset, uri: 'gridcast:' + (asset.asset_id || asset.id) }];
+    creative.media_type = mediaType;
+    delete creative.youtube_id;
+    creative.duration_s = mediaType === 'image' ? asset.duration_s : Math.max(...creative.assets.map((a: any) => a.duration_s));
+    creative.aspect = asset.aspect; creative.approval_status = 'pending'; delete creative.approved_at;
+    creative.metadata_source = mediaType === 'image' ? 'server_image' : 'server_ffprobe'; creative.updated_at = nowISO();
     validateInventory(); await save(); return { status: 201, body: { creative, asset } };
   }
   if (method === 'POST' && seg[0] === 'creative' && seg[1] && !seg[2]) {
@@ -518,23 +536,29 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
       if (typeof body[key] !== 'string' || !body[key].trim() || body[key].trim().length > 200) throw new AccessError(400, `Enter a ${key} of 1–200 characters`);
       patch[key] = body[key].trim();
     }
-    if ('youtube_id' in body) {
-      if (c.media_type === 'image' || c.purpose === 'filler') throw new AccessError(400,'Images and filler require uploaded media');
-      if (typeof body.youtube_id !== 'string' || !/^[a-zA-Z0-9_-]{11}$/.test(body.youtube_id)) throw new AccessError(400, 'Enter a valid YouTube video ID');
-      patch.youtube_id = body.youtube_id;
-    }
-    if ('duration_s' in body) {
-      if (typeof body.duration_s !== 'number' || !Number.isFinite(body.duration_s) || body.duration_s <= 0 || body.duration_s > 86400) throw new AccessError(400, 'Duration must be between 0 and 86400 seconds');
-      if (c.media_type !== 'image' && !(patch.youtube_id || c.youtube_id)) throw new AccessError(400, 'Duration can only be edited for images and YouTube videos');
-      if (c.media_type === 'image' && (body.duration_s < 1 || body.duration_s > 600)) throw new AccessError(400,'Image duration must be 1–600 seconds');
+    const existingYoutubeEdit = body.source === undefined && c.media_type !== 'image' && !c.assets?.length && !!c.youtube_id
+      && ('youtube_id' in body || 'duration_s' in body);
+    if ('youtube_id' in body && body.source !== 'youtube' && !existingYoutubeEdit) throw new AccessError(400,'Choose YouTube as the creative source before setting a video ID');
+    if (body.source === 'youtube' || existingYoutubeEdit) {
+      if (c.purpose === 'filler') throw new AccessError(400,'Filler must use uploaded media');
+      const mayReuseYoutube = !c.assets?.length && !!c.youtube_id;
+      const youtubeId = body.youtube_id ?? (mayReuseYoutube ? c.youtube_id : undefined);
+      const duration = body.duration_s ?? (mayReuseYoutube ? c.duration_s : undefined);
+      if (typeof youtubeId !== 'string' || !/^[a-zA-Z0-9_-]{11}$/.test(youtubeId)) throw new AccessError(400, 'Enter a valid YouTube video ID');
+      if (typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0 || duration > 86400) throw new AccessError(400, 'Enter the expected video duration');
+      patch.media_type = 'video'; patch.youtube_id = youtubeId; patch.duration_s = duration;
+      patch.assets = []; patch.aspect = '16:9'; patch.metadata_source = 'operator_declared';
+    } else if ('duration_s' in body) {
+      if (typeof body.duration_s !== 'number' || !Number.isFinite(body.duration_s) || body.duration_s < 1 || body.duration_s > 600) throw new AccessError(400, 'Image display time must be between 1 and 600 seconds');
+      if (c.media_type !== 'image') throw new AccessError(400, 'Uploaded video duration comes from the verified file');
       patch.duration_s = body.duration_s;
     }
-    if (patch.youtube_id && !(patch.duration_s || c.duration_s)) throw new AccessError(400, 'Enter the expected video duration');
-    const changed = Object.keys(patch).filter(key => patch[key] !== c[key]);
+    const changed = Object.keys(patch).filter(key => key === 'assets'
+      ? (Array.isArray(c.assets) && c.assets.length > 0)
+      : patch[key] !== c[key]);
     if (!changed.length) return {body:c};
     for (const key of changed) c[key] = patch[key];
     if (changed.some(key => key !== 'name')) { c.approval_status = 'pending'; delete c.approved_at; }
-    if ('youtube_id' in patch || 'duration_s' in patch) { c.metadata_source = c.media_type === 'image' && c.assets?.length ? 'server_image' : 'operator_declared'; c.aspect ||= '16:9'; }
     c.updated_at = nowISO();
     validateInventory(); await save(); return {body:c};
   }

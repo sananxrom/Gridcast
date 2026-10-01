@@ -8,16 +8,22 @@ function fixture({denied=false,attachFails=false}={}) {
   inspectVideo:async(bytes,ext)=>{calls.push({inspect:'video',ext});return {duration_s:17,width:1280,height:720,metadata_source:'server_ffprobe'};},
   storeVideo:async(bytes,orgId,ext)=>{calls.push({store:true,orgId,ext});return {storage_path:`media/${orgId}/fixture.${ext}`,mime:ext==='png'?'image/png':'video/mp4',bytes:bytes.length};},
   sealMedia:(asset,purpose)=>{sealed={asset,purpose};return 'signed-test-proof';},removeVideo:async p=>removed.push(p)};
- const api={handle:async(method,route,query,body)=>{calls.push({method,route,body});return method==='GET'?{status:denied?404:200,body:denied?{error:'not found'}:{org_id:'org-a'}}:{status:attachFails?400:201,body:attachFails?{error:'invalid creative'}:{asset:sealed.asset}};}};
+ const api={handle:async(method,route,query,body)=>{calls.push({method,route,body});return method==='GET'?{status:denied?404:200,body:denied?{error:'not found'}:{org_id:'org-a',media_type:'image',duration_s:14}}:{status:attachFails?400:201,body:attachFails?{error:'invalid creative'}:{asset:sealed.asset}};}};
  const code=ts.transpileModule(readFileSync(path.join(__dirname,'../app/api/assets/upload/route.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
  const mod={exports:{}};new Function('require','module','exports',code)(name=>name==='@/lib/api'?api:name==='@/lib/media'?media:require(name),mod,mod.exports);
- const request=(type='image/png',bytes=Buffer.from('test image'),auth=true)=>{const form=new FormData();form.append('file',new File([bytes],'test',{type}));form.append('creative_id','creative-a');return {headers:new Headers({'content-length':String(bytes.length+500),...(auth?{authorization:'Bearer test'}:{})}),formData:async()=>form};};
+ const request=(type='image/png',bytes=Buffer.from('test image'),auth=true,fields={})=>{const form=new FormData();form.append('file',new File([bytes],'test',{type}));form.append('creative_id','creative-a');for(const [key,value] of Object.entries(fields))form.append(key,String(value));return {headers:new Headers({'content-length':String(bytes.length+500),...(auth?{authorization:'Bearer test'}:{})}),formData:async()=>form};};
  return {post:mod.exports.POST,request,calls,removed,sealed:()=>sealed};
 }
 test('image upload hashes verified bytes and derives tenancy from permission lookup',async()=>{
  const f=fixture(),bytes=Buffer.from('fixture bytes');const result=await f.post(f.request('image/png',bytes));assert.equal(result.status,201);
- const proof=f.sealed();assert.equal(proof.purpose,'upload');assert.equal(proof.asset.org_id,'org-a');assert.equal(proof.asset.creative_id,'creative-a');assert.equal(proof.asset.sha256,createHash('sha256').update(bytes).digest('hex'));assert.equal(proof.asset.media_type,'image');assert.equal(proof.asset.duration_s,undefined);
+ const proof=f.sealed();assert.equal(proof.purpose,'upload');assert.equal(proof.asset.org_id,'org-a');assert.equal(proof.asset.creative_id,'creative-a');assert.equal(proof.asset.sha256,createHash('sha256').update(bytes).digest('hex'));assert.equal(proof.asset.media_type,'image');assert.equal(proof.asset.duration_s,14);
  assert.ok(f.calls.some(c=>c.inspect==='image'&&c.ext==='png'));assert.equal(f.calls.some(c=>c.inspect==='video'),false);
+});
+test('replacement upload signs manual image duration and commits only whitelisted metadata with replace mode',async()=>{
+ const f=fixture();assert.equal((await f.post(f.request('image/png',Buffer.from('new image'),true,{replace_mode:'replace_all',image_duration_s:37,name:'Replacement',category:'fitness'}))).status,201);
+ const proof=f.sealed();assert.equal(proof.asset.duration_s,37);
+ const commit=f.calls.find(c=>c.method==='POST'&&c.route[2]==='asset').body;
+ assert.equal(commit.replace_mode,'replace_all');assert.equal(commit.name,'Replacement');assert.equal(commit.category,'fitness');assert.ok(commit.proof);
 });
 test('unauthorised and wrong-tenant uploads never inspect or persist media',async()=>{
  const anonymous=fixture();assert.equal((await anonymous.post(anonymous.request('image/png',undefined,false))).status,401);assert.equal(anonymous.calls.length,0);
