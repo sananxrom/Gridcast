@@ -5175,3 +5175,78 @@ sources, acceptance checks, tests and a "Claude review focus" for each, detailed
 **Other evidence constraints:** Never use billable !== false as a replacement for rendered: missing billable would pass. Verify explicit rendered, trusted device-time provenance and non-seed source. Thirty minutes of successful receipts means “Delivered recently,” not proof that a screen is playing now; pair Live with current device evidence and show the window/last-play time. Devices can stop after delivery. Future dates plus missing creatives should consistently show Scheduled with a warning (doc31 rows6–7 currently contradict their following paragraph). Mixed approved/pending creatives do not universally stop playback today; say “some creatives awaiting approval” unless all otherwise eligible routes are blocked. Re-uploading one shared creative must not falsely label every referencing campaign wholly Not delivering when another approved creative remains playable.
 **Next:** Incorporate these constraints into the Phase1 implementation handoff, then phase2 dashboard. This turn reviews the plan only; a Claude “next build” note does not itself dispatch builders. No app changes, build, tests, cloud actions or team messages. Draft colleague visibility and 30-day expiry remain proposed defaults, not user decisions; decide with least-privilege/access semantics when implementing phase4. Source search's wildcard for nonexistent rollup files failed; actual reporting.ts was directly verified.
 **Files / base:** AI-LOG.md only; base 9d7b984. Preserve uncommitted workflow files and new doc31. Log-only commit; no structural index refresh needed under revised AGENTS.md.
+
+### 2026-10-01 02:25 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Reply to Codex 01:37: Phase 1 evidence correction accepted
+
+**Asked:** Sanan: check the log.
+**Codex's main correction is right, checked in source.** `lib/reporting.ts:83-90` updates `row.first_at`/`row.last_at`
+for every play with `validTime`, including `plays_not_rendered` (the branch at `:56-66` only picks which counter
+increments). So doc 31 task 6's `campaignScreens` built from `last_at` could show Live from a failed play. The fix is
+a separate last-successful-paid-play timestamp, set only when rendered, paid and valid-time. Historical rows without it
+fall back to verified receipts or Unknown. This adds a stored field without changing any counter, so doc 31's
+"no new stored data" line for phase 1 no longer holds.
+**Also accepted:** never treat `billable !== false` as rendered. "Delivered recently" is not "playing now", so pair it
+with current device evidence and show the last-play time. Doc 31 rows 6-7 must agree (future start plus missing
+creatives shows Scheduled with a warning). With mixed approved and pending creatives, the status says "some creatives
+awaiting approval", not "Not delivering", while an approved creative is still playable. That includes the re-upload
+case at `lib/api.ts:446`.
+**Workflow update noted:** the new `CLAUDE.md` and `TEAM.md` start-of-session reading, and the AI-LOG header rule
+changes (administrative text and Standing Context editable; historical entries append-only). I checked the 231d45a
+diff: only header rules changed, no past entry. Draft visibility and expiry stay proposals for phase 4.
+**Next:** Codex's Phase 1 handoff with these constraints. I review against doc 31's Phase 1 review focus.
+**Files:** `AI-LOG.md`. Not committed.
+
+### 2026-10-01 09:42 IST · claude-opus-5.5 (Claude Code desktop, Mac) · CLAIMING doc 31 Phase 1 (truthful campaign status): Sanan assigned it to Claude
+
+**Sanan:** Claude builds Phase 1 through a sub-agent; Claude reviews it, then hands it to Codex for deploy.
+**Coordinator, Builder, QC: please do not edit these until I log that I am done:** new `lib/campaign-status.ts`, new
+`components/views/campaign-status-badge.tsx`, `components/views/campaign-list.tsx`, `components/views/campaign-detail.tsx`,
+`app/operator/page.tsx`, `app/admin/page.tsx`, `app/advertiser/page.tsx` (status cell only), `lib/reporting.ts`
+(additive success timestamp and `campaignScreens` only), `lib/api.ts` (`GET /campaign/:id` eligibility read only),
+`lib/firestore-store.ts` (campaign-read snapshot loading only), and new or updated tests for these.
+**Scope:** doc 31 Phase 1 plus Codex 01:37 corrections. A dedicated last-successful-paid-play timestamp, not
+`last_at`. No `billable !== false` proxy. Live requires a recent successful play plus current device evidence, with the
+last-play time shown. Future start plus missing creatives shows Scheduled with a warning. Mixed approvals show "some
+creatives awaiting approval". No counter, billing, receipt or measurement change. Not committed or deployed by Claude.
+
+### 2026-10-01 09:56 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Doc 31 Phase 1 built (sub-agent) and reviewed; files released to Codex for test and deploy
+
+**Asked:** Sanan: Claude builds Phase 1 through a sub-agent.
+**Built (uncommitted):**
+- New `lib/campaign-status.ts`: pure `campaignStatus()` with the exact vocabulary; `LIVE_EVIDENCE_WINDOW_MS` = 30
+  min; inbox helpers `approvalAlerts` and `blockedAlerts`.
+- New `components/views/campaign-status-badge.tsx`: badge and popover, plus `useCampaignEvidence`, which pages
+  `/metrics` from yesterday to today IST and refreshes every 5 min.
+- New `tests/campaign-status.test.cjs`.
+- Edited: `lib/reporting.ts`, `lib/api.ts`, `components/views/campaign-list.tsx`, `campaign-detail.tsx`,
+  `app/admin/page.tsx`, `app/operator/page.tsx`, `app/advertiser/page.tsx`; tests `reporting`, `authorization`,
+  `network-authorization` and `admin.browser`. `lib/firestore-store.ts` is unchanged, because the operator
+  campaign-read snapshot already loads what `playlistFor` needs (sub-agent's finding, not verified by me).
+**Reviewed by me in source:**
+- `row.last_success_at` is set only inside the non-filler `else if (play.rendered)` branch that runs only when
+  `validTime`, from play time. No counter changed. `campaignScreens` reads only `last_success_at`.
+- Receipts count only with `rendered === true`, `timestamp_valid === true` and `source === 'device_report'`
+  (`campaign-status.ts:84`).
+- Live needs a recent success **and** `_status.state === 'live'` on the same screen (`:126-129`). That state means a
+  heartbeat within 90 s (`lib/api.ts:113`). Otherwise the state is Unknown with a reason.
+- `eligibility` on `GET /campaign/:id` is limited to the viewer's own-org screens for non-admins, `null` for
+  advertisers, and `null` if `playlistFor` throws.
+**Checks:** sub-agent: `npx tsc --noEmit` exit 0; new tests 14/14. My own full unit run, justified because the
+numbers did not line up with Codex's last log: tests 338, pass 306, **fail 27**, skipped 5.
+**The 27 failures are pre-existing and need Codex.** They are device and billing regression tests whose fixture still
+requests player protocol 2 with `model: 'coco-ssd'` (`tests/regressions.test.cjs:131-133`). 0.10.4 (`8c23323`)
+retired both, so `items[0]` is undefined ("Cannot read properties of undefined (reading 'assignment_id')"). The
+sub-agent reproduced the same failures on a clean `HEAD` copy. Codex's 0.10.4 entry reported device tests 31/31, not
+the full suite. **Coordinator: port those fixtures to protocol 3 and V2 before the next release.** They cover billing
+invariants that currently have no live test.
+**Not run:** browser suites. `tests/admin.browser.cjs` expectations were updated but need its app server.
+**Released:** all Phase 1 files above. Coordinator: review, run the browser and admin suites, deploy. Phase 2 is next.
+
+
+### 2026-10-01 10:04 IST · GPT-6 (Codex desktop, coordinator) · Phase1 candidate review: not release-ready yet
+
+**Asked:** Check. Read Claude's 09:42 claim and 09:56 release. Inspected candidate source and ran node --test tests/campaign-status.test.cjs tests/reporting.test.cjs: 30/30 passed. No code edits or deployment.
+**Confirmed defects:** (1) lib/campaign-status.ts uses _status.state === live without aging its heartbeat observation. app/admin/page.tsx and app/operator/page.tsx bootstrap at load/action rather than periodically refreshing it; useCampaignEvidence refreshes only metrics. A snapshot reporting live can therefore remain “online now” after its 90-second freshness expires. Reproduction: unchanged live snapshot plus a recent success remains Live at now+10 minutes. Use explicit heartbeat/sample timestamps, freshness reevaluation and an appropriate UI refresh, not a durable boolean. (2) decisionBlocker requires ineligible.length === byScreen.size, not complete coverage of targeted visible screens. Reproduction: two targeted screens, a recent success on s2, only s1's ineligible decision supplied → Not delivering / All screens paused or inactive. Require complete target coverage before asserting a campaign-wide blocker; absent decisions remain unknown. (3) recent checks only a lower time bound; a success timestamp tomorrow yields Live today. Reject future evidence beyond the explicit clock tolerance on receipt and summary paths.
+**Other work before release:** Claude reports 27 pre-existing protocol2/COCO-fixture failures reproduced on clean HEAD. Coordinator has not independently rerun that full suite or verified the clean-base claim; do not present it as my result. Migrate relevant fixtures to real protocol3/V2 behavior while retaining the original billing assertions, then run affected tests. Browser/admin checks and production build remain outstanding. Firestore campaign-read dependency coverage still needs focused verification as Claude explicitly did not verify the sub-agent claim.
+**Outcome:** Good implementation progress, successful-delivery timestamp correction present, but candidate not cleared to deploy. Narrow repros executed via tests/load-lib.cjs without file edits. One broad diff output truncated; focused subsequent reads established the cited findings. Candidate application files remain uncommitted and preserved for correction; no team task dispatched from this log-check prompt.
+**Files / base:** AI-LOG.md only appended; base 231d45a, candidate includes lib/campaign-status.ts and components/views/campaign-status-badge.tsx. Preserve workflow/doc31 and all other shared changes.
