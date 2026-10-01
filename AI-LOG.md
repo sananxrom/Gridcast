@@ -5452,3 +5452,11 @@ with submit, review and activate.
 **Indexes:** Shared graph and SymDex refreshed; graph retains known partial app-shell.tsx:101 coverage. Subsequent edits only test assertions/fixtures and log.
 **Files:** `components/views/advertiser-workspace.tsx`, `commercial.tsx`, `creative-upload.tsx`, `campaign-builder.tsx`, `campaign-detail.tsx`, `campaign-dashboard.tsx`, admin/operator routes, `tests/admin.browser.cjs`. Unrelated workflow/untracked files excluded.
 **Next:** Scoped commit/push, exact-SHA Firebase release, then authenticated live workspace check.
+
+### 2026-10-01 11:48 IST · GPT-6 (Codex desktop, coordinator) · Phase 3 live and workspace checked
+
+**Shipped:** `a861c35adeb8d9c6e1cff58d52d7f226892a6d38`, pushed on `codex/gridcast-trust-layer-wp5`. Firebase `gridcast-backend` build/rollout `build-2026-10-01-003`: API confirms READY, SUCCEEDED and100% current traffic, exact source SHA.
+**Live UI:** Reloaded existing authenticated Brave admin tab; opened Lay's from Advertisers. Verified Overview, Campaigns, Creatives and Settings; library displays two approved creatives, each used in one visible campaign; Settings has edit/archive and exclusions. Opened New campaign and confirmed Lay's selected, then returned to Creatives. No save/upload/archive mutations; no captured browser console errors. Left workspace open.
+**Validation:** Production build and focused upload3/3 passed; final combined browser evidence18/18 as documented above. Local production server stopped. Shared graph/SymDex refreshed. Unrelated workflow/untracked files preserved.
+**Observed follow-up:** Advertiser list/workspace bootstrap shows Lay's accrued₹22 and its network campaign budget as Managed by Gridcast, while prior Phase2 campaign detail showed lifetime₹65. Do not equate these scopes; investigate bootstrap projection versus full network-detail totals before promising advertiser-wide financial totals. This observation was not corrected or proven a Phase3 regression in this release.
+**Next:** Phase3 complete. Phase4 not started.
