@@ -52,6 +52,7 @@ export const ROUTES: { method: string; path: RegExp; caps: Cap[] }[] = [
   { method: 'POST', path: /^creative\/[^/]+$/, caps: ['sales'] },
   { method: 'POST', path: /^creative\/[^/]+\/approve$/, caps: ['platform'] },
   { method: 'GET', path: /^creative\/[^/]+\/asset$/, caps: ['sales'] },
+  { method: 'GET', path: /^creative\/[^/]+\/preview$/, caps: ['sales'] },
   { method: 'POST', path: /^creative\/[^/]+\/asset$/, caps: ['sales'] },
   { method: 'POST', path: /^screen\/[^/]+\/test(?:\/[^/]+\/revoke)?$/, caps: ['screens'] },
   { method: 'GET', path: /^screen\/[^/]+$/, caps: ['screens', 'sales'] },

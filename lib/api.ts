@@ -498,6 +498,18 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     cr.approval_status = body.status || 'approved'; cr.approved_at = nowISO();
     await save(); return { body: cr };
   }
+  if (method === 'GET' && seg[0] === 'creative' && seg[2] === 'preview') {
+    const creative = db.creatives.find((c: any) => c.id === seg[1]);
+    if (!creative) return { status: 404, body: { error: 'not found' } };
+    const activeAssets = Array.isArray(creative.assets) ? creative.assets : [];
+    if (activeAssets.length) return { body: { source: 'uploaded', media_type: creative.media_type || activeAssets[0].media_type || 'video', variants: activeAssets.map((asset: any, index: number) => ({
+      id: String(index), media_type: asset.media_type || creative.media_type || 'video', duration_s: asset.duration_s,
+      width: asset.width, height: asset.height, aspect: asset.aspect || (asset.width && asset.height ? `${asset.width}:${asset.height}` : null),
+      mime: asset.mime, url: asset.storage_path && asset.mime && Number.isSafeInteger(asset.bytes) && asset.bytes > 0 ? mediaUrl(asset) : null,
+    })) } };
+    if (creative.youtube_id && /^[A-Za-z0-9_-]{11}$/.test(creative.youtube_id)) return { body: { source: 'youtube', youtube_id: creative.youtube_id, duration_s: creative.duration_s } };
+    return { body: { source: 'none' } };
+  }
   if (seg[0] === 'creative' && seg[2] === 'asset') {
     const creative = db.creatives.find((c: any) => c.id === seg[1]);
     if (method === 'GET') return { body: { org_id: creative.org_id, media_type: creative.media_type || 'video', duration_s: creative.duration_s,

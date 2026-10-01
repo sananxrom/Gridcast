@@ -1,6 +1,7 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
+const nodePath=require('node:path');
 const {chromium}=require('playwright');
 const base=process.env.GC_UI_TEST_URL||'http://127.0.0.1:4012';
 const executablePath=[process.env.GC_TEST_BROWSER_PATH,chromium.executablePath(),'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].filter(Boolean).find(fs.existsSync);
@@ -20,6 +21,20 @@ async function harness(role='platform_admin') {
   else if(path==='/team')result=[];
   else if(path==='/advertiser'&&body){result={id:'adv-'+advertisers.length,status:'active',...body};advertisers.push(result);}
   else if(path.startsWith('/advertiser/')&&body){const a=advertisers.find(a=>a.id===path.split('/')[2]);if(path.endsWith('/archive'))a.status='archived';else if(path.endsWith('/restore'))a.status='active';else Object.assign(a,body);result=a;}
+  else if(req.method()==='GET'&&/^\/creative\/[^/]+\/preview$/.test(path)){
+   const creative=creatives.find(c=>c.id===path.split('/')[2]);
+   if(!creative)result={error:'not found'};
+   else if(Array.isArray(creative.assets)&&creative.assets.length)result={source:'uploaded',media_type:creative.media_type||creative.assets[0].media_type||'video',variants:creative.assets.map((asset,index)=>({id:String(index),media_type:asset.media_type||creative.media_type||'video',duration_s:asset.duration_s,width:asset.width,height:asset.height,aspect:asset.aspect||(asset.width&&asset.height?`${asset.width}:${asset.height}`:null),mime:asset.mime,url:asset.storage_path&&asset.mime&&Number.isSafeInteger(asset.bytes)&&asset.bytes>0?`/api/media?grant=fixture-${asset.media_type||creative.media_type||'video'}-${index}`:null}))};
+   else if(creative.youtube_id&&/^[A-Za-z0-9_-]{11}$/.test(creative.youtube_id))result={source:'youtube',youtube_id:creative.youtube_id,duration_s:creative.duration_s};
+   else result={source:'none'};
+  }
+  else if(req.method()==='GET'&&path==='/media'){
+   const grant=url.searchParams.get('grant')||'';
+   if(grant.includes('image'))result=null;
+   if(grant.includes('image'))await route.fulfill({status:200,contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aO9sAAAAASUVORK5CYII=','base64')});
+   else await route.fulfill({status:200,contentType:'video/mp4',body:fs.readFileSync(nodePath.join(__dirname,'../public/diagnostics/screen-test.mp4'))});
+   return;
+  }
   else if(path==='/creative'&&body){result={id:'cr-'+creatives.length,approval_status:'pending',...body};creatives.push(result);}
   else if(path.startsWith('/creative/')&&body){result=creatives.find(c=>c.id===path.split('/')[2]);if(path.endsWith('/approve'))result.approval_status=body.status;else if(body.source==='youtube'){
     Object.assign(result,{media_type:'video',youtube_id:body.youtube_id, duration_s:body.duration_s,...body,assets:[],approval_status:'pending'});delete result.approved_at;delete result.source;
@@ -154,6 +169,39 @@ test('sales and advertiser campaign status accepts sanitized heartbeat age witho
   popover=await h.page.locator('[data-radix-popper-content-wrapper]').innerText();
   assert.match(popover,/Online now\s+1 of 1 screens/);assert.match(popover,/delivery report summary \(yesterday and today\)/);assert.ok(!popover.includes(observedAt));
   assert.deepEqual(errors,[]);
+ }finally{await h.browser.close();}
+});
+
+test('creative editor previews the saved uploaded video and variants while source edits remain unsaved',async()=>{
+ const h=await harness();try{
+  const advertiser={id:'preview-adv',org_id:'a',name:'Preview client',status:'active'};
+  h.advertisers.push(advertiser);h.creatives.push({id:'preview-video',org_id:'a',advertiser_id:advertiser.id,purpose:'paid',name:'Saved video',category:'general',media_type:'video',duration_s:12,assets:[
+   {id:'wide-video',media_type:'video',mime:'video/mp4',storage_path:'fixture/wide.mp4',bytes:80000,duration_s:12,width:1280,height:720,aspect:'16:9'},
+   {id:'portrait-video',media_type:'video',mime:'video/mp4',storage_path:'fixture/portrait.mp4',bytes:80000,duration_s:9,width:720,height:1280,aspect:'9:16'},
+  ],approval_status:'approved'});
+  await h.page.goto(base+'/admin?org=a#creatives');await h.page.reload();await h.page.getByRole('button',{name:'Edit creative Saved video',exact:true}).click();
+  const preview=h.page.getByRole('region',{name:'Current saved creative'}),video=preview.getByLabel('Preview saved video for Saved video');await video.waitFor();
+  const initial=await video.evaluate(el=>({controls:el.controls,autoplay:el.autoplay,paused:el.paused,preload:el.preload,src:el.getAttribute('src')}));
+  assert.equal(initial.controls,true);assert.equal(initial.autoplay,false);assert.equal(initial.paused,true);assert.equal(initial.preload,'metadata');assert.match(initial.src,/grant=fixture-video-0/);
+  const variation=h.page.getByLabel('Preview active variation');await variation.selectOption('1');await video.waitFor();await h.page.waitForFunction(()=>document.querySelector('[aria-label="Preview saved video for Saved video"]')?.getAttribute('src')?.includes('grant=fixture-video-1'));
+  await h.page.getByLabel('Edit creative source',{exact:true}).selectOption('image');
+  assert.equal(await variation.inputValue(),'1');assert.equal(await video.getAttribute('src'),'/api/media?grant=fixture-video-1');
+  assert.equal(await preview.locator('img').count(),0);assert.equal(await h.page.getByText('The current source stays active until the file verifies.',{exact:false}).count(),1);
+  const previewRequest=h.requests.find(r=>r.path==='/creative/preview-video/preview');assert.ok(previewRequest);assert.equal(previewRequest.body,null);
+ }finally{await h.browser.close();}
+});
+
+test('creative editor displays saved images and loads YouTube only after a user action',async()=>{
+ const h=await harness();try{
+  const advertiser={id:'preview-adv',org_id:'a',name:'Preview client',status:'active'};h.advertisers.push(advertiser);
+  h.creatives.push({id:'preview-image',org_id:'a',advertiser_id:advertiser.id,purpose:'paid',name:'Saved image',category:'general',media_type:'image',duration_s:20,assets:[{id:'saved-image',media_type:'image',mime:'image/png',storage_path:'fixture/saved.png',bytes:68,duration_s:20,width:640,height:640,aspect:'1:1'}],approval_status:'approved'});
+  h.creatives.push({id:'preview-youtube',org_id:'a',advertiser_id:advertiser.id,purpose:'paid',name:'Saved YouTube',category:'general',media_type:'video',youtube_id:'dQw4w9WgXcQ',duration_s:13,approval_status:'approved'});
+  await h.page.goto(base+'/admin?org=a#creatives');await h.page.reload();await h.page.getByRole('button',{name:'Edit creative Saved image',exact:true}).click();
+  const imagePreview=h.page.getByRole('region',{name:'Current saved creative'}),image=imagePreview.getByAltText('Saved image for Saved image');await image.waitFor();assert.match(await image.getAttribute('src'),/grant=fixture-image-0/);assert.equal(await image.evaluate(el=>el.naturalWidth),1);assert.equal(await imagePreview.locator('video').count(),0);
+  await h.page.getByRole('button',{name:'Cancel',exact:true}).click();await h.page.getByRole('button',{name:'Edit creative Saved YouTube',exact:true}).click();
+  const youtubePreview=h.page.getByRole('region',{name:'Current saved creative'});assert.equal(await youtubePreview.locator('iframe').count(),0);
+  await youtubePreview.getByRole('button',{name:'Load YouTube preview',exact:true}).click();const frame=youtubePreview.getByTitle('YouTube preview: Saved YouTube');await frame.waitFor();assert.match(await frame.getAttribute('src'),/youtube-nocookie.com\/embed\/dQw4w9WgXcQ\?autoplay=0/);
+  const fallback=youtubePreview.getByRole('link',{name:'Watch on YouTube',exact:true});assert.equal(await fallback.getAttribute('href'),'https://www.youtube.com/watch?v=dQw4w9WgXcQ');assert.equal(await fallback.getAttribute('target'),'_blank');
  }finally{await h.browser.close();}
 });
 

@@ -1,5 +1,5 @@
 'use client';
-import React, {useEffect, useState} from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import {api, type SessionUser} from '@/lib/client';
 import {can} from '@/lib/roles';
 import {inr, ytId} from '@/lib/utils';
@@ -12,6 +12,36 @@ import {DataTable} from '@/components/ui/table';
 import {Thumb, Empty} from './bits';
 import {CreativeUpload} from './creative-upload';
 import {AdvertiserWorkspace} from './advertiser-workspace';
+type CreativePreviewData =
+  | { source: 'uploaded'; media_type: 'video'|'image'; variants: { id: string; media_type: 'video'|'image'; duration_s?: number; width?: number; height?: number; aspect?: string|null; mime?: string; url: string|null }[] }
+  | { source: 'youtube'; youtube_id: string; duration_s?: number }
+  | { source: 'none' };
+function CreativePreview({row}:{row:any}) {
+  const [preview,setPreview]=useState<CreativePreviewData|null>(null),[error,setError]=useState(''),[mediaError,setMediaError]=useState(false),[selectedId,setSelectedId]=useState('0'),[youtubeLoaded,setYoutubeLoaded]=useState(false),[reload,setReload]=useState(0);
+  const videoRef=useRef<HTMLVideoElement|null>(null);
+  useEffect(()=>{let live=true;setPreview(null);setError('');setMediaError(false);setYoutubeLoaded(false);api<CreativePreviewData>(`/creative/${encodeURIComponent(row.id)}/preview`,undefined,{quiet:true}).then(value=>{if(live){setPreview(value);setSelectedId('0');}}).catch(e=>{if(live)setError((e as Error).message||'Could not load the saved creative.');});return()=>{live=false;};},[row.id,reload]);
+  const variants=preview?.source==='uploaded'?preview.variants:[];
+  const selected=variants.find(v=>v.id===selectedId)??variants[0];
+  useEffect(()=>{const video=videoRef.current;return()=>{if(video){video.pause();video.removeAttribute('src');video.load();}};},[selected?.url]);
+  const dimensions=(v:{width?:number;height?:number;aspect?:string|null},index:number)=>`${v.width&&v.height?`${v.width} × ${v.height}`:`Variation ${index+1}`} · ${v.aspect||'aspect unavailable'}`;
+  return <section aria-label="Current saved creative" data-role="creative-preview" className="mb-4 rounded-lg border border-border p-3">
+    <div className="mb-2 flex flex-wrap items-center justify-between gap-2"><h4 className="text-sm font-semibold">Current saved creative</h4>{variants.length>1&&<Field label="Active variation"><Select aria-label="Preview active variation" value={selected?.id??'0'} onChange={e=>{setSelectedId(e.target.value);setMediaError(false);}}>{variants.map((v,i)=><option key={v.id} value={v.id}>{dimensions(v,i)} · {v.duration_s??'—'}s</option>)}</Select></Field>}</div>
+    {!preview&&!error&&<p className="text-sm text-muted-foreground">Loading saved media…</p>}
+    {error&&<div className="flex flex-wrap items-center gap-2 text-sm"><p role="alert" className="text-destructive">{error}</p><Button size="sm" variant="outline" onClick={()=>setReload(x=>x+1)}>Try again</Button></div>}
+    {preview?.source==='none'&&<p className="text-sm text-muted-foreground">No saved media is attached to this creative yet.</p>}
+    {preview?.source==='uploaded'&&selected&&<>
+      {variants.length>1&&<p className="mb-2 text-xs text-muted-foreground">{dimensions(selected,variants.indexOf(selected))} · {selected.duration_s??'—'}s</p>}
+      {!selected.url?<p role="status" className="text-sm text-muted-foreground">The saved media reference is unavailable, so this creative cannot be previewed.</p>:mediaError?<div className="flex flex-wrap items-center gap-2 text-sm"><p role="alert" className="text-destructive">Saved media could not be loaded.</p><Button size="sm" variant="outline" onClick={()=>{setMediaError(false);setReload(x=>x+1);}}>Refresh preview</Button></div>:selected.media_type==='image'
+        ? <div className="grid min-h-36 place-items-center overflow-hidden rounded bg-muted"><img src={selected.url} alt={`Saved image for ${row.name}`} className="max-h-[min(55vh,32rem)] max-w-full object-contain" onError={()=>setMediaError(true)}/></div>
+        : <video ref={videoRef} key={selected.url} controls playsInline preload="metadata" aria-label={`Preview saved video for ${row.name}`} className="aspect-video w-full rounded bg-black" src={selected.url} onError={()=>setMediaError(true)}/>}
+    </>}
+    {preview?.source==='youtube'&&<div className="space-y-2">
+      <p className="text-xs text-muted-foreground">YouTube · {preview.duration_s?`${preview.duration_s}s reported`:'duration not provided'}</p>
+      {youtubeLoaded?<iframe title={`YouTube preview: ${row.name}`} src={`https://www.youtube-nocookie.com/embed/${preview.youtube_id}?autoplay=0&controls=1&playsinline=1&rel=0`} referrerPolicy="strict-origin-when-cross-origin" allow="encrypted-media; picture-in-picture; web-share" allowFullScreen className="aspect-video w-full rounded bg-black"/>:<div className="space-y-2"><button type="button" aria-label={`Load YouTube preview for ${row.name}`} className="block w-full rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={()=>setYoutubeLoaded(true)}><Thumb id={preview.youtube_id} w={320} className="!w-full"/></button><Button size="sm" variant="outline" onClick={()=>setYoutubeLoaded(true)}>Load YouTube preview</Button></div>}
+      <p className="text-xs text-muted-foreground">Press Play in the preview. If embedding is blocked, <a className="text-primary underline underline-offset-2" href={`https://www.youtube.com/watch?v=${preview.youtube_id}`} target="_blank" rel="noopener noreferrer">Watch on YouTube</a>.</p>
+    </div>}
+  </section>;
+}
 function CreativeEditor({row,onClose,onChanged}:{row:any;onClose:()=>void;onChanged:()=>void}) {
   type Source = 'youtube'|'video'|'image';
   const hasAssets=Array.isArray(row.assets)&&row.assets.length>0;
@@ -46,7 +76,7 @@ function CreativeEditor({row,onClose,onChanged}:{row:any;onClose:()=>void;onChan
     await api(`/creative/${row.id}`,patch);await onChanged();onClose();
   }catch(e){setError((e as Error).message);}finally{setBusy(false);}};
   const image=f.source==='image';
-  return <Card className="mb-4 p-5" aria-label="Edit creative"><h3 className="mb-3 font-semibold">Edit creative</h3>
+  return <Card className="mb-4 p-5" aria-label="Edit creative"><h3 className="mb-3 font-semibold">Edit creative</h3><CreativePreview row={row}/>
     <div className="grid gap-3 sm:grid-cols-2">
       <Field label="Name"><Input disabled={uploading||busy} aria-label="Edit creative name" maxLength={200} value={f.name} onChange={e=>setF({...f,name:e.target.value})}/></Field>
       <Field label="Category"><Input disabled={uploading||busy} aria-label="Edit creative category" maxLength={200} value={f.category} onChange={e=>setF({...f,category:e.target.value})}/></Field>

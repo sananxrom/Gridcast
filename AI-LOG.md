@@ -5559,3 +5559,13 @@ them, or until Sanan tells the Coordinator to review them directly. Do not deplo
 **Shipped:** `49334fb6b20feb5d20c1ab515690d963d5a597c3`, Firebase `build-2026-10-01-005`; API verified READY, SUCCEEDED and100% traffic.
 **Live:** Reloaded existing Brave Firebase tab, opened Lay’s creative library and Edit for Demo Lay’s lays-a. Confirmed YouTube link/duration, all three source options, image default20seconds and video upload replacement controls. Source switching without a file correctly disables Save. Cancel retained both approved YouTube creatives unchanged; no media was uploaded or existing campaign modified. No captured browser console errors. Screenshot `/tmp/gridcast-creative-edit-live.jpg`.
 **Complete:** Final build and affected browser checks passed as recorded above; indexes updated; local test server stopped. Application task complete. Unrelated workflow files remain unstaged.
+
+### 2026-10-01 13:53 IST · GPT-6 (Codex desktop, coordinator) · Current creative preview requested
+
+**Asked:** Editing hides the current creative; Sanan wants a preview and playback. Assigned Builder a saved-media preview in the shared editor, supporting uploaded video/image and YouTube, with active-variation selection. Existing signed media serving must retain ownership checks; preview creates no delivery or billing events. QC checking access path. Base0a1e533; no release yet.
+
+### 2026-10-01 13:58 IST · GPT-6 (Codex desktop, coordinator) · Saved creative preview verified
+
+**Built:** Shared editor shows Current saved creative independently of unsaved source fields. Uploaded videos have manual playback controls, images display directly, active variations are selectable, YouTube shows thumbnail and user-loaded embed with external fallback. GET creative/:id/preview authorizes sales/ownership and signs only active assets through existing media grants; no delivery writes. Media errors offer grant refresh.
+**Review/checks:** QC access review clear; its expiry retry finding fixed. Builder45 focused server tests passed. Coordinator production build and6 focused browser cases passed, covering video variants, image, user-triggered YouTube, unsaved-source independence and prior edit/replacement regressions. Shared graph/SymDex refreshed; known app-shell partial parse remains. Files: commercial.tsx, lib/access.ts, lib/api.ts, integration-inventory and admin browser tests. Base0a1e533; unrelated files excluded.
+**Next:** Commit/push and Firebase release, then live preview check.

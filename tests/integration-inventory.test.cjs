@@ -181,6 +181,28 @@ test('malformed dynamic rules cannot be saved and break future schedule reads',a
  }
 });
 
+test('creative preview signs only active variants and is scoped to sales',async()=>{
+ const f=fixture(),owner=f.token('u_op1'),creative=f.data().creatives.find(c=>c.id==='cr_fit_b');
+ const youtube=expectStatus(await f.call('GET',`creative/${creative.id}/preview`,{},owner),200);
+ assert.equal(youtube.source,'youtube');assert.equal(youtube.youtube_id,creative.youtube_id);assert.equal(youtube.url,undefined);assert.equal(f.writes(),0);
+ const active=[
+  {id:'preview_a',asset_id:'preview_a',creative_id:creative.id,org_id:creative.org_id,media_type:'video',duration_s:12,width:1920,height:1080,aspect:'16:9',storage_path:`media/${creative.org_id}/preview_a.mp4`,mime:'video/mp4',bytes:100},
+  {id:'preview_b',asset_id:'preview_b',creative_id:creative.id,org_id:creative.org_id,media_type:'video',duration_s:8,width:1080,height:1920,aspect:'9:16',storage_path:`media/${creative.org_id}/preview_b.webm`,mime:'video/webm',bytes:80},
+ ];
+ f.change(db=>{db.assets ||= [];db.assets.push({id:'historic_only',creative_id:creative.id,org_id:creative.org_id,storage_path:`media/${creative.org_id}/historic_only.mp4`,mime:'video/mp4',bytes:50});db.creatives.find(c=>c.id===creative.id).assets=active;});
+ const uploaded=expectStatus(await f.call('GET',`creative/${creative.id}/preview`,{},owner),200);
+ assert.equal(uploaded.source,'uploaded');assert.equal(uploaded.youtube_id,undefined);assert.deepEqual(uploaded.variants.map(v=>[v.width,v.height,v.aspect]),[[1920,1080,'16:9'],[1080,1920,'9:16']]);
+ for(let i=0;i<active.length;i++){
+  const variant=uploaded.variants[i];assert.ok(variant.url.startsWith('/api/media?grant='));assert.equal(JSON.stringify(variant).includes('storage_path'),false);
+  const grant=new URL(variant.url,'https://gridcast.invalid').searchParams.get('grant'),opened=f.media.openMedia(grant,'read');assert.equal(opened.storage_path,active[i].storage_path);
+ }
+ assert.equal(JSON.stringify(uploaded).includes('historic_only'),false);assert.equal(f.writes(),0);
+ expectStatus(await f.call('GET',`creative/${creative.id}/preview`,{},f.token('u_op2')),404);
+ expectStatus(await f.call('GET',`creative/${creative.id}/preview`,{},f.token('u_adv1')),403);
+ const empty=expectStatus(await f.call('POST','creative',{org_id:'org_sec17',advertiser_id:'adv_fitline',name:'Preview without media',category:'general'},owner),200);
+ assert.deepEqual(expectStatus(await f.call('GET',`creative/${empty.id}/preview`,{},owner),200),{source:'none'});
+});
+
 test('one real admin identity completes an empty-org commercial journey through API boundaries',async()=>{
  const nativeProbe=[process.env.GC_FFPROBE_PATH,'/opt/homebrew/bin/ffprobe','/usr/bin/ffprobe'].filter(Boolean).find(fs.existsSync);
  const f=fixture({env:nativeProbe?{GC_FFPROBE_PATH:nativeProbe}:{}}),admin=f.token('u_admin');
