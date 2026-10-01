@@ -533,6 +533,20 @@ export function settlementView(db: any, actor: any, campaignId?: string, orgId?:
   if (actor.role === ADVERTISER) return rows.map((b: any) => pick(b,['id','campaign_id','screen_id','period','billable_plays','gross_paise','rate_value','rate_version','source','updated_at']));
   return rows.map((b: any) => can(actor.role,'money') ? b : pick(b,['id','campaign_id','screen_id','org_id','period','billable_plays','source','updated_at']));
 }
+const ADVERTISER_PLAY_FIELDS = ['id','campaign_id','screen_id','creative_id','kind','media_type','duration_ms','source','rendered','timestamp_valid','billable'] as const;
+const ADVERTISER_PRESENCE_FIELDS = ['measured','avg_persons','sample_count','model_ver'] as const;
+/**
+ * Advertiser view of a play receipt: an allowlist of what the delivery report and campaign status need.
+ * Device ids, assignment/sequence/payload identifiers, clock offsets and lag, non-billable reasons, measurement
+ * bindings and org/ledger economics are withheld. Times are shifted to the server-applied clock so status and the
+ * "When" column stay correct without exposing the offset itself. Operator/admin payloads are unchanged.
+ */
+export function advertiserPlayView(play: any, presence: any) {
+  const offset = Number.isFinite(Number(play.applied_clock_offset_ms)) ? Number(play.applied_clock_offset_ms) : 0;
+  const shift = (v: any) => { const t = Date.parse(v); return Number.isFinite(t) ? new Date(t + offset).toISOString() : v; };
+  return { ...pick(play, ADVERTISER_PLAY_FIELDS), started_at: shift(play.started_at_device ?? play.started_at), ended_at: shift(play.ended_at_device ?? play.ended_at),
+    presence: presence ? pick(presence, ADVERTISER_PRESENCE_FIELDS) : null };
+}
 export function campaignView(db: any, c: any, actor: any, orgId?: string | null) {
   const all = admin(actor) || actor.role === ADVERTISER;
   const scopedOrg = orgId || (!all ? actor.org_id : null);

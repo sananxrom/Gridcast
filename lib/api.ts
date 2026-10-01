@@ -10,7 +10,7 @@ import { auditSnapshot, appendAudit, auditView } from './audit';
 import { summarizeReadiness } from './readiness';
 import { openMedia, mediaUrl } from './media';
 import * as store from './store';
-import { AccessError, authorize, authorizeCampaignCreate, campaignRelations, bootstrap, publicUser, orgView, screenView, advertiserView, capabilities, campaignView, settlementView, redact } from './access';
+import { AccessError, authorize, authorizeCampaignCreate, campaignRelations, bootstrap, publicUser, orgView, screenView, advertiserView, capabilities, campaignView, settlementView, redact, advertiserPlayView } from './access';
 import { seed, uid, nowISO, code6 } from './seed';
 import * as cfg from './config';
 import { ATTENTION_PROFILE } from './vision/attention-contracts';
@@ -503,7 +503,7 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
         .map((s: any) => ({ screen: screenView({ ...s, _status: screenStatus(s) }, actor) })),
       byCreative: c.creative_ids.map((id: string) => db.creatives.find((x: any) => x.id === id)).filter(Boolean)
         .map((cr: any) => ({ creative: cr })),
-      plays: plays.slice(-300).reverse().map((p: any) => ({ ...p, presence: byPlay[p.id] || null })),
+      plays: plays.slice(-300).reverse().map((p: any) => actor.role === ADVERTISER ? advertiserPlayView(p, byPlay[p.id]) : ({ ...p, presence: byPlay[p.id] || null })),
     } };
   }
 

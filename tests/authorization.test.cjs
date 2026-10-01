@@ -97,6 +97,34 @@ test('advertiser campaign read is read-only evidence without eligibility diagnos
  assert.equal(f.writes(),0);
 });
 
+test('advertiser campaign read returns an allowlisted play receipt without device ids or clock offsets; operator keeps the full receipt',async()=>{
+ const f=fixture();
+ const started='2026-09-30T10:00:00.000Z', ended='2026-09-30T10:00:10.000Z';
+ f.change(db=>{
+  const sample=db.plays.find(p=>p.campaign_id==='cmp_1');
+  db.plays.push({...sample,id:'play_redact',campaign_id:'cmp_1',org_id:'org_sec17',device_id:'dev_secret',assignment_id:'assignment_secret',play_uid:'uid_secret',seq_no:77,payload_hash:'hash_secret',
+   started_at:started,ended_at:ended,started_at_device:started,ended_at_device:ended,duration_ms:10000,kind:'paid',source:'device_report',rendered:true,timestamp_valid:true,billable:true,
+   server_clock_offset_ms:4321,applied_clock_offset_ms:60000,clock_offset_difference_ms:99,delivery_lag_ms:1234,nonbillable_reasons:['device_throughput_exceeded'],server_received_at:ended,
+   measurement_binding_id:'mb_secret',attention_manifest_sha256:'manifest_secret',config_version:3,rate_value:5,rate_type:'per_play'});
+  db.presence.push({id:'play_redact',play_id:'play_redact',device_id:'dev_secret',org_id:'org_sec17',advertiser_id:'adv_x',screen_id:sample.screen_id,measured:true,avg_persons:2.5,sample_count:5,model_ver:'m1',at:ended,server_received_at:ended,source:'device_report'});
+ });
+ const adv=expectStatus(await f.call('GET','campaign/cmp_1',{},f.token('u_adv1')),200);
+ const row=adv.plays.find(p=>p.id==='play_redact');
+ assert.ok(row,'receipt still delivered to the advertiser');
+ for(const k of ['device_id','assignment_id','play_uid','seq_no','payload_hash','server_clock_offset_ms','applied_clock_offset_ms','clock_offset_difference_ms','delivery_lag_ms','nonbillable_reasons','server_received_at','measurement_binding_id','attention_manifest_sha256','started_at_device','ended_at_device','org_id','rate_value','config_version']) assert.ok(!hasKey(adv.plays,k),k);
+ assert.deepEqual(Object.keys(row.presence).sort(),['avg_persons','measured','model_ver','sample_count']);
+ // What the report and status need survives; times carry the server-applied offset instead of exposing it.
+ assert.equal(row.rendered,true);assert.equal(row.timestamp_valid,true);assert.equal(row.billable,true);assert.equal(row.duration_ms,10000);assert.equal(row.presence.avg_persons,2.5);
+ assert.equal(row.ended_at,new Date(Date.parse(ended)+60000).toISOString());
+ assert.equal(row.started_at,new Date(Date.parse(started)+60000).toISOString());
+ const op=expectStatus(await f.call('GET','campaign/cmp_1',{},f.token('u_op1')),200);
+ const full=op.plays.find(p=>p.id==='play_redact');
+ assert.equal(full.device_id,'dev_secret');assert.equal(full.applied_clock_offset_ms,60000);assert.equal(full.server_clock_offset_ms,4321);assert.equal(full.presence.device_id,'dev_secret');
+ const admin=expectStatus(await f.call('GET','campaign/cmp_1',{},f.token('u_admin')),200);
+ assert.equal(admin.plays.find(p=>p.id==='play_redact').device_id,'dev_secret');
+ assert.equal(f.writes(),0);
+});
+
 test('manager cannot take over owners, assign owner roles, change fees or payouts',async()=>{
  const f=fixture(), t=f.token('u_op3');
  for(const [p,b] of [['invite',{role:'owner',email:'x@example.invalid'}],['user/u_op4/role',{role:'owner'}],
