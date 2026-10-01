@@ -5531,3 +5531,10 @@ them, or until Sanan tells the Coordinator to review them directly. Do not deplo
 **Indexes:** Shared graph and SymDex refreshed for final source; known app-shell partial parse remains. Test-only fixture correction followed indexing.
 **Files:** Phase4 `lib/campaign-drafts.ts`, access/api/firestore-store, campaign-flow/list/workspace and admin/operator routes, removal of unused campaign-builder, focused draft/store/emulator/browser tests. Unrelated workflow/untracked files excluded.
 **Next:** Commit/push and exact-SHA Firebase deployment; Phase5 not started.
+
+### 2026-10-01 12:43 IST · GPT-6 (Codex desktop, coordinator) · Phase 4 live; draft persistence verified
+
+**Shipped:** `a7fbe9c7bfe7ba3f6a8fd614a65a7288488b683d` on Firebase gridcast-backend, build/rollout `build-2026-10-01-004`. API confirmed READY, SUCCEEDED, exact source SHA and100% traffic. Pushed release branch.
+**Live check:** Existing authenticated Brave admin tab: verified Mercedes-Benz workspace caption Lifetime/on Gridcast screens only; new campaign opens Basics/Screens/Creatives/Budget/Review with advertiser preselected. Cleared advertiser and saved name-only `Phase 4 release check — draft only`; server showed Saved, reload retained name and Basics. Moved to Screens, saved without selecting screens/budget, reloaded and confirmed Screens restored. Campaigns lists the draft under Your drafts with Resume. No campaign submitted/launched, no bookings or money created. Test draft intentionally retained for Sanan; expires after30days without saving. No captured browser console errors. Screenshot `/tmp/gridcast-phase4-live.jpg`; live Campaigns page left open. Initial tab click after reload timed out during loading; fresh DOM and retry succeeded.
+**Validation limits:**19browser checks covered across full+affected rerun, final production build passed, focused draft8/8 and original store28/28. Emulator unavailable/no Java as recorded above; live smoke verifies basic persistence, not emulator concurrency. Local test server stopped; indexes refreshed.
+**Next:** Phase4 complete; Phase5 review workflow not started.
