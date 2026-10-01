@@ -1,6 +1,7 @@
 import { isMaintenancePath } from './maintenance';
 import { attentionDayKey, reportingKey, reportRange, REPORT_PAGE_SIZE } from './reporting';
 import { budgetId } from './budgets';
+import { draftCampaignId } from './campaign-drafts';
 import { appliedOffset, settlementKey, settlementPeriod } from './settlement';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
@@ -17,7 +18,7 @@ export class StoreError extends Error {
 }
 const DOMAIN = ['orgs', 'users', 'screens', 'advertisers', 'creatives', 'campaigns', 'groups', 'devices', 'configs', 'assets'] as const;
 const EVENTS = ['plays', 'presence', 'device_assignments', 'measurement_bindings', 'audit', 'diagnostic_results','attention_calibrations'] as const;
-const COLLECTIONS = [...DOMAIN, ...EVENTS, 'maintenance_grants', 'maintenance_limits', 'diagnostic_assignments', 'settlement_buckets', 'campaign_budgets', 'screen_day','attention_day'];
+const COLLECTIONS = [...DOMAIN, ...EVENTS, 'maintenance_grants', 'maintenance_limits', 'diagnostic_assignments', 'settlement_buckets', 'campaign_budgets', 'screen_day','attention_day', 'campaign_drafts'];
 const DOMAIN_LIMIT = 2000;
 export const HISTORY_LIMIT = 1500;
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -161,6 +162,8 @@ export function createFirestoreStore(database: Firestore) {
     }
     // Network administration validates all receiving inventories in this transaction.
     if (state.admin && ['network-inventory','campaign'].includes(context.path[0])) orgId = undefined;
+    // Draft writes validate like campaign creation (network drafts may target any released screen).
+    if (state.admin && context.method === 'POST' && context.path[0] === 'campaign-draft') orgId = undefined;
     if (state.admin && context.method === 'POST' && ['creative','advertiser'].includes(context.path[0])) orgId = undefined;
     const scoped = !state.admin || !!orgId;
     const globalPage = state.admin && !orgId && context.method === 'GET' && context.path[0] === 'bootstrap';
@@ -174,6 +177,11 @@ export function createFirestoreStore(database: Firestore) {
     if (actor) await referenced(tx, 'orgs', [actor.org_id], snapshot.orgs);
     if (health || (!orgId && !state.admin)) {
       state.readOnly = true;
+    } else if (context.method === 'GET' && ['campaign-draft','campaign-drafts'].includes(context.path[0])) {
+      // Draft reads need only the caller's own drafts. Authorization (creator, organisation, expiry) runs in fn.
+      state.readOnly = true;
+      if (actor && context.path[0] === 'campaign-draft') await referenced(tx, 'campaign_drafts', [context.path[1]], snapshot.campaign_drafts);
+      else if (actor) snapshot.campaign_drafts = await query(tx, 'campaign_drafts', [['created_by', '==', actor.id]]);
     } else if (context.path[0] === 'metrics' && context.method === 'GET') {
       state.readOnly = true;
       const range = reportRange(context.from,context.to);
@@ -281,6 +289,11 @@ export function createFirestoreStore(database: Firestore) {
         const linked = await query(tx, 'campaigns', [['advertiser_id','==',context.path[1]]]);
         snapshot.campaigns = [...new Map([...snapshot.campaigns, ...linked].map((c: any) => [c.id,c])).values()];
       }
+      if (context.path[0] === 'campaign-draft' && context.path[1]) {
+        await referenced(tx, 'campaign_drafts', [context.path[1]], snapshot.campaign_drafts);
+        // Submit can only create this one deterministic campaign; load it so a retry is recognised.
+        if (context.path[2] === 'submit') await referenced(tx, 'campaigns', [draftCampaignId(context.path[1])], snapshot.campaigns);
+      }
       const diagnosticScreen = pairedScreen?.id || device?.screen_id || (context.path[0] === 'screen' ? context.path[1] : null);
       if (diagnosticScreen && !device) {
         const recent: any = await tx.get(database.collection('diagnostic_assignments').where('screen_id','==',diagnosticScreen).orderBy('requested_at','desc').limit(101));
@@ -323,7 +336,7 @@ export function createFirestoreStore(database: Firestore) {
           }
         }
       }
-      if ((device && ['playlist','play'].includes(context.path[0])) || (actor && context.method === 'POST' && context.path[0] === 'campaign')) {
+      if ((device && ['playlist','play'].includes(context.path[0])) || (actor && context.method === 'POST' && (context.path[0] === 'campaign' || (context.path[0] === 'campaign-draft' && context.path[2] === 'submit')))) {
         state.budgetCampaignIds = snapshot.campaigns.map((c: any) => c.id);
         await referenced(tx,'campaign_budgets',state.budgetCampaignIds!.map(budgetId),snapshot.campaign_budgets);
         for (const campaign of snapshot.campaigns) if (!snapshot.campaign_budgets.some((b: any) => b.campaign_id === campaign.id)) {

@@ -391,3 +391,25 @@ test('advertiser heartbeat snapshot includes only projected devices for authoris
  assert.equal(reads.length,1);assert.deepEqual(reads[0].filters,[['screen_id','==','sb']]);
  assert.equal(f.database.commits.length,0);
 });
+
+test('campaign drafts: reads load only the caller\'s drafts; writes keep the cross-organisation guard; submit loads the deterministic campaign and budgets',async()=>{
+ const {draftCampaignId}=require('./load-lib.cjs')('campaign-drafts');
+ const draftA={id:'cdr_a',org_id:'a',created_by:'a_owner',campaign_type:'operator',step:'basics',fields:{name:'A'},revision:1,expires_at:'2999-01-01T00:00:00.000Z',submitted_campaign_id:null};
+ const f=fixture({'campaign_drafts/cdr_a':draftA,'campaign_drafts/cdr_b':{...draftA,id:'cdr_b',org_id:'b',created_by:'b_owner'},'campaigns/ca':{id:'ca',org_id:'a',advertiser_id:'x',creative_ids:[]}});
+ const list=await f.store.transact({...f.context,path:['campaign-drafts']},()=>f.store.read());
+ assert.deepEqual(list.campaign_drafts.map(d=>d.id),['cdr_a']);
+ assert.deepEqual(list.screens,[]);assert.deepEqual(list.campaigns,[],'draft reads load no campaigns or screens');
+ assert.ok(f.database.reads.filter(q=>typeof q==='object').every(q=>q.collection==='campaign_drafts'&&q.filters.some(x=>x[0]==='created_by'&&x[2]==='a_owner')));
+ await assert.rejects(f.store.transact({...f.context,path:['campaign-drafts']},async()=>{const d=await f.store.read();d.campaign_drafts[0].fields.name='x';await f.store.write(d);}),{status:403},'draft reads are read-only');
+ const one=await f.store.transact({...f.context,path:['campaign-draft','cdr_a']},()=>f.store.read());
+ assert.deepEqual(one.campaign_drafts.map(d=>d.id),['cdr_a']);
+ await f.store.transact({...f.context,method:'POST',path:['campaign-draft','cdr_a']},async()=>{const d=await f.store.read();assert.ok(d.screens.some(s=>s.id==='sa'));d.campaign_drafts.find(x=>x.id==='cdr_a').fields.name='Saved';await f.store.write(d);});
+ assert.deepEqual(f.database.commits.at(-1).map(x=>x[1]),['campaign_drafts/cdr_a']);
+ await assert.rejects(f.store.transact({...f.context,method:'POST',path:['campaign-draft']},async()=>{const d=await f.store.read();d.campaign_drafts.push({...draftA,id:'cdr_evil',org_id:'b'});await f.store.write(d);}),{status:403});
+ const id=draftCampaignId('cdr_a');
+ const g=fixture({'campaign_drafts/cdr_a':draftA,[`campaigns/${id}`]:{id,org_id:'a',advertiser_id:'x',creative_ids:[]},'campaigns/ca':{id:'ca',org_id:'a',advertiser_id:'x',creative_ids:[]}});
+ const submit=await g.store.transact({...g.context,method:'POST',path:['campaign-draft','cdr_a','submit']},()=>g.store.read());
+ assert.ok(submit.campaigns.some(c=>c.id===id));
+ // No ledger exists yet, so the POST /campaign budget path falls back to settlement buckets per loaded campaign.
+ for(const cid of [id,'ca'])assert.ok(g.database.reads.some(q=>typeof q==='object'&&q.collection==='settlement_buckets'&&q.filters.some(x=>x[0]==='campaign_id'&&x[2]===cid)),'submit loads budgets like POST /campaign for '+cid);
+});

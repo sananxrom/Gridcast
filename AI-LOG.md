@@ -5460,3 +5460,74 @@ with submit, review and activate.
 **Validation:** Production build and focused upload3/3 passed; final combined browser evidence18/18 as documented above. Local production server stopped. Shared graph/SymDex refreshed. Unrelated workflow/untracked files preserved.
 **Observed follow-up:** Advertiser list/workspace bootstrap shows Lay's accrued₹22 and its network campaign budget as Managed by Gridcast, while prior Phase2 campaign detail showed lifetime₹65. Do not equate these scopes; investigate bootstrap projection versus full network-detail totals before promising advertiser-wide financial totals. This observation was not corrected or proven a Phase3 regression in this release.
 **Next:** Phase3 complete. Phase4 not started.
+
+### 2026-10-01 11:51 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Phase 3 live; diagnosis of Codex's ₹22 vs ₹65 spend observation
+
+**Asked:** Sanan: check the log. Phase 3 is live (`a861c35`, `build-2026-10-01-003`) after Codex's QC fixes: archived or
+missing deep links, archived creative controls, the re-upload warning wording. Browser 18/18 (Codex).
+**Cause of the mismatch (source):** `campaignView` computes network-campaign spend from settlement buckets scoped to
+`scopedOrg = orgId || ...` (`lib/access.ts:389-395`, `settlementView(db, actor, c.id, scopedOrg)`). An admin viewing an
+advertiser workspace under `?org=<operator>` gets only that org's screens (₹22). The campaign page, read in a different
+scope, showed the whole campaign (₹65). Both are correct for their scope; **neither is a regression.**
+**The defect is the label, and it is mine from Phase 3.** The workspace Overview tile sums these values and labels them
+"Lifetime", without saying they are limited to the scoped org's screens. The campaign card already handles this ("Lifetime
+gross on your screens", `spend_source`).
+**Proposed fix (small, front-end):** when any summed campaign is a network campaign viewed under an org scope, label the
+tile "Lifetime · on <org> screens only", and link to the campaign page for the full total. Bundle it into the next phase
+unless Sanan wants it sooner.
+**Files:** `AI-LOG.md`. Not committed.
+
+### 2026-10-01 11:53 IST · claude-opus-5.5 (Claude Code desktop, Mac) · CLAIMING doc 31 Phase 4 (guided creation with server drafts): Sanan assigned it to Claude
+
+**Sanan:** "go step 4". Phase 3 is live (`a861c35`). Same model: a sub-agent builds, Claude reviews, Codex tests and deploys.
+This phase includes **server work**.
+**Coordinator, Builder, QC: please do not edit these until I log that I am done:** `lib/access.ts` (new draft routes and
+draft validation only), `lib/api.ts` (draft handlers, and submit calling the existing `POST /campaign` path),
+`lib/firestore-store.ts` (`campaign_drafts` collection and loading only), a new `lib/campaign-drafts.ts` if useful,
+`components/views/campaign-builder.tsx` or a new `components/views/campaign-flow.tsx`, `app/admin/page.tsx` and
+`app/operator/page.tsx` (routing to the flow and a drafts entry point), `components/views/advertiser-workspace.tsx`
+(spend tile label fix from my 11:50 entry; a drafts list if useful), new `tests/campaign-drafts.test.cjs`, and the affected
+`tests/admin.browser.cjs`, `tests/firestore-store.test.cjs` and `tests/firestore-emulator.test.cjs` cases.
+**Defaults chosen (Sanan may overrule):** drafts visible only to their creator, in the same org (least privilege); expiry
+30 days; no "about N plays" estimate (no source), Budget shows list price only. Submit creates `pending` and Launch
+creates `active` only when every creative is approved, as doc 31 says until Phase 5.
+**Hard rules:** drafts never reach playback, inventory, settlement or budgets; no zero defaults for unknown money; submit
+reuses the unchanged create path; authorization on every draft route.
+
+### 2026-10-01 12:09 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Doc 31 Phase 4 built by sub-agent; Claude review NOT yet done (usage limit)
+
+**Built (uncommitted):**
+- New `lib/campaign-drafts.ts` and a separate `campaign_drafts` collection.
+- `lib/access.ts`: the draft routes, `authorizeDraft`, and the POST /campaign check moved unchanged into
+  `authorizeCampaignCreate()`.
+- `lib/api.ts`: `createCampaign()` is shared by POST /campaign and draft submit. `draftRoute()` saves with a revision
+  check (409 on mismatch) and makes submit idempotent through a derived id. Submit makes `pending`; Launch makes
+  `active` only if every creative is approved.
+- `lib/firestore-store.ts`: the collection and its loading.
+- New `components/views/campaign-flow.tsx`: the five-step flow with Save draft on every step, resume via
+  `#draft:<id>`, and a `DraftsList`.
+- `components/views/campaign-builder.tsx` was **deleted**; nothing imported it.
+- The workspace spend label is fixed.
+**Sub-agent checks:** tsc exit 0; drafts 7/7; inventory, integration-inventory and firestore-store 62/62; full suite
+360 total / 355 pass / 0 fail / 5 skip. Not run: admin browser and firestore emulator.
+**Sub-agent's grep evidence:** `campaign_drafts` appears only in the draft code; `playlistFor`, `validateInventory`,
+`bootstrap`, directory and network-inventory read only `db.campaigns`.
+**Open risks from the sub-agent:** drafts are never deleted; the per-user Firestore query is capped at 2000; drafts are
+not in the audit log; Next and Back do not save; a flat-fee draft submits `rate_value: 0`, as the old builder did.
+**Status:** Claude has not reviewed this source; the usage limit was reached. Files stay CLAIMED until Claude reviews
+them, or until Sanan tells the Coordinator to review them directly. Do not deploy before a review.
+
+### 2026-10-01 12:28 IST · GPT-6 (Codex desktop, coordinator) · Phase 4 review takeover authorized
+
+**Asked:** Sanan approved Coordinator taking over review, fixes, checks and Firebase release after Claude reached its usage limit. This releases the Phase4 claim for coordinated work.
+**Did:** Read12:09 handoff, doc31 Phase4 and candidate diff atop `052d15f`. Assigned server QC, frontend review and focused draft/Firestore verification to established chats. Initial production build passed. Coordinator owns integration and deployment; files unchanged so far.
+**Open:** Review and database/browser tests pending; not cleared or deployed yet.
+
+### 2026-10-01 12:36 IST · GPT-6 (Codex desktop, coordinator) · Phase 4 reviewed and release candidate verified
+
+**Review:** QC reviewed server drafts: creator/tenant boundaries, revision saves, deterministic submit, reuse of campaign creation, isolation from inventory/playback/budgets. Builder reviewed wizard, resume and network booking behavior. Fixed invalid calendar dates returning500 by checking parsed timestamp before formatting in `lib/access.ts`; draft tests now8/8 including400/no mutation and leap-day validation. Corrected contradictory Budget copy in `components/views/campaign-flow.tsx` to describe reserved allowances. Repeat submit still passes existing role redaction.
+**Checks:** Initial and final production builds passed. Tester initially passed35/35 draft+Firestore-store tests; date regression rerun8/8 passed. Browser full run18/19; failure traced to missing mocked GET campaign detail on successful submit redirect, not draft storage. Corrected case-local fixture before submit, retained error assertions, removed diagnostic scaffolding; affected guided-flow case passed against final rebuild. Combined19 checks covered; other18 passed before date/copy-only rebuild. Claude previously reported fullsuite355pass/5skip; coordinator did not rerun that suite.
+**Limit:** Firestore emulator test attempted but skipped: localhost8185 unavailable, no cached emulator runtime and no Java installed. This is not an emulator pass. Proceeding with focused adapter tests, reviewed transactional path and controlled-development deployment per Sanan; live basic draft persistence check follows release. Draft expiry is logical30days, not physical deletion; existing query cap2000 and absent dedicated draft audit remain known nonblocking development limits.
+**Indexes:** Shared graph and SymDex refreshed for final source; known app-shell partial parse remains. Test-only fixture correction followed indexing.
+**Files:** Phase4 `lib/campaign-drafts.ts`, access/api/firestore-store, campaign-flow/list/workspace and admin/operator routes, removal of unused campaign-builder, focused draft/store/emulator/browser tests. Unrelated workflow/untracked files excluded.
+**Next:** Commit/push and exact-SHA Firebase deployment; Phase5 not started.

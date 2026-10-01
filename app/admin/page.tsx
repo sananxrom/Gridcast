@@ -22,7 +22,7 @@ import { CameraReadiness } from '@/components/views/camera-readiness';
 import { CampaignList } from '@/components/views/campaign-list';
 import { approvalAlerts, blockedAlerts } from '@/lib/campaign-status';
 import { usePeriodicRefresh } from '@/components/views/campaign-status-badge';
-import { CampaignBuilder } from '@/components/views/campaign-builder';
+import { CampaignFlow } from '@/components/views/campaign-flow';
 import type { CmdItem } from '@/components/ui/command-palette';
 import { BootLoader } from '@/components/ui/loader';
 import { ConfigList, ConfigEditor } from '@/components/views/config-views';
@@ -87,7 +87,7 @@ export default function Admin() {
   const selectOrg=(id:string)=>{
     const url=new URL(location.href); if(id==='all')url.searchParams.delete('org');else url.searchParams.set('org',id);
     const current=location.hash.slice(1)||'overview';
-    const next=current.startsWith('s/')?'screens':current.startsWith('c/')||current==='new'||current.startsWith('new:a:')?'campaigns':current.startsWith('a/')?'advertisers':current.startsWith('cfg/')?'configs':current==='new-screen'?'screens':current;
+    const next=current.startsWith('s/')?'screens':current.startsWith('c/')||current==='new'||current.startsWith('new:a:')||current.startsWith('draft:')?'campaigns':current.startsWith('a/')?'advertisers':current.startsWith('cfg/')?'configs':current==='new-screen'?'screens':current;
     url.hash=next;history.pushState(null,'',url);scopeRef.current=id;setOrgFilter(id);setView(next);setEditOrg('');setD(null);load(id);
   };
 
@@ -149,6 +149,7 @@ export default function Admin() {
     if (view.startsWith('cfg/')) return [root, { label: 'Device configs', go: 'configs' }, 'Config'];
     if (view.startsWith('new:a:')) return [root, { label: 'Advertisers', go: 'advertisers' }, { label: nameOf(d.advertisers, view.slice(6), 'Advertiser'), go: 'a/' + view.slice(6) }, 'New campaign'];
     if (view === 'new') return [root, { label: 'Campaigns', go: 'campaigns' }, 'New campaign'];
+    if (view.startsWith('draft:')) return [root, { label: 'Campaigns', go: 'campaigns' }, 'Campaign draft'];
     if (view.startsWith('set-') || view === 'settings') return [root, 'Settings', titleOf[view] ?? 'Settings'];
     if (view === 'overview') return [root];
     return [root, titleOf[view] ?? 'Overview'];
@@ -179,7 +180,7 @@ export default function Admin() {
       {view.startsWith('s/') && (orgFilter==='all'||d.screens.some((s:any)=>s.id===view.slice(2)&&s.org_id===orgFilter)) && <ScreenDetail id={view.slice(2)} onGo={go} onChanged={reload} />}
       {view.startsWith('c/') && orgFilter!=='all' && !d.campaigns.some((c:any)=>c.id===view.slice(2)) && <Empty>This campaign is outside the selected organisation. Select its organisation before opening it.</Empty>}
       {view.startsWith('c/') && (orgFilter==='all'||d.campaigns.some((c:any)=>c.id===view.slice(2))) && <CampaignDetail id={view.slice(2)} boot={d} onGo={go} onChanged={reload} />}
-      {(view === 'new' || view.startsWith('new:a:')) && <CampaignBuilder key={view} boot={d} user={user} orgId={orgFilter==='all'?null:orgFilter} advertiserId={view.startsWith('new:a:') ? view.slice(6) : undefined} onGo={go} onDone={async (c: any) => { await reload(); go('c/' + c.id); }} />}
+      {(view === 'new' || view.startsWith('new:a:') || view.startsWith('draft:')) && <CampaignFlow key={view} boot={d} user={user} orgId={orgFilter==='all'?null:orgFilter} advertiserId={view.startsWith('new:a:') ? view.slice(6) : undefined} draftId={view.startsWith('draft:') ? view.slice(6) : undefined} onGo={go} onChanged={reload} onDone={async (c: any) => { await reload(); go('c/' + c.id); }} />}
 
       {view === 'overview' && (<>
         <PageHead title="Platform overview" sub={`${d.screens.length} loaded screens · ${d.campaigns.filter(isLive).length} live campaigns`} />

@@ -62,7 +62,8 @@ export function AdvertiserWorkspace({ a, d, user, orgId, onGo, onChanged, settin
     </Card>}
     <TabList tabs={tabs} value={tab} onChange={setTab} label="Advertiser sections" idBase="advertiser" />
     <TabPanel idBase="advertiser" id={tab}>
-      {tab === 'overview' && <Overview campaigns={campaigns} creatives={creatives} statusOf={statusOf} evidenceError={evidence.error} now={now} onGo={onGo} onTab={setTab} />}
+      {tab === 'overview' && <Overview campaigns={campaigns} creatives={creatives} statusOf={statusOf} evidenceError={evidence.error} now={now} onGo={onGo} onTab={setTab}
+        scopeName={d.orgs?.find((o: any) => o.id === (orgId ?? (user.role === 'platform_admin' ? null : user.org_id)))?.name ?? 'this organisation’s'} />}
       {tab === 'campaigns' && <Campaigns campaigns={campaigns} statusOf={statusOf} canManage={canManage} archived={archived} onGo={onGo} onNew={newCampaign} />}
       {tab === 'creatives' && <CreativeLibrary a={a} d={d} now={now} creatives={creatives} canManage={canManage} mayCreate={mayCreate} archived={archived} onChanged={onChanged} renderEditor={renderEditor} />}
       {tab === 'settings' && settings}
@@ -78,8 +79,8 @@ function Tile({ title, children, caption }: { title: string; children: React.Rea
   </Card>;
 }
 
-function Overview({ campaigns, creatives, statusOf, evidenceError, now, onGo, onTab }: {
-  campaigns: any[]; creatives: any[]; statusOf: (c: any) => CampaignStatus; evidenceError: string | null; now: number; onGo: (g: string) => void; onTab: (t: string) => void;
+function Overview({ campaigns, creatives, statusOf, evidenceError, now, onGo, onTab, scopeName }: {
+  campaigns: any[]; creatives: any[]; statusOf: (c: any) => CampaignStatus; evidenceError: string | null; now: number; onGo: (g: string) => void; onTab: (t: string) => void; scopeName: string;
 }) {
   const counts = new Map<string, { label: string; tone: CampaignStatus['tone']; n: number }>();
   for (const c of campaigns) {
@@ -89,6 +90,8 @@ function Overview({ campaigns, creatives, statusOf, evidenceError, now, onGo, on
   const ordered = [...counts.entries()].sort((x, y) => STATE_ORDER.indexOf(x[0]) - STATE_ORDER.indexOf(y[0]));
   const spendHidden = campaigns.some((c: any) => typeof c.accrued_spend !== 'number');
   const spend = spendHidden ? '—' : inr(campaigns.reduce((sum: number, c: any) => sum + c.accrued_spend, 0));
+  // A network campaign read under an organisation scope carries only that organisation's settlement (campaignView).
+  const spendScoped = campaigns.some((c: any) => c.reporting_scope === 'organisation');
   const today = istDay(now), weekOut = istDay(now + 7 * DAY);
   const pending = creatives.filter((c: any) => c.approval_status === 'pending');
   const rejected = creatives.filter((c: any) => c.approval_status === 'rejected');
@@ -105,7 +108,8 @@ function Overview({ campaigns, creatives, statusOf, evidenceError, now, onGo, on
   return <div className="space-y-4">
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
       <Tile title="Campaigns" caption="Visible to you">{campaigns.length}</Tile>
-      <Tile title="Accrued spend" caption={<><span>Lifetime</span>{spendHidden && <span> · some amounts are not visible to you</span>}</>}>{spend}</Tile>
+      <Tile title="Accrued spend" caption={<><span>{spendScoped ? `Lifetime · on ${scopeName} screens only` : 'Lifetime'}</span>{spendHidden && <span> · some amounts are not visible to you</span>}
+        {spendScoped && <><br /><button type="button" className="text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => onTab('campaigns')}>Full totals on each campaign page</button></>}</>}>{spend}</Tile>
       <Tile title="Creatives" caption={pending.length ? `${pending.length} awaiting approval` : 'In this advertiser’s library'}>{creatives.length}</Tile>
     </div>
     <Card className="p-4">
@@ -196,7 +200,8 @@ function CreativeCard({ c, used, ended, canManage, onEdit, onChanged }: { c: any
   </Card>;
 }
 
-function NewCreative({ a, onChanged, onClose }: { a: any; onChanged: () => unknown; onClose: () => void }) {
+/** One-step create then upload. `onCreated` lets the campaign flow select the new creative. */
+export function NewCreative({ a, onChanged, onClose, onCreated }: { a: any; onChanged: () => unknown; onClose: () => void; onCreated?: (row: any) => void }) {
   const [f, setF] = useState({ name: '', category: a.category || 'general', source: 'upload', url: '', dur: '10' });
   const [err, setErr] = useState(''), [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<any>(null);
@@ -218,6 +223,7 @@ function NewCreative({ a, onChanged, onClose }: { a: any; onChanged: () => unkno
       }
       const row = await api('/creative', { org_id: a.org_id, purpose: 'paid', advertiser_id: a.id, name: f.name.trim(), category: f.category.trim() || 'general', ...media });
       setCreated({ ...row, name: row?.name ?? f.name.trim(), media_type: row?.media_type ?? media.media_type, source: f.source });
+      onCreated?.(row);
       setUpload('choosing'); setUploadError('');
       await onChanged();
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
@@ -292,4 +298,31 @@ function CreativeLibrary({ a, d, now, creatives, canManage, mayCreate, archived,
       {creatives.map((c: any) => <li key={c.id} className="min-w-0"><CreativeCard c={c} {...usage(c.id)} canManage={canManage && !archived} onEdit={() => setEditing(c.id)} onChanged={onChanged} /></li>)}
     </ul> : <Empty>No creatives for this advertiser yet.</Empty>}
   </>;
+}
+
+/** The library grid with a select checkbox per card, for the campaign flow's Creatives step. */
+export function SelectableCreativeGrid({ creatives, selected, onToggle }: { creatives: any[]; selected: string[]; onToggle: (id: string) => void }) {
+  if (!creatives.length) return <Empty>No creatives for this advertiser yet. Create one above.</Empty>;
+  return <ul aria-label="Creative library" className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-3">
+    {creatives.map((c: any) => {
+      const m = mediaOf(c), image = c.media_type === 'image', on = selected.includes(c.id);
+      return <li key={c.id} className="min-w-0">
+        <label className={`flex h-full cursor-pointer flex-col gap-2 rounded-xl border bg-card p-3 text-card-foreground shadow-sm transition-colors focus-within:ring-2 focus-within:ring-ring ${on ? 'border-primary' : 'border-border/60 hover:border-border'}`}>
+          {c.youtube_id && !m.variations ? <Thumb id={c.youtube_id} className="!w-full" />
+            : <MediaPlaceholder image={image} label={m.hasMedia ? m.kind : 'No media yet'} />}
+          <span className="flex items-start gap-2">
+            <input type="checkbox" className="mt-0.5" checked={on} onChange={() => onToggle(c.id)} aria-label={`Use creative ${c.name}`} />
+            <span className="min-w-0">
+              <span className="block truncate font-medium" title={c.name}>{c.name}</span>
+              <span className="block text-[12px] text-muted-foreground">{m.kind}{m.length ? ` · ${m.length}` : ''}</span>
+            </span>
+          </span>
+          <span className="flex flex-wrap items-center gap-1.5">
+            <Badge variant={approvalVariant(c.approval_status)}>{c.approval_status}</Badge>
+            {!m.hasMedia && <Badge variant="outline">No media yet</Badge>}
+          </span>
+        </label>
+      </li>;
+    })}
+  </ul>;
 }

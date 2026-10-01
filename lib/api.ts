@@ -1,7 +1,8 @@
 import { maintenanceRoute, maintenanceCodeId, maintenanceTokenId, maintenanceLimiterIds } from './maintenance';
 import { ReportingError, reportRange, reportingVisible, summarizeReport, REPORT_PAGE_SIZE } from './reporting';
 import { ensureBudget, validateBudgetEdit } from './budgets';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { draftCampaignBody, draftCampaignId, draftExpiry, draftVisibleTo, missingForSubmit, missingMessage } from './campaign-drafts';
 import { creativeRotationIndex } from './rotation';
 import { economics, freezeEconomics } from './settlement';
 import { DiagnosticError, requestDiagnostic, revokeDiagnostic, assertNoDiagnosticLease } from './diagnostics';
@@ -9,7 +10,7 @@ import { auditSnapshot, appendAudit, auditView } from './audit';
 import { summarizeReadiness } from './readiness';
 import { openMedia, mediaUrl } from './media';
 import * as store from './store';
-import { AccessError, authorize, bootstrap, publicUser, orgView, screenView, advertiserView, capabilities, campaignView, settlementView, redact } from './access';
+import { AccessError, authorize, authorizeCampaignCreate, bootstrap, publicUser, orgView, screenView, advertiserView, capabilities, campaignView, settlementView, redact } from './access';
 import { seed, uid, nowISO, code6 } from './seed';
 import * as cfg from './config';
 import { ATTENTION_PROFILE } from './vision/attention-contracts';
@@ -49,6 +50,57 @@ function freezeBookings(c: any, previousCampaign?: any) {
     return { ...b, ...freezeEconomics(c,screen,db.orgs.find((o: any) => o.id === screen.org_id),previous) };
   });
   c.participant_org_ids = [...new Set([...(previousCampaign?.participant_org_ids || []), ...c.screen_ids.map((id: string) => db.screens.find((s: any) => s.id === id).org_id)])];
+}
+/** The one campaign create path. POST /campaign and draft submit both call it with an authorized body. */
+function createCampaign(body: any, id?: string) {
+  const c = { id: id ?? creationId('cmp',body), created_at: nowISO(), accrued_spend: 0, status: 'active', campaign_type: 'operator', platform_fee_pct: 0, fee_basis: 'gross', invoice_status: 'not_invoiced', ...body };
+  freezeBookings(c); db.campaigns.push(c); return c;
+}
+/** Campaign drafts live in `campaign_drafts`, which no playback, inventory, settlement, budget, reporting or
+ * bootstrap code reads. Bodies here were already authorized by authorizeDraft in lib/access.ts. */
+async function draftRoute(method: string, seg: string[], q: URLSearchParams, body: any, actor: any): Promise<Res> {
+  db.campaign_drafts ||= [];
+  const now = Date.now();
+  if (method === 'GET' && seg[0] === 'campaign-drafts') {
+    const scope = q.get('org') || q.get('org_id');
+    const items = db.campaign_drafts.filter((d: any) => draftVisibleTo(d, actor, now) && !d.submitted_campaign_id && (!scope || d.org_id === scope))
+      .sort((a: any, b: any) => String(b.updated_at).localeCompare(String(a.updated_at)));
+    return { body: { items } };
+  }
+  const [, id, action] = seg;
+  if (method === 'POST' && !id) {
+    const at = nowISO();
+    const draft = { id: 'cdr_' + randomUUID().replace(/-/g, ''), ...body, created_by: actor.id, revision: 1, created_at: at, updated_at: at, expires_at: draftExpiry(now), submitted_campaign_id: null };
+    db.campaign_drafts.push(draft); await save(); return { body: draft };
+  }
+  const draft = db.campaign_drafts.find((d: any) => d.id === id);
+  if (!draftVisibleTo(draft, actor, now)) return { status: 404, body: { error: 'Not found' } };
+  if (method === 'GET') return { body: draft };
+  if (action === 'discard') {
+    db.campaign_drafts = db.campaign_drafts.filter((d: any) => d.id !== id);
+    await save(); return { body: { ok: true } };
+  }
+  if (action === 'submit') {
+    const campaignId = draftCampaignId(draft.id);
+    const existing = db.campaigns.find((c: any) => c.id === campaignId);
+    if (draft.submitted_campaign_id || existing) {
+      // A repeated submit returns the one campaign this draft created; it never creates a second.
+      if (!existing) return { status: 409, body: { error: 'This draft was already submitted' } };
+      if (!draft.submitted_campaign_id) { draft.submitted_campaign_id = existing.id; draft.updated_at = nowISO(); await save(); }
+      return { body: { campaign: existing, draft, reused: true } };
+    }
+    const missing = missingForSubmit(draft);
+    if (missing) throw new AccessError(400, missingMessage(missing));
+    if (body.mode === 'launch' && draft.fields.creative_ids.some((cid: string) => db.creatives.find((x: any) => x.id === cid)?.approval_status !== 'approved'))
+      throw new AccessError(400, 'Launch needs every creative approved');
+    const campaign = createCampaign(authorizeCampaignCreate(db, actor, draftCampaignBody(draft, body.mode === 'launch' ? 'active' : 'pending')), campaignId);
+    Object.assign(draft, { submitted_campaign_id: campaign.id, submitted_at: nowISO(), updated_at: nowISO(), revision: draft.revision + 1 });
+    await save(); return { body: { campaign, draft } };
+  }
+  if (body.revision !== draft.revision) return { status: 409, body: { error: 'This draft changed in another tab. Reload it before saving again.', revision: draft.revision } };
+  const at = nowISO();
+  Object.assign(draft, { step: body.step, fields: body.fields, advertiser_id: body.advertiser_id, campaign_type: body.campaign_type, revision: draft.revision + 1, updated_at: at, expires_at: draftExpiry(now) });
+  await save(); return { body: draft };
 }
 const inventoryScreens = () => db.screens.map((s: any) => { const v = cfg.flatten(resolveFor(s)); return { ...s, loop_length_s: v.loop_length_s, slot_duration_s: v.slot_duration_s }; });
 function validateInventory() {
@@ -437,9 +489,9 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     freezeBookings(c, previousCampaign); await save(); return { body: c };
   }
   if (method === 'POST' && p === 'campaign') {
-    const c = { id: creationId('cmp',body), created_at: nowISO(), accrued_spend: 0, status: 'active', campaign_type: 'operator', platform_fee_pct: 0, fee_basis: 'gross', invoice_status: 'not_invoiced', ...body };
-    freezeBookings(c); db.campaigns.push(c); await save(); return { body: c };
+    const c = createCampaign(body); await save(); return { body: c };
   }
+  if (seg[0] === 'campaign-draft' || p === 'campaign-drafts') return draftRoute(method, seg, q, body, actor);
   if (method === 'POST' && seg[0] === 'creative' && seg[2] === 'approve') {
     const cr = db.creatives.find((x: any) => x.id === seg[1]);
     if (!cr) return { status: 404, body: { error: 'not found' } };

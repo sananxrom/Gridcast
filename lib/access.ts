@@ -1,5 +1,6 @@
 import { ADVERTISER, PLATFORM_ADMIN, assignable, can, type Cap } from './roles';
 import { LOCKED_KEYS, BY_KEY } from './config';
+import { DRAFT_FIELDS, DRAFT_STEPS, draftVisibleTo } from './campaign-drafts';
 
 export class AccessError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -43,6 +44,10 @@ export const ROUTES: { method: string; path: RegExp; caps: Cap[] }[] = [
   { method: 'POST', path: /^user\/[^/]+\/(role|status|newpassword)$/, caps: ['team'] },
   { method: 'GET', path: /^campaign\/[^/]+$/, caps: [] },
   { method: 'POST', path: /^campaign(?:\/[^/]+)?$/, caps: ['sales'] },
+  // Campaign drafts: creator-only, never read by playback, inventory, settlement or bootstrap.
+  { method: 'POST', path: /^campaign-draft(?:\/[^/]+(?:\/(discard|submit))?)?$/, caps: ['sales'] },
+  { method: 'GET', path: /^campaign-draft\/[^/]+$/, caps: ['sales'] },
+  { method: 'GET', path: /^campaign-drafts$/, caps: ['sales'] },
   { method: 'POST', path: /^(creative|advertiser)$/, caps: ['sales'] },
   { method: 'POST', path: /^creative\/[^/]+$/, caps: ['sales'] },
   { method: 'POST', path: /^creative\/[^/]+\/approve$/, caps: ['platform'] },
@@ -138,6 +143,108 @@ function campaignRelations(db: any, c: any, actor: any) {
   }
 }
 
+/** POST /campaign authorization. Draft submit calls this same function, so both paths share one rule set. */
+export function authorizeCampaignCreate(db: any, actor: any, input: any) {
+  let body = { ...input };
+  const orgId = body.org_id || actor.org_id;
+  org(db, orgId, actor);
+  rejectUnknown(body, [...CAMPAIGN_EDIT, 'org_id', 'advertiser_id', 'campaign_type']);
+  if ('invoice_status' in body && !can(actor.role, 'money')) fail(403, 'Billing requires money access');
+  if (!['operator','network'].includes(body.campaign_type || 'operator')) fail(400,'Unknown campaign type');
+  body = { ...body, org_id: orgId, origin_org_id: orgId, campaign_type:body.campaign_type || 'operator' };
+  campaignRelations(db, body, actor);
+  return body;
+}
+
+const DATE = /^\d{4}-\d{2}-\d{2}$/, TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
+const money = (v: any) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1e12;
+/** Type checks for the fields a draft may carry. Nothing is required; null clears a field; nothing defaults to zero. */
+function draftFields(input: any) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'Invalid draft fields');
+  rejectUnknown(input, [...DRAFT_FIELDS]);
+  const out: Record<string, any> = {};
+  for (const [key, value] of Object.entries(input) as [string, any][]) {
+    if (value === null) { out[key] = null; continue; }
+    if (key === 'name') { if (typeof value !== 'string' || value.length > 200) fail(400, 'Campaign name must be text of up to 200 characters'); out.name = value; }
+    else if (key === 'starts_at' || key === 'ends_at') {
+      const at = typeof value === 'string' && DATE.test(value) ? Date.parse(value + 'T00:00:00Z') : NaN;
+      if (!Number.isFinite(at) || new Date(at).toISOString().slice(0, 10) !== value) fail(400, 'Dates must be valid YYYY-MM-DD dates');
+      out[key] = value;
+    } else if (key === 'dayparts') {
+      if (!Array.isArray(value) || value.length > 4 || value.some((w: any) => !w || typeof w !== 'object' || Array.isArray(w) || Object.keys(w).some(k => !['from','to'].includes(k)) || !TIME.test(w.from) || !TIME.test(w.to))) fail(400, 'Daily windows must use HH:MM times');
+      out.dayparts = value.map((w: any) => ({ from: w.from, to: w.to }));
+    } else if (key === 'screen_ids' || key === 'creative_ids') {
+      if (ids(value).length > 2000) fail(400, 'Too many IDs');
+      out[key] = value;
+    } else if (key === 'bookings') {
+      if (!Array.isArray(value) || value.length > 2000 || value.some((b: any) => !b || typeof b !== 'object' || Array.isArray(b) || Object.keys(b).some(k => !['screen_id','rotation_weight'].includes(k)) || typeof b.screen_id !== 'string' || !Number.isInteger(b.rotation_weight) || b.rotation_weight < 1 || b.rotation_weight > 100)
+        || new Set(value.map((b: any) => b.screen_id)).size !== value.length) fail(400, 'Turns per round must be whole numbers from 1 to 100, one per screen');
+      out.bookings = value.map((b: any) => ({ screen_id: b.screen_id, rotation_weight: b.rotation_weight }));
+    } else if (key === 'rate_type') { if (!['per_play','flat'].includes(value as string)) fail(400, 'Unknown rate type'); out.rate_type = value; }
+    else if (key === 'rate_value' || key === 'committed_budget') { if (!money(value)) fail(400, 'Rate and budget must be finite numbers of zero or more'); out[key] = value; }
+  }
+  return out;
+}
+/** The subset of campaignRelations that applies to an incomplete draft. Capacity, economics and dates wait for submit. */
+function draftRelations(db: any, d: any, actor: any) {
+  const origin = org(db, d.org_id, actor);
+  if (!['operator','network'].includes(d.campaign_type)) fail(400, 'Choose a campaign type');
+  if (d.campaign_type === 'network' && (!admin(actor) || origin.type !== 'gridcast')) fail(403, 'Only platform administrators can manage Gridcast network campaigns');
+  const f = d.fields || {};
+  if (d.campaign_type === 'network' && f.rate_type != null && f.rate_type !== 'per_play') fail(400, 'Network campaigns currently support per-play pricing only');
+  let adv: any = null;
+  if (d.advertiser_id != null) {
+    if (typeof d.advertiser_id !== 'string') fail(400, 'Invalid advertiser');
+    adv = db.advertisers.find((a: any) => a.id === d.advertiser_id);
+    if (!adv || adv.org_id !== d.org_id) fail(400, 'Advertiser does not belong to this campaign');
+    if (adv.status === 'archived') fail(409, 'Restore this advertiser before creating or changing campaigns');
+  }
+  for (const id of f.screen_ids || []) {
+    const s = own(db.screens, id, actor);
+    if (d.campaign_type !== 'network' && s.org_id !== d.org_id) fail(400, 'Campaign screens must belong to the receiving organisation');
+  }
+  if ((f.bookings || []).some((b: any) => !(f.screen_ids || []).includes(b.screen_id))) fail(400, 'Bookings must target selected screens');
+  if ((f.creative_ids || []).length && !adv) fail(400, 'Choose an advertiser before adding creatives');
+  for (const id of f.creative_ids || []) {
+    const cr = db.creatives.find((x: any) => x.id === id);
+    if (!cr || cr.org_id !== d.org_id || cr.advertiser_id !== adv.id || cr.purpose === 'filler') fail(400, 'Creative does not belong to this advertiser');
+  }
+}
+/** Draft routes. Another user's or another organisation's draft is 404, never 403, so existence does not leak. */
+function authorizeDraft(db: any, actor: any, method: string, seg: string[], input: any, q: URLSearchParams) {
+  const [entity, id, action] = seg;
+  if (entity === 'campaign-drafts') { rejectUnknown(input, []); const scope = q.get('org') || q.get('org_id'); if (scope) org(db, scope, actor); return {}; }
+  if (!id) {
+    rejectUnknown(input, ['org_id','campaign_type','advertiser_id','step','fields']);
+    const orgId = input.org_id || actor.org_id;
+    if (typeof orgId !== 'string') fail(400, 'Choose an organisation');
+    if (input.step !== undefined && !DRAFT_STEPS.includes(input.step)) fail(400, 'Unknown draft step');
+    const fields = Object.fromEntries(Object.entries(draftFields(input.fields ?? {})).filter(([, v]) => v !== null));
+    const draft = { org_id: orgId, campaign_type: input.campaign_type, advertiser_id: input.advertiser_id ?? null, step: input.step ?? 'basics', fields };
+    draftRelations(db, draft, actor);
+    return draft;
+  }
+  const draft = (db.campaign_drafts || []).find((d: any) => d.id === id);
+  if (!draftVisibleTo(draft, actor)) fail(404, 'Not found');
+  if (method === 'GET') return {};
+  if (draft.submitted_campaign_id && action !== 'submit') fail(409, 'This draft was submitted and is read-only');
+  if (action === 'discard') { rejectUnknown(input, []); return {}; }
+  if (action === 'submit') {
+    rejectUnknown(input, ['mode']);
+    if (!['submit','launch'].includes(input.mode)) fail(400, 'Choose submit or launch');
+    return { mode: input.mode };
+  }
+  rejectUnknown(input, ['revision','step','fields','advertiser_id','campaign_type']);
+  if (!Number.isInteger(input.revision)) fail(400, 'Draft revision is required');
+  if (input.step !== undefined && !DRAFT_STEPS.includes(input.step)) fail(400, 'Unknown draft step');
+  const patch = draftFields(input.fields ?? {});
+  const fields = { ...draft.fields, ...patch };
+  for (const k of Object.keys(fields)) if (fields[k] === null) delete fields[k];
+  const next = { ...draft, fields, ...('advertiser_id' in input ? { advertiser_id: input.advertiser_id } : {}), ...('campaign_type' in input ? { campaign_type: input.campaign_type } : {}), ...(input.step !== undefined ? { step: input.step } : {}) };
+  draftRelations(db, next, actor);
+  return { revision: input.revision, step: next.step, fields, advertiser_id: next.advertiser_id ?? null, campaign_type: next.campaign_type };
+}
+
 /** Validate all targets before the dispatcher mutates any of them. Returns a whitelisted body. */
 export function authorize(db: any, actor: any, method: string, seg: string[], input: any, q: URLSearchParams) {
   const path = seg.join('/');
@@ -180,15 +287,8 @@ export function authorize(db: any, actor: any, method: string, seg: string[], in
       campaignRelations(db, { ...c, ...body }, actor);
     }
   }
-  if (path === 'campaign' && method === 'POST') {
-    const orgId = body.org_id || actor.org_id;
-    org(db, orgId, actor);
-    rejectUnknown(body, [...CAMPAIGN_EDIT, 'org_id', 'advertiser_id', 'campaign_type']);
-    if ('invoice_status' in body && !can(actor.role, 'money')) fail(403, 'Billing requires money access');
-    if (!['operator','network'].includes(body.campaign_type || 'operator')) fail(400,'Unknown campaign type');
-    body = { ...body, org_id: orgId, origin_org_id: orgId, campaign_type:body.campaign_type || 'operator' };
-    campaignRelations(db, body, actor);
-  }
+  if (path === 'campaign' && method === 'POST') body = authorizeCampaignCreate(db, actor, body);
+  if (entity === 'campaign-draft' || entity === 'campaign-drafts') body = authorizeDraft(db, actor, method, seg, body, q);
   if ((path === 'creative' || path === 'advertiser') && method === 'POST') {
     const orgId = body.org_id || actor.org_id; org(db, orgId, actor);
     const allowed = path === 'creative' ? ['org_id','advertiser_id','name','category','youtube_id','duration_s','aspect','media_type','purpose']

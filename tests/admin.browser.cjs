@@ -8,7 +8,7 @@ async function harness(role='platform_admin') {
  const browser=await chromium.launch({executablePath,headless:true}); const page=await browser.newPage({viewport:{width:1440,height:1000}});
  const user={id:'admin',org_id:'gridcast',role,name:'Fixture Admin',orgName:'Gridcast'};
  const orgs=[{id:'gridcast',name:'Gridcast',type:'gridcast',status:'active'},{id:'a',name:'Operator Alpha',type:'operator',status:'active'},{id:'b',name:'Operator Beta',type:'operator',status:'active'}];
- const advertisers=[{id:'archived-a',org_id:'a',name:'Archived client',status:'archived'}],creatives=[],campaigns=[],requests=[];
+ const advertisers=[{id:'archived-a',org_id:'a',name:'Archived client',status:'archived'}],creatives=[],campaigns=[],requests=[],drafts=[];
  const screen={id:'screen-a',org_id:'a',name:'Alpha screen',status:'active',venue_type:'cafe',address:'Fixture',slot_price_month:100,monthly_value:100,loop_length_s:600,slot_duration_s:10,advertiser_slots:10,bookings:[],has_camera:true,_status:{state:'live',label:'Live'}};
  const boot=(org)=>({orgs,org:orgs.find(o=>o.id===org),advertisers:advertisers.filter(a=>!org||a.org_id===org),creatives:creatives.filter(c=>!org||c.org_id===org),campaigns:campaigns.filter(c=>!org||c.org_id===org),screens:(!org||org==='a')?[screen]:[],groups:[],devices:[],plays:[],presence:[],users:[],caps:role==='sales'?['sales']:['platform','screens','sales','money','team','org'],settings:{}});
  await page.addInitScript(u=>{localStorage.setItem('gc_user',JSON.stringify(u));localStorage.setItem('gc_token','fixture-not-a-real-credential');},user);
@@ -23,6 +23,16 @@ async function harness(role='platform_admin') {
   else if(path.startsWith('/creative/')&&body){result=creatives.find(c=>c.id===path.split('/')[2]);if(path.endsWith('/approve'))result.approval_status=body.status;else Object.assign(result,body);}
   else if(path==='/assets/upload'){result={asset:{duration_s:10,width:1280,height:720}};}
   else if(path==='/campaign'&&body){result={id:'campaign-'+campaigns.length,accrued_spend:0,invoice_status:'not_invoiced',...body};campaigns.push(result);}
+  // Server drafts (doc 31 Phase 4): create, revisioned save, read, list, discard and submit.
+  else if(path==='/campaign-drafts')result={items:drafts.filter(d=>!d.submitted_campaign_id&&(!url.searchParams.get('org')||d.org_id===url.searchParams.get('org')))};
+  else if(path==='/campaign-draft'&&body){const at=new Date().toISOString();result={id:'cdr-'+drafts.length,created_by:user.id,revision:1,created_at:at,updated_at:at,expires_at:'2999-01-01T00:00:00.000Z',submitted_campaign_id:null,fields:{},...body};drafts.push(result);}
+  else if(path.startsWith('/campaign-draft/')){const id=path.split('/')[2],d=drafts.find(x=>x.id===id),action=path.split('/')[3];
+   if(!d){await route.fulfill({status:404,contentType:'application/json',body:JSON.stringify({error:'Not found'})});return;}
+   if(!body)result=d;
+   else if(action==='discard'){drafts.splice(drafts.indexOf(d),1);result={ok:true};}
+   else if(action==='submit'){const f=d.fields;const c={id:'campaign-'+campaigns.length,org_id:d.org_id,advertiser_id:d.advertiser_id,campaign_type:d.campaign_type,name:f.name,starts_at:f.starts_at,ends_at:f.ends_at,screen_ids:f.screen_ids,creative_ids:f.creative_ids,bookings:f.bookings,rate_type:f.rate_type,rate_value:f.rate_value,committed_budget:f.committed_budget,status:body.mode==='launch'?'active':'pending',accrued_spend:0,invoice_status:'not_invoiced'};campaigns.push(c);d.submitted_campaign_id=c.id;result={campaign:c,draft:d};}
+   else{if(body.revision!==d.revision){await route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({error:'This draft changed in another tab. Reload it before saving again.'})});return;}
+    const fields={...d.fields,...body.fields};for(const k of Object.keys(fields))if(fields[k]===null)delete fields[k];Object.assign(d,{step:body.step,advertiser_id:body.advertiser_id,campaign_type:body.campaign_type,fields,revision:d.revision+1,updated_at:new Date().toISOString()});result=d;}}
   else if(path==='/invite')result={user:{email:body.email},temp_password:'local-test-only'};
   else if(path==='/config/schema')result={groups:[],settings:[],locked:[],priced:[]};
   else if(path==='/config')result=[];
@@ -31,7 +41,8 @@ async function harness(role='platform_admin') {
  await page.goto(base+(role==='sales'?'/operator#campaigns':'/admin?org=a#advertisers'));if(role!=='sales')await page.getByRole('button',{name:'Add advertiser',exact:true}).waitFor();
  const nav=async hash=>{await page.evaluate(h=>location.hash=h,hash);};
  const field=(label)=>page.locator('label').filter({hasText:new RegExp('^'+label+'$')}).locator('..').locator('input,select').first();
- return {browser,page,requests,advertisers,creatives,campaigns,nav,field,boot,screen,orgs};
+ const step=async name=>{await page.getByRole('navigation',{name:'Campaign steps'}).getByRole('button',{name:new RegExp('^'+name)}).click();};
+ return {browser,page,requests,advertisers,creatives,campaigns,drafts,nav,field,boot,screen,orgs,step};
 }
 test('master admin creates client, uploads and approves creative, books campaign in selected org',async()=>{
  const h=await harness(),{page,nav,field,requests}=h;
@@ -40,15 +51,21 @@ test('master admin creates client, uploads and approves creative, books campaign
   assert.equal(requests.find(r=>r.path==='/advertiser').body.org_id,'a');await page.screenshot({path:'/tmp/gridcast-admin-advertiser.png',fullPage:true});
   await nav('creatives');await field('Name').fill('Alpha Video');await page.getByLabel('Creative advertiser').selectOption('adv-1');await page.getByRole('button',{name:'Add creative',exact:true}).click();await page.getByRole('button',{name:'Upload video',exact:true}).click();await page.getByLabel('MP4 or WebM video').setInputFiles({name:'fixture.mp4',mimeType:'video/mp4',buffer:Buffer.from('synthetic mocked upload')});await page.getByRole('button',{name:'Upload selected video'}).click();await page.getByRole('status').waitFor();assert.match(requests.find(r=>r.path==='/assets/upload').body.multipart,/cr-0/);await page.screenshot({path:'/tmp/gridcast-admin-creative.png',fullPage:true});
   assert.equal(requests.find(r=>r.path==='/creative').body.org_id,'a');await page.getByRole('button',{name:'Approve',exact:true}).click();
-  await nav('new');await field('Campaign name').fill('Alpha Campaign');await page.getByLabel('Campaign advertiser').selectOption('adv-1');await page.getByText('Alpha screen',{exact:true}).locator('..').locator('..').locator('input[type=checkbox]').check();await page.getByText('Alpha Video',{exact:false}).locator('..').locator('input[type=checkbox]').check();await field('Initial status').selectOption('active');await page.getByRole('button',{name:'Create campaign',exact:true}).click();await page.waitForFunction(()=>location.hash.startsWith('#c/'));
-  const payload=requests.find(r=>r.path==='/campaign').body;assert.equal(payload.org_id,'a');assert.equal(payload.advertiser_id,'adv-1');assert.deepEqual(payload.screen_ids,['screen-a']);assert.equal(payload.status,'active');
+  await nav('new');await field('Campaign name').fill('Alpha Campaign');await page.getByLabel('Campaign advertiser').selectOption('adv-1');await page.getByLabel('Starts',{exact:true}).fill('2026-10-01');await page.getByLabel('Ends',{exact:true}).fill('2026-10-31');
+  await page.getByRole('button',{name:'Next',exact:true}).click();await page.getByLabel('Use screen Alpha screen').check();
+  await page.getByRole('button',{name:'Next',exact:true}).click();await page.getByLabel('Use creative Alpha Video').check();
+  await page.getByRole('button',{name:'Next',exact:true}).click();await page.getByLabel('Campaign rate type').selectOption('per_play');await page.getByLabel('Rate per play',{exact:true}).fill('0.93');await page.getByLabel('Committed budget',{exact:true}).fill('12000');
+  await page.getByRole('button',{name:'Next',exact:true}).click();assert.equal(await page.getByLabel('Initial status').count(),0);
+  await page.getByRole('button',{name:'Launch',exact:true}).click();await page.waitForFunction(()=>location.hash.startsWith('#c/'));
+  const created=requests.find(r=>r.path==='/campaign-draft').body;assert.equal(created.org_id,'a');assert.equal(created.advertiser_id,'adv-1');assert.deepEqual(created.fields.screen_ids,['screen-a']);assert.equal(created.fields.committed_budget,12000);
+  assert.equal(requests.find(r=>r.path.endsWith('/submit')).body.mode,'launch');assert.equal(h.campaigns[0].status,'active');assert.equal(requests.filter(r=>r.path==='/campaign').length,0);
  } finally {await h.browser.close();}
 });
 test('organisation switch clears drafts, preserves real admin identity, and advertiser invite is scoped',async()=>{
  const h=await harness(),{page,nav,field,requests}=h;
  try {
   h.advertisers.push({id:'adv-a',org_id:'a',name:'Alpha Client',status:'active'});await page.reload();await page.getByRole('button',{name:'Add advertiser',exact:true}).waitFor();await nav('new');await field('Campaign name').fill('Must clear');
-  await page.getByText('Operator Alpha',{exact:true}).first().click();await page.getByText('Operator Beta',{exact:true}).click();await page.waitForURL(/org=b#campaigns/);await nav('new');assert.equal(await field('Campaign name').inputValue(),'');assert.equal(await page.getByLabel('Campaign advertiser').locator('option').count(),1);
+  await page.getByText('Operator Alpha',{exact:true}).first().click();await page.getByText('Operator Beta',{exact:true}).click();await page.waitForURL(/org=b#campaigns/);await nav('new');assert.equal(await field('Campaign name').inputValue(),'');assert.equal(await page.getByLabel('Campaign advertiser').locator('option').count(),2);
   await page.goto(base+'/admin?org=a#set-team');await page.getByRole('button',{name:'Add someone'}).click();await field('Name').fill('Client reader');await field('Email').fill('reader@example.invalid');await field('Role').selectOption('advertiser_viewer');await page.getByLabel('Advertiser access').selectOption('adv-a');await page.screenshot({path:'/tmp/gridcast-admin-team.png',fullPage:true});await page.getByRole('button',{name:'Create login'}).click();await page.waitForFunction(()=>document.body.textContent.includes('local-test-only'));
   const invite=requests.find(r=>r.path==='/invite').body;assert.equal(invite.org_id,'a');assert.equal(invite.advertiser_id,'adv-a');assert.equal(invite.role,'advertiser_viewer');assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('gc_user')).role),'platform_admin');
  } finally {await h.browser.close();}
@@ -147,13 +164,15 @@ test('platform network builder keeps Gridcast ownership and books released cross
   const beta={...h.screen,id:'screen-b',org_id:'b',name:'Beta screen',network_available:true,network_slots:6};
   await h.page.route('**/api/network-inventory**',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({screens:[{...h.screen,network_available:true,network_slots:6},beta,{...beta,id:'closed',name:'Closed to network',network_available:false}],orgs:h.orgs,campaigns:[],creatives:h.creatives})}));
   await h.page.goto(base+'/admin?org=gridcast#new');await h.page.getByLabel('Campaign type',{exact:true}).selectOption('network');
-  await h.page.getByText('Beta screen',{exact:true}).waitFor();assert.equal(await h.page.getByText('Closed to network',{exact:true}).count(),0);
-  assert.equal(await h.page.getByLabel('Campaign rate type').isDisabled(),true);assert.equal(await h.page.getByLabel('Campaign rate type').inputValue(),'per_play');
-  await h.field('Campaign name').fill('Across the network');await h.page.getByLabel('Campaign advertiser').selectOption('network-adv');
-  for(const name of ['Alpha screen','Beta screen'])await h.page.getByText(name,{exact:true}).locator('..').locator('..').locator('input[type=checkbox]').check();
-  await h.page.getByText('Network Video',{exact:false}).locator('..').locator('input[type=checkbox]').check();
-  await h.page.getByRole('button',{name:'Create campaign',exact:true}).click();await h.page.waitForFunction(()=>location.hash.startsWith('#c/'));
-  const payload=h.requests.find(r=>r.path==='/campaign').body;assert.equal(payload.campaign_type,'network');assert.equal(payload.org_id,'gridcast');assert.equal(payload.advertiser_id,'network-adv');assert.equal(payload.rate_type,'per_play');assert.deepEqual(payload.bookings,[{screen_id:'screen-a',rotation_weight:1},{screen_id:'screen-b',rotation_weight:1}]);assert.equal(payload.scheduling_mode,undefined); // Scheduling mode is derived by the server.
+  await h.field('Campaign name').fill('Across the network');await h.page.getByLabel('Campaign advertiser').selectOption('network-adv');await h.page.getByLabel('Starts',{exact:true}).fill('2026-10-01');await h.page.getByLabel('Ends',{exact:true}).fill('2026-10-31');
+  await h.step('Screens');await h.page.getByText('Beta screen',{exact:true}).waitFor();assert.equal(await h.page.getByText('Closed to network',{exact:true}).count(),0);
+  for(const name of ['Alpha screen','Beta screen'])await h.page.getByLabel('Use screen '+name).check();
+  await h.step('Creatives');await h.page.getByLabel('Use creative Network Video').check();
+  await h.step('Budget');assert.equal(await h.page.getByLabel('Campaign rate type').isDisabled(),true);assert.equal(await h.page.getByLabel('Campaign rate type').inputValue(),'per_play');
+  await h.page.getByLabel('Rate per play',{exact:true}).fill('1.1');await h.page.getByLabel('Committed budget',{exact:true}).fill('5000');
+  await h.step('Review');await h.page.getByRole('button',{name:'Launch',exact:true}).click();await h.page.waitForFunction(()=>location.hash.startsWith('#c/'));
+  const payload=h.requests.find(r=>r.path==='/campaign-draft').body;assert.equal(payload.campaign_type,'network');assert.equal(payload.org_id,'gridcast');assert.equal(payload.advertiser_id,'network-adv');assert.equal(payload.fields.rate_type,'per_play');assert.deepEqual(payload.fields.bookings,[{screen_id:'screen-a',rotation_weight:1},{screen_id:'screen-b',rotation_weight:1}]);assert.equal(payload.scheduling_mode,undefined); // Scheduling mode is derived by the server.
+  assert.equal(h.requests.filter(r=>r.path==='/campaign').length,0);
  }finally{await h.browser.close();}
 });
 
@@ -334,4 +353,44 @@ test('direct campaign links for missing or archived advertisers never select ano
    }
   }finally{await operator.browser.close();}
  }finally{if(h.browser.isConnected())await h.browser.close();}
+});
+
+test('guided flow saves a Basics-only server draft, resumes at its step, keeps input on a failed save, and submits with Launch disabled for a pending creative',async()=>{
+ const h=await harness(),errors=[];h.page.on('pageerror',e=>errors.push(e.message));try{
+  h.advertisers.push({id:'flow-adv',org_id:'a',name:'Flow client',status:'active'});
+  h.creatives.push({id:'flow-cr',org_id:'a',advertiser_id:'flow-adv',purpose:'paid',name:'Pending spot',media_type:'video',youtube_id:'dQw4w9WgXcQ',duration_s:10,approval_status:'pending'});
+  await h.page.goto(base+'/admin?org=a#new');await h.page.reload();await h.page.getByLabel('Campaign name',{exact:true}).fill('Draft only');
+  assert.equal(await h.page.getByRole('navigation',{name:'Campaign steps'}).getByRole('button',{name:/^Basics/}).getAttribute('aria-current'),'step');
+  await h.page.getByRole('button',{name:'Save draft',exact:true}).click();await h.page.getByRole('status').filter({hasText:/Saved at/}).waitFor();
+  const created=h.requests.find(r=>r.path==='/campaign-draft').body;
+  assert.deepEqual(created.fields,{name:'Draft only'});assert.equal(created.advertiser_id,null);assert.equal(created.step,'basics');assert.equal(created.org_id,'a');
+  assert.equal(await h.page.evaluate(()=>location.hash),'#draft:cdr-0');
+  await h.page.reload();await h.page.getByRole('heading',{name:'Draft only',exact:true}).waitFor();
+  assert.equal(await h.page.getByLabel('Campaign name',{exact:true}).inputValue(),'Draft only');
+  assert.equal(await h.page.getByRole('navigation',{name:'Campaign steps'}).getByRole('button',{name:/^Basics/}).getAttribute('aria-current'),'step');
+  await h.page.getByLabel('Campaign advertiser').selectOption('flow-adv');await h.page.getByLabel('Starts',{exact:true}).fill('2026-10-01');await h.page.getByLabel('Ends',{exact:true}).fill('2026-10-31');
+  await h.step('Screens');await h.page.getByLabel('Use screen Alpha screen').check();
+  // A failed save keeps every entry and offers Retry; "Saved" never appears for it.
+  await h.page.route('**/api/campaign-draft/cdr-0',route=>route.request().method()==='POST'?route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:'Fixture save failure'})}):route.fallback(),{times:1});
+  await h.page.getByRole('button',{name:'Save draft',exact:true}).click();
+  const failed=h.page.getByRole('alert').filter({hasText:'Draft not saved: Fixture save failure'});await failed.waitFor();
+  assert.equal(await h.page.getByRole('status').filter({hasText:/Saved at/}).count(),0);assert.equal(await h.page.getByLabel('Use screen Alpha screen').isChecked(),true);
+  await failed.getByRole('button',{name:'Retry',exact:true}).click();await h.page.getByRole('status').filter({hasText:/Saved at/}).waitFor();
+  assert.equal(h.drafts[0].step,'screens');assert.deepEqual(h.drafts[0].fields.screen_ids,['screen-a']);assert.equal(Object.hasOwn(h.drafts[0].fields,'committed_budget'),false);
+  await h.step('Creatives');await h.page.getByLabel('Use creative Pending spot').check();
+  await h.step('Budget');await h.page.getByLabel('Campaign rate type').selectOption('per_play');await h.page.getByLabel('Rate per play',{exact:true}).fill('1');await h.page.getByLabel('Committed budget',{exact:true}).fill('100');
+  await h.step('Review');await h.page.getByText(/this campaign waits for review before it plays/).waitFor();
+  assert.equal(await h.page.getByRole('button',{name:'Launch',exact:true}).isDisabled(),true);
+  await h.page.route('**/api/campaign/campaign-0',route=>{const submittedCampaign=h.campaigns.find(c=>c.id==='campaign-0');return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({campaign:submittedCampaign,advertiser:h.advertisers.find(a=>a.id===submittedCampaign.advertiser_id),byScreen:[{screen:h.screen,plays:0,avg:null}],byCreative:[{creative:h.creatives.find(c=>c.id==='flow-cr'),plays:0,avg:null}],totals:{plays:0,measured:0,avg:null},plays:[],settlement_buckets:[],eligibility:[]})});});
+  await h.page.getByRole('button',{name:'Submit for review',exact:true}).click();await h.page.waitForFunction(()=>location.hash.startsWith('#c/'));
+  assert.equal(h.requests.find(r=>r.path==='/campaign-draft/cdr-0/submit').body.mode,'submit');assert.equal(h.campaigns.at(-1).status,'pending');
+  // The Campaigns page lists only unsubmitted drafts; discard needs a confirmation.
+  h.drafts.push({id:'cdr-x',org_id:'a',created_by:'admin',step:'budget',fields:{name:'Keep or toss'},advertiser_id:null,revision:3,updated_at:new Date().toISOString(),submitted_campaign_id:null});
+  await h.page.goto(base+'/admin?org=a#campaigns');await h.page.reload();
+  await h.page.getByRole('button',{name:'Resume draft Keep or toss',exact:true}).waitFor();
+  assert.equal(await h.page.getByRole('button',{name:'Resume draft Draft only',exact:true}).count(),0);
+  await h.page.getByRole('button',{name:'Discard draft Keep or toss',exact:true}).click();await h.page.getByRole('button',{name:'Discard',exact:true}).click();
+  await h.page.getByRole('button',{name:'Resume draft Keep or toss',exact:true}).waitFor({state:'detached'});
+  assert.deepEqual(errors,[]);
+ }finally{await h.browser.close();}
 });

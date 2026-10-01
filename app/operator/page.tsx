@@ -27,7 +27,7 @@ import { CampaignDetail } from '@/components/views/campaign-detail';
 import { CameraReadiness } from '@/components/views/camera-readiness';
 import { CampaignList } from '@/components/views/campaign-list';
 import { Settlement } from '@/components/views/settlement';
-import { CampaignBuilder } from '@/components/views/campaign-builder';
+import { CampaignFlow } from '@/components/views/campaign-flow';
 import type { CmdItem } from '@/components/ui/command-palette';
 import { approvalAlerts, blockedAlerts } from '@/lib/campaign-status';
 import { usePeriodicRefresh } from '@/components/views/campaign-status-badge';
@@ -135,6 +135,7 @@ export default function Operator() {
     if (view.startsWith('a/')) return [root, { label: 'Advertisers', go: 'advertisers' }, nameOf(d.advertisers, view.slice(2), 'Advertiser')];
     if (view.startsWith('cfg/')) return [root, { label: 'Device configs', go: 'configs' }, 'Config'];
     if (view === 'new') return [root, { label: 'Campaigns', go: 'campaigns' }, 'New campaign'];
+    if (view.startsWith('draft:')) return [root, { label: 'Campaigns', go: 'campaigns' }, 'Campaign draft'];
     if (view.startsWith('new:a:')) return [root, { label: 'Advertisers', go: 'advertisers' }, { label: nameOf(d.advertisers, view.slice(6), 'Advertiser'), go: 'a/' + view.slice(6) }, 'New campaign'];
     if (view.startsWith('set-') || view === 'settings') return [root, 'Settings', titleOf[view] ?? 'Settings'];
     if (view === 'overview') return [root];
@@ -152,7 +153,7 @@ export default function Operator() {
       {view === 'new-screen' && caps.includes('screens') && caps.includes('sales') && <ScreenOnboarding boot={d} user={user} onGo={go} onDone={async(s:any)=>{await reload();go('s/'+s.id);}} />}
       {view.startsWith('s/') && <ScreenDetail id={view.slice(2)} onGo={go} onChanged={() => reload()} />}
       {view.startsWith('c/') && <CampaignDetail id={view.slice(2)} boot={d} onGo={go} onChanged={() => reload()} />}
-      {(view === 'new' || view.startsWith('new:a:')) && caps.includes('sales') && <CampaignBuilder key={view} boot={d} user={user} orgId={user.org_id} advertiserId={view.startsWith('new:a:') ? view.slice(6) : undefined} onGo={go} onDone={async (c: any) => { await reload(); go('c/' + c.id); }} />}
+      {(view === 'new' || view.startsWith('new:a:') || view.startsWith('draft:')) && caps.includes('sales') && <CampaignFlow key={view} boot={d} user={user} orgId={user.org_id} advertiserId={view.startsWith('new:a:') ? view.slice(6) : undefined} draftId={view.startsWith('draft:') ? view.slice(6) : undefined} onGo={go} onChanged={() => reload()} onDone={async (c: any) => { await reload(); go('c/' + c.id); }} />}
 
       {view.startsWith('a/') && caps.includes('sales') && <AdvertiserDetail key={view} id={view.slice(2)} d={d} user={user} orgId={user.org_id} onGo={go} onChanged={reload} />}
 

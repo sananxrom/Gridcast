@@ -120,6 +120,23 @@ if (process.argv[2] === 'worker') {
       assert.equal((await f.db.doc('screens/sb').get()).data().name, undefined);
     } finally { await f.db.terminate(); }
   });
+  test('real emulator stores campaign drafts in their own collection, reads only the creator\'s drafts and keeps the cross-organisation guard', async () => {
+    const f = await fixture();
+    try {
+      const draft = { id: 'cdr_a', org_id: 'a', created_by: 'a_owner', campaign_type: 'operator', advertiser_id: null, step: 'basics', fields: { name: 'Only a name' }, revision: 1, expires_at: '2999-01-01T00:00:00.000Z', submitted_campaign_id: null };
+      await f.store.transact({ ...f.context, method: 'POST', path: ['campaign-draft'] }, async () => { const d = await f.store.read(); d.campaign_drafts.push(draft); await f.store.write(d); });
+      assert.deepEqual((await f.db.doc('campaign_drafts/cdr_a').get()).data().fields, { name: 'Only a name' });
+      assert.equal((await f.db.collection('campaigns').get()).size, 1, 'a draft is never a campaign');
+      const mine = await f.store.transact({ ...f.context, path: ['campaign-drafts'] }, () => f.store.read());
+      assert.deepEqual(mine.campaign_drafts.map(d => d.id), ['cdr_a']); assert.deepEqual(mine.campaigns, []);
+      const theirs = await f.store.transact({ ...f.context, uid: 'b_owner', path: ['campaign-drafts'] }, () => f.store.read());
+      assert.deepEqual(theirs.campaign_drafts, []);
+      await assert.rejects(f.store.transact({ ...f.context, uid: 'b_owner', method: 'POST', path: ['campaign-draft', 'cdr_a'] }, async () => {
+        const d = await f.store.read(); const row = d.campaign_drafts.find(x => x.id === 'cdr_a'); row.fields.name = 'stolen'; await f.store.write(d);
+      }), { status: 403 });
+      assert.equal((await f.db.doc('campaign_drafts/cdr_a').get()).data().fields.name, 'Only a name');
+    } finally { await f.db.terminate(); }
+  });
   test('real emulator serializes cross-process session revocations without lost increments', { timeout: 120000 }, async () => {
     const f = await fixture();
     try {

@@ -10,7 +10,8 @@ import {InlineSelect} from '@/components/ui/popover';
 import {Progress} from '@/components/ui/stat';
 import {campaignStatus} from '@/lib/campaign-status';
 import {CampaignStatusBadge,useCampaignEvidence,useNow} from '@/components/views/campaign-status-badge';
-export function CampaignList({d,orgId,onGo:go,onChanged:reload}:{d:any;orgId:string|null;onGo:(g:string)=>void;onChanged:()=>void}) {
+import {DraftsList} from '@/components/views/campaign-flow';
+export function CampaignList({d,orgId,onGo:go,onChanged:reload}:{d:any;orgId:string|null;onGo:(g:string,owner?:string)=>void;onChanged:()=>void}) {
 const caps:string[]=d.caps??[];
 const mayEdit=(c:any)=>caps.includes('sales') && (c.campaign_type!=='network'||caps.includes('platform'));
 const money=(value:any)=>typeof value==='number'?inr(value):'—';
@@ -26,6 +27,7 @@ return (
 <>
         <PageHead title="Campaigns" sub="Budgets are entered manually — the platform is a ledger, not a processor"
           actions={<Button disabled={!orgId} onClick={() => go('new')}>+ New campaign</Button>} />
+        {caps.includes('sales') && <DraftsList orgId={orgId} advertisers={d.advertisers} onGo={go} />}
         <DataTable cols={[
           { className: 'min-w-[168px]', label: 'Campaign', sort: (c: any) => c.name, render: (c: any) => <><button onClick={() => go('c/' + c.id)} className="text-left font-medium text-primary hover:underline">{c.name}</button><div className="text-[12px] text-muted-foreground">{advName(c.advertiser_id)}</div></> },
           { label: 'Organisation', render:(c:any)=>d.orgs?.find((o:any)=>o.id===c.org_id)?.name??c.org_id },
