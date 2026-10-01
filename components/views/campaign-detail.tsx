@@ -72,7 +72,8 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
     setEdit(false); await load(); onChanged(); }catch(e){setErr((e as Error).message);}
   };
   const toggleStatus = async () => {
-    setErr('');try { await api(`/campaign/${id}`, { status: c.status === 'active' ? 'paused' : 'active' });
+    if (!lifecycle) return;
+    setErr('');try { await api(`/campaign/${id}`, { status: lifecycle.next });
     await load(); onChanged(); }catch(e){setErr((e as Error).message);}
   };
   const tick = (arr: string[], v: string) => arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v];
@@ -81,6 +82,12 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
   // Device status comes from bootstrap screens (heartbeat _status); detail screen views do not carry it for every role.
   const statusScreens = d.byScreen.map((r:any)=>({...r.screen,_status:r.screen?._status??boot.screens?.find((s:any)=>s.id===r.screen?.id)?._status}));
   const status = campaignStatus({ campaign: c, creatives: d.byCreative.map((r:any)=>r.creative), screens: statusScreens, advertiser: d.advertiser, receipts: d.plays, decisions: Array.isArray(d.eligibility) ? d.eligibility : null, now });
+  // Header lifecycle action follows the campaign's state: ended → none, active → Pause, paused → Resume,
+  // draft/pending → Activate (same call, nothing was paused); never Pause on a non-active campaign.
+  const lifecycle: { label: string; next: string } | null = status.state === 'ended' || ['complete', 'cancelled'].includes(c.status) ? null
+    : c.status === 'active' ? { label: 'Pause', next: 'paused' }
+    : c.status === 'paused' ? { label: 'Resume', next: 'active' }
+    : { label: 'Activate', next: 'active' };
 
   return (
     <>
@@ -88,7 +95,7 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
         actions={<>
           {c.campaign_type === 'network' && <Badge variant="default">network</Badge>}
           {mayEdit && <Button variant="outline" size="sm" onClick={() => setEdit(!edit)}>Edit</Button>}
-          {mayEdit && <Button variant="outline" size="sm" onClick={toggleStatus}>{c.status === 'active' ? 'Pause' : 'Resume'}</Button>}
+          {mayEdit && lifecycle && <Button variant="outline" size="sm" onClick={toggleStatus}>{lifecycle.label}</Button>}
         </>}>
 
       {scopedNetwork && <Card className="mb-4 p-4 text-sm text-muted-foreground">Gridcast manages this network campaign. Delivery and amounts below cover your organisation’s screens only.</Card>}

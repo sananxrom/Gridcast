@@ -9,8 +9,10 @@ import { Button } from '@/components/ui/button';
 import { Input, Select, Field, Label } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 
-export function CampaignBuilder({ boot, user, orgId, onGo, onDone }: {
+export function CampaignBuilder({ boot, user, orgId, onGo, onDone, advertiserId }: {
   boot: any; user: any; orgId?: string | null; onGo: (g: string) => void; onDone: (c: any) => void;
+  /** Pre-selected advertiser from an advertiser route; invalid or archived routes are blocked explicitly. */
+  advertiserId?: string;
 }) {
   const localDay=(time:number)=>new Date(time+330*60000).toISOString().slice(0,10);
   const end = localDay(Date.now() + 30 * 86400000);
@@ -28,7 +30,8 @@ export function CampaignBuilder({ boot, user, orgId, onGo, onDone }: {
     return ()=>{current=false;};
   },[network,isPlatform,selectedOrg,inventoryAttempt]);
   const availableAdvertisers=boot.advertisers.filter((a:any)=>a.org_id===selectedOrg && a.status!=='archived');
-  const [advId, setAdvId] = useState(availableAdvertisers[0]?.id ?? '__new');
+  const routedAdvertiser=advertiserId ? boot.advertisers.find((a:any)=>a.id===advertiserId) : undefined;
+  const [advId, setAdvId] = useState(advertiserId ?? availableAdvertisers[0]?.id ?? '__new');
   const [addedAdvertisers,setAddedAdvertisers] = useState<any[]>([]);
   const [newAdv, setNewAdv] = useState({ name: '', contact: '' });
   const [f, setF] = useState({ name: '', starts_at: localDay(Date.now()), ends_at: end, rate_type: 'per_play', rate_value: '0.93', budget: '12000' });
@@ -46,6 +49,7 @@ export function CampaignBuilder({ boot, user, orgId, onGo, onDone }: {
   const ownScreens = network ? (networkInventory?.screens ?? []).filter((s:any)=>s.network_available===true && s.network_slots>0 && networkInventory.orgs.some((o:any)=>o.id===s.org_id && o.status==='active')) : boot.screens.filter((s:any)=>s.org_id===selectedOrg);
   const slotsFor=(s:any)=>bookingSlots[s.id] ?? '1';
   const orgName=(id:string)=>(networkInventory?.orgs ?? boot.orgs ?? []).find((o:any)=>o.id===id)?.name ?? id;
+  const invalidRoutedAdvertiser = !!advertiserId && (!routedAdvertiser || routedAdvertiser.org_id !== selectedOrg);
 
   const pool = [...boot.creatives, ...local].filter((c: any) => c.advertiser_id === advId && c.purpose !== 'filler');
   const total = ownScreens.filter((s: any) => screens.includes(s.id)).reduce((a: number, b: any) => a + b.slot_price_month, 0);
@@ -96,6 +100,21 @@ export function CampaignBuilder({ boot, user, orgId, onGo, onDone }: {
       onDone(c);
     } catch(e) {setErr((e as Error).message);} finally {setSaving(false);}
   };
+
+  if (invalidRoutedAdvertiser) return <>
+    <PageHead title="New campaign" back={{ label: 'Campaigns', go: 'campaigns', onGo }} />
+    <Card role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 p-4 text-sm">
+      <span>This advertiser is not available in the selected organisation. Choose an active advertiser before creating a campaign.</span>
+      <Button variant="outline" onClick={() => onGo('advertisers')}>Back to Advertisers</Button>
+    </Card>
+  </>;
+  if (advertiserId && routedAdvertiser?.status === 'archived') return <>
+    <PageHead title="New campaign" back={{ label: 'Campaigns', go: 'campaigns', onGo }} />
+    <Card role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 p-4 text-sm">
+      <span>This advertiser is archived. Restore it in Settings before creating a campaign.</span>
+      <Button variant="outline" onClick={() => onGo('a/' + advertiserId)}>Back to Advertiser</Button>
+    </Card>
+  </>;
 
   return (
     <>

@@ -5384,3 +5384,71 @@ production build, then deploy.
 **Live UI:** Reloaded existing authenticated Brave tab for Demo lays-rotation. Checked headline cards, daily plays chart, Screens, Creatives, Audience, Money and Diagnostics tabs. Last7days values match pre-release page observation:539 recorded plays,26 estimated impressions and1.4 average people for selected profile, lifetime spend₹65. Partial/profile cues visible; missing screen rows show unknown rather than zero; creative rows273+266 match539. Audience retains profile selector/metrics, Money retains settlement, Diagnostics retains provenance and recent receipts. No captured console errors. Returned to Screens and scrolled to headline; left user's tab open. No campaign/config/data mutations. This verifies rendering/navigation, not new CV accuracy or delivery.
 **Validation:** Final production build passed; focused reporting tests17/17, final browser admin14/14+reporting2/2. Source indexes refreshed, local server stopped. Shared workflow/untracked changes preserved outside commits.
 **Next:** Step3 advertiser workspace per doc31; not built in this release. Claude's minor follow-ups remain noted at11:01.
+
+### 2026-10-01 11:16 IST · claude-opus-5.5 (Claude Code desktop, Mac) · CLAIMING doc 31 Phase 3 (advertiser workspace): Sanan assigned it to Claude
+
+**Sanan:** "go step 3". Phase 2 is confirmed live (`8899f64`, `build-2026-10-01-002`, Codex 11:14). Same model: a sub-agent
+builds, Claude reviews, Codex tests and deploys.
+**Coordinator, Builder, QC: please do not edit these until I log that I am done:** `components/views/commercial.tsx`, new
+`components/views/advertiser-workspace.tsx`, `components/views/creative-upload.tsx` (only if the one-step flow needs a
+callback), `components/views/campaign-builder.tsx` (only to accept a pre-filled advertiser), `app/admin/page.tsx` and
+`app/operator/page.tsx` (view parsing for `new:a:<id>` and routing only), `components/views/campaign-dashboard.tsx` and
+`campaign-detail.tsx` (only the two Phase 2 follow-ups: a lifecycle button that matches state, and the unavailable chart
+option style), and `tests/admin.browser.cjs` plus related unit tests.
+**Scope:** doc 31 Phase 3, plus a re-upload warning on the creative card ("uploading a new file sends this creative back
+to review and pauses it in N visible campaigns"; `lib/api.ts:446` behaviour unchanged). No server change. Duplicate
+Approve/Reject stays until Phase 5. Not committed or deployed by Claude.
+
+### 2026-10-01 11:26 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Doc 31 Phase 3 built (sub-agent) and reviewed; files released to Codex
+
+**Built (uncommitted):**
+- New `components/views/advertiser-workspace.tsx`, the `#a/<id>` workspace with tabs:
+  - Overview: Phase 1 status counts, "Lifetime" spend showing "—" when any value is hidden, needs-attention items;
+  - Campaigns: status badges, "+ New campaign" goes to `new:a:<id>`;
+  - Creatives: library grid with approval badge and "Used in N visible campaigns · +N ended". Upload on a creative used
+    by live campaigns first shows the review-reset warning. One-step create then upload in the same panel; a failed
+    upload keeps the creative as "No media yet" and shows the error once;
+  - Settings: the old contact card, exclusions, Edit and Archive/Restore.
+- `commercial.tsx`: `AdvertiserDetail` is now the shell. Archived advertisers show a banner and cannot create; the
+  global Creatives page is unchanged.
+- `creative-upload.tsx`: optional props; defaults unchanged.
+- `campaign-builder.tsx`: optional `advertiserId`.
+- `app/admin/page.tsx` and `app/operator/page.tsx`: `new:a:<id>` routing. Direct links under "All organisations"
+  switch scope like `go()`.
+- Phase 2 follow-ups in `campaign-detail.tsx` and `campaign-dashboard.tsx`: the header button follows state (ended:
+  none; active: Pause; paused: Resume; draft/pending: Activate). An unavailable chart option is never styled as
+  selected, and the chart falls back to the first option with data.
+- `tests/admin.browser.cjs`: workspace case plus dashboard assertions, **not run**.
+**Checks (sub-agent):** `npx tsc --noEmit` exit 0; unit suite tests 352, pass 347, fail 0, skipped 5;
+`tests/media-upload.test.cjs` untouched.
+**My review:** I sent back four fixes, all made: count only campaigns still able to play; direct-link scope switch;
+error shown once; "Activate" not "Resume" for drafts. Visual check on a throwaway local `next dev` (port 4031, seeded
+demo, server stopped and `data/db.json` deleted afterwards): Overview, Creatives grid (approval badge, "+1 ended"),
+New creative form, light and dark mode all correct. The console's `ERR_CONNECTION_REFUSED` lines were the earlier tab's
+60 s refresh hitting my stopped server; current requests were all 200.
+**Note for Phase 5:** "Activate" on a draft or pending campaign still sets `active` directly, as today. Phase 5 replaces it
+with submit, review and activate.
+**Released:** all Phase 3 files. Coordinator: run the admin browser suite, do a production build, then deploy.
+
+### 2026-10-01 11:32 IST · GPT-6 (Codex desktop, coordinator) · Phase 3 release review
+
+**Asked:** Check Step 3 handoff and finish browser tests, build and deployment.
+**Did:** Reviewed Claude 11:26 entry and advertiser workspace changes on base `75dc119`. Initial production build passed. Independent QC found an archived/missing advertiser deep link could silently preselect another advertiser in the campaign builder; archived creative controls also led to server-rejected edits, and the re-upload warning overstated effects on paused/draft campaigns. Assigned narrow fixes to Builder and browser regressions to Tester.
+**Outcome:** Release held for these corrections and final browser verification. No deployment or live data changes yet. Unrelated workflow and untracked files remain untouched.
+
+### 2026-10-01 11:34 IST · GPT-6 (Codex desktop)
+
+**Asked:** Apply the remaining Phase 3 review fixes: prevent `new:a:<id>` from silently selecting another advertiser when its target is missing or archived, disable creative editing/upload controls for archived advertisers, and correct the re-upload warning for unended visible campaigns.
+**Did:** Added explicit missing/out-of-scope and archived-target states in `components/views/campaign-builder.tsx`. In `components/views/advertiser-workspace.tsx`, archived creative cards no longer expose editing/upload controls, and the re-upload copy says approval is needed before playback in unended visible campaigns. Removed the superseded admin not-found banner so the shared builder owns the route error state. Read repository instructions, TEAM checkpoint, Standing Context and recent release log before proceeding.
+**Outcome:** `npx tsc --noEmit` passed with no diagnostics. Browser suite, production build and deployment remain with the Coordinator for final release verification; no commit or deployment here.
+**Files:** `components/views/campaign-builder.tsx`, `components/views/advertiser-workspace.tsx`, `app/admin/page.tsx`, `AI-LOG.md`.
+**Commit:** not committed.
+**Open:** Coordinator to run the assigned browser suite and production build, then decide release/deployment.
+
+### 2026-10-01 11:42 IST · GPT-6 (Codex desktop, coordinator) · Phase 3 verified candidate
+
+**Did:** Integrated Builder corrections for invalid/archived advertiser campaign routes, archived creative controls and truthful re-upload warning. QC rechecked and cleared all three source findings. Final production build passed. Focused media-upload tests3/3 passed.
+**Browser evidence:** Tester ran admin/reporting against the final production build on4012. Initial run15/18 exposed stale test assumptions (Edit moved to Settings, warning wording, blocked routes contain no builder). Subsequent run17/18 passed; remaining operator archive test used org-a advertiser with a Gridcast-org user. Corrected fixture tenancy and retained strict blocking-message/no-form assertions; affected isolated test passed. Combined final coverage18/18 (admin16, reporting2), against uncommitted Phase3 source atop `75dc119`, not the base commit alone. No further app changes after final build.
+**Indexes:** Shared graph and SymDex refreshed; graph retains known partial app-shell.tsx:101 coverage. Subsequent edits only test assertions/fixtures and log.
+**Files:** `components/views/advertiser-workspace.tsx`, `commercial.tsx`, `creative-upload.tsx`, `campaign-builder.tsx`, `campaign-detail.tsx`, `campaign-dashboard.tsx`, admin/operator routes, `tests/admin.browser.cjs`. Unrelated workflow/untracked files excluded.
+**Next:** Scoped commit/push, exact-SHA Firebase release, then authenticated live workspace check.

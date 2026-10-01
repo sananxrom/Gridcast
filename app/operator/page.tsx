@@ -135,6 +135,7 @@ export default function Operator() {
     if (view.startsWith('a/')) return [root, { label: 'Advertisers', go: 'advertisers' }, nameOf(d.advertisers, view.slice(2), 'Advertiser')];
     if (view.startsWith('cfg/')) return [root, { label: 'Device configs', go: 'configs' }, 'Config'];
     if (view === 'new') return [root, { label: 'Campaigns', go: 'campaigns' }, 'New campaign'];
+    if (view.startsWith('new:a:')) return [root, { label: 'Advertisers', go: 'advertisers' }, { label: nameOf(d.advertisers, view.slice(6), 'Advertiser'), go: 'a/' + view.slice(6) }, 'New campaign'];
     if (view.startsWith('set-') || view === 'settings') return [root, 'Settings', titleOf[view] ?? 'Settings'];
     if (view === 'overview') return [root];
     return [root, titleOf[view] ?? 'Overview'];
@@ -151,9 +152,9 @@ export default function Operator() {
       {view === 'new-screen' && caps.includes('screens') && caps.includes('sales') && <ScreenOnboarding boot={d} user={user} onGo={go} onDone={async(s:any)=>{await reload();go('s/'+s.id);}} />}
       {view.startsWith('s/') && <ScreenDetail id={view.slice(2)} onGo={go} onChanged={() => reload()} />}
       {view.startsWith('c/') && <CampaignDetail id={view.slice(2)} boot={d} onGo={go} onChanged={() => reload()} />}
-      {view === 'new' && caps.includes('sales') && <CampaignBuilder boot={d} user={user} orgId={user.org_id} onGo={go} onDone={async (c: any) => { await reload(); go('c/' + c.id); }} />}
+      {(view === 'new' || view.startsWith('new:a:')) && caps.includes('sales') && <CampaignBuilder key={view} boot={d} user={user} orgId={user.org_id} advertiserId={view.startsWith('new:a:') ? view.slice(6) : undefined} onGo={go} onDone={async (c: any) => { await reload(); go('c/' + c.id); }} />}
 
-      {view.startsWith('a/') && caps.includes('sales') && <AdvertiserDetail id={view.slice(2)} d={d} user={user} orgId={user.org_id} onGo={go} onChanged={reload} />}
+      {view.startsWith('a/') && caps.includes('sales') && <AdvertiserDetail key={view} id={view.slice(2)} d={d} user={user} orgId={user.org_id} onGo={go} onChanged={reload} />}
 
       {view === 'overview' && (<>
         <PageHead title={user.orgName} sub={`${d.screens.length} screens · ${d.advertisers.length} advertisers · ${d.campaigns.filter(isLive).length} live campaigns`} />

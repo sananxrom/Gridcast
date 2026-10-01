@@ -76,7 +76,8 @@ function DailyTrend({ data, period, view }: { data: DeliveryData | null; period:
     { id: 'people', label: 'Avg people', unit: selected ? 'people per body-observed time' : 'mean people per measured paid play', note: selected ? `Selected profile only (${selected.profile}). Days without body observations are gaps.` : 'Legacy presence per measured paid play. Unmeasured days are gaps, not zero.', format: v => v.toFixed(selected ? 2 : 1) },
     { id: 'impressions', label: 'Est. impressions', unit: 'estimated impressions', note: 'Selected profile only. Analytics estimate; not unique reach or billing evidence.', format: number },
   ];
-  const active = hasValues(series[metric]) ? metric : 'plays';
+  // Fall back to the first option with data; an option without data never renders as the selected one.
+  const active = hasValues(series[metric]) ? metric : options.find(o => hasValues(series[o.id]))?.id ?? metric;
   const option = options.find(o => o.id === active)!, rows = series[active], plotted = rows.filter(row => row.value !== null).length;
   return (
     <Card className="p-4">
@@ -84,8 +85,8 @@ function DailyTrend({ data, period, view }: { data: DeliveryData | null; period:
         <h2 className="text-sm font-semibold">Daily trend <span className="font-normal text-muted-foreground">· {periodLabel(period)}</span></h2>
         <div role="group" aria-label="Chart metric" className="flex flex-wrap gap-1.5 sm:ml-auto">
           {options.map(o => {
-            const available = hasValues(series[o.id]);
-            return <Button key={o.id} type="button" size="sm" variant={o.id === active ? 'default' : 'outline'} aria-pressed={o.id === active} disabled={!available} onClick={() => setMetric(o.id)}>
+            const available = hasValues(series[o.id]), selected = available && o.id === active;
+            return <Button key={o.id} type="button" size="sm" variant={selected ? 'default' : 'outline'} aria-pressed={selected} disabled={!available} onClick={() => setMetric(o.id)}>
               {o.label}{!available && <span className="text-[10px] font-normal">· Unavailable</span>}
             </Button>;
           })}

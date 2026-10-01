@@ -3,7 +3,7 @@ import React, {useEffect, useState} from 'react';
 import {api, type SessionUser} from '@/lib/client';
 import {can} from '@/lib/roles';
 import {inr, ytId} from '@/lib/utils';
-import {PageHead, SectionHead} from '@/components/ui/app-shell';
+import {PageHead} from '@/components/ui/app-shell';
 import {Card} from '@/components/ui/card';
 import {Button} from '@/components/ui/button';
 import {Input, Select, Field} from '@/components/ui/input';
@@ -11,6 +11,7 @@ import {Badge} from '@/components/ui/badge';
 import {DataTable} from '@/components/ui/table';
 import {Thumb, Empty} from './bits';
 import {CreativeUpload} from './creative-upload';
+import {AdvertiserWorkspace} from './advertiser-workspace';
 function CreativeEditor({row,onClose,onChanged}:{row:any;onClose:()=>void;onChanged:()=>void}) {
   const [f,setF]=useState({name:row.name??'',category:row.category??'general',url:row.youtube_id??'',duration:String(row.duration_s??(row.media_type==='image'?20:10))});
   const [error,setError]=useState(''),[busy,setBusy]=useState(false);
@@ -164,24 +165,20 @@ export function Advertisers({d,user,orgId,onGo,onChanged}:CommercialProps) {
     {user.role!=='platform_admin'&&<p className="mt-3 text-xs text-muted-foreground">Network advertisers shown here belong to the originating organisation. You can manage your own clients.</p>}
   </>;
 }
-export function AdvertiserDetail({id,d,user,onGo,onChanged}:CommercialProps&{id:string}) {
+/** `#a/<id>` shell: the workspace tabs live in advertiser-workspace.tsx; Settings (record, exclusions, edit/archive) stays here. */
+export function AdvertiserDetail({id,d,user,orgId,onGo,onChanged}:CommercialProps&{id:string}) {
   const a=d.advertisers.find((a:any)=>a.id===id);
   const [editing,setEditing]=useState(false),[confirm,setConfirm]=useState(false),[error,setError]=useState(''),[busy,setBusy]=useState(false);
   if(!a)return <Empty>Advertiser not found in this organisation. Return to the advertiser list.</Empty>;
   const canEdit=user.role==='platform_admin'||a.org_id===user.org_id;
-  const campaigns=d.campaigns.filter((c:any)=>c.advertiser_id===id);
   const archive=async()=>{setError('');setBusy(true);try{await api(`/advertiser/${id}/${a.status==='archived'?'restore':'archive'}`,{});setConfirm(false);await onChanged();}catch(e){setError((e as Error).message);}finally{setBusy(false);}};
-  return <><PageHead title={a.name} sub={`${d.orgs?.find((o:any)=>o.id===a.org_id)?.name??a.org_id} · ${a.status??'active'}`} back={{label:'Advertisers',go:'advertisers',onGo}} actions={canEdit?<div className="flex gap-2"><Button variant="outline" onClick={()=>setEditing(true)}>Edit advertiser</Button><Button variant="outline" onClick={()=>setConfirm(true)}>{a.status==='archived'?'Restore advertiser':'Archive advertiser'}</Button></div>:undefined}/>
+  const settings=<>
+    {canEdit&&<div className="mb-4 flex flex-wrap gap-2"><Button variant="outline" onClick={()=>setEditing(true)}>Edit advertiser</Button><Button variant="outline" onClick={()=>setConfirm(true)}>{a.status==='archived'?'Restore advertiser':'Archive advertiser'}</Button></div>}
     {editing&&<AdvertiserForm d={d} user={user} row={a} orgId={a.org_id} onDone={async()=>{setEditing(false);await onChanged();}}/>}
     {confirm&&<Card className="mb-4 p-4"><p className="mb-3 text-sm">{a.status==='archived'?'Restore this advertiser so new campaigns can be created?':'Archive this advertiser? History is retained. Active, pending and paused campaigns must be completed or moved to draft first.'}</p><Button disabled={busy} onClick={archive}>Confirm {a.status==='archived'?'restore':'archive'}</Button><Button variant="ghost" disabled={busy} onClick={()=>setConfirm(false)}>Cancel</Button></Card>}
     {error&&<p role="alert" className="mb-4 text-sm text-destructive">{error}</p>}
     <Card className="p-4 text-sm"><p>{a.contact||'No contact'} · {a.email||'No email'} · {a.phone||'No phone'}</p><p className="mt-2">{a.category}</p>{a.notes&&<p className="mt-2 whitespace-pre-wrap">{a.notes}</p>}{canEdit&&<div className="mt-3 border-t border-border pt-3"><b>Delivery exclusions</b><p className="mt-1">Venues: {a.exclusions?.venue_types?.join(', ')||'None'}</p><p>Screens: {a.exclusions?.screens?.map((id:string)=>d.screens.find((s:any)=>s.id===id)?.name??id).join(', ')||'None'}</p><p>Tag rules: {a.exclusions?.tag_rules?.map((r:any)=>Object.entries(r).map(([k,v])=>`${k}:${v}`).join(' + ')).join(' or ')||'None'}</p></div>}</Card>
-    <SectionHead>Campaigns</SectionHead><DataTable rows={campaigns} rowId={(c:any)=>c.id} cols={[
-      {label:'Campaign',render:(c:any)=><button className="font-medium text-primary hover:underline" onClick={()=>onGo('c/'+c.id)}>{c.name}</button>},
-      {label:'Status',render:(c:any)=><Badge variant="muted">{c.status}</Badge>},
-      {label:'Dates',render:(c:any)=>`${c.starts_at} → ${c.ends_at}`},
-      {label:'Accrued',num:true,render:(c:any)=>typeof c.accrued_spend==='number'?inr(c.accrued_spend):'—'},
-      {label:'Budget',num:true,render:(c:any)=>c.committed_budget==null?'Managed by Gridcast':inr(c.committed_budget)},
-    ]} empty="No campaigns for this advertiser."/>
   </>;
+  return <AdvertiserWorkspace a={a} d={d} user={user} orgId={orgId} onGo={onGo} onChanged={onChanged} settings={settings}
+    renderEditor={(row,close)=><CreativeEditor key={row.id} row={row} onClose={close} onChanged={onChanged}/>}/>;
 }

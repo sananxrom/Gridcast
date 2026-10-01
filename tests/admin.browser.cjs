@@ -28,7 +28,7 @@ async function harness(role='platform_admin') {
   else if(path==='/config')result=[];
   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(result)});
  });
- await page.goto(base+'/admin?org=a#advertisers');await page.getByRole('button',{name:'Add advertiser',exact:true}).waitFor();
+ await page.goto(base+(role==='sales'?'/operator#campaigns':'/admin?org=a#advertisers'));if(role!=='sales')await page.getByRole('button',{name:'Add advertiser',exact:true}).waitFor();
  const nav=async hash=>{await page.evaluate(h=>location.hash=h,hash);};
  const field=(label)=>page.locator('label').filter({hasText:new RegExp('^'+label+'$')}).locator('..').locator('input,select').first();
  return {browser,page,requests,advertisers,creatives,campaigns,nav,field,boot,screen,orgs};
@@ -160,7 +160,7 @@ test('platform network builder keeps Gridcast ownership and books released cross
 test('advertiser editor preserves and updates venue, screen and tag exclusions',async()=>{
  const h=await harness();try{
   h.advertisers.push({id:'adv-exclusions',org_id:'a',name:'Restricted Client',status:'active',exclusions:{venue_types:['gym'],screens:[],tag_rules:[{chain:'local',floor:'ground'}]}});
-  await h.page.reload();await h.page.getByRole('button',{name:'Restricted Client',exact:true}).click();await h.page.getByRole('button',{name:'Edit advertiser',exact:true}).click();
+  await h.page.reload();await h.page.getByRole('button',{name:'Restricted Client',exact:true}).click();await h.page.getByRole('tab',{name:'Settings',exact:true}).click();await h.page.getByRole('button',{name:'Edit advertiser',exact:true}).click();
   assert.equal(await h.page.getByLabel('Excluded venue types').inputValue(),'gym');assert.equal(await h.page.getByLabel('Excluded tag combinations').inputValue(),'chain:local, floor:ground');
   await h.page.getByLabel('Excluded venue types').fill('gym, cafe, gym');await h.page.getByLabel('Exclude screen Alpha screen',{exact:true}).check();await h.page.getByLabel('Excluded tag combinations').fill('chain:local, floor:ground\narea:restricted');
   await h.page.getByRole('button',{name:'Save advertiser',exact:true}).click();await h.page.getByRole('button',{name:'Edit advertiser',exact:true}).waitFor();
@@ -208,6 +208,8 @@ test('campaign dashboard shows four headline cards with coverage cues, switches 
   await headline.getByRole('group',{name:'Est. impressions',exact:true}).getByText('Unavailable',{exact:true}).waitFor();
   await headline.getByRole('group',{name:'Avg people present',exact:true}).getByText('2.5',{exact:true}).waitFor();
   assert.equal(await h.page.getByRole('group',{name:'Chart metric',exact:true}).getByRole('button',{name:/Est\. impressions/}).isDisabled(),true);
+  assert.equal(await h.page.getByRole('group',{name:'Chart metric',exact:true}).getByRole('button',{name:/Est\. impressions/}).getAttribute('aria-pressed'),'false');
+  await h.page.getByRole('button',{name:'Pause',exact:true}).waitFor();assert.equal(await h.page.getByRole('button',{name:'Resume',exact:true}).count(),0);
   assert.deepEqual(await h.page.getByRole('tab').allInnerTexts(),['Screens','Creatives','Audience','Diagnostics']);
   assert.equal(await h.page.getByRole('tab',{name:'Money',exact:true}).count(),0);
   await h.page.getByRole('tabpanel').getByText('Eligible',{exact:true}).waitFor();
@@ -265,4 +267,71 @@ test('uploaded image display time stays editable and sends a timing change',asyn
   await h.page.getByLabel('Edit creative duration',{exact:true}).fill('12.5');await h.page.getByRole('button',{name:'Save creative',exact:true}).click();
   await h.page.getByRole('button',{name:'Edit creative Still image',exact:true}).waitFor();assert.equal(h.requests.find(r=>r.path==='/creative/image-1').body.duration_s,12.5);
  }finally{await h.browser.close();}
+});
+
+test('advertiser workspace shows tabs, library usage, one-step create with upload failure, pre-filled campaign and archived block',async()=>{
+ const h=await harness(),errors=[];h.page.on('pageerror',e=>errors.push(e.message));try{
+  h.advertisers.push({id:'ws-adv',org_id:'a',name:'Workspace client',status:'active',category:'retail'});
+  h.creatives.push({id:'archived-cr',org_id:'a',advertiser_id:'archived-a',purpose:'paid',name:'Archived library item',category:'general',media_type:'video',youtube_id:'dQw4w9WgXcQ',duration_s:10,approval_status:'approved'});
+  h.creatives.push({id:'ws-cr',org_id:'a',advertiser_id:'ws-adv',purpose:'paid',name:'Library spot',category:'retail',media_type:'video',youtube_id:'dQw4w9WgXcQ',duration_s:15,approval_status:'approved'});
+  h.campaigns.push({id:'ws-c',org_id:'a',advertiser_id:'ws-adv',name:'Workspace campaign',campaign_type:'own',screen_ids:['screen-a'],creative_ids:['ws-cr'],rate_type:'per_play',rate_value:1,committed_budget:100,accrued_spend:12,invoice_status:'not_invoiced',status:'paused',starts_at:'2026-09-01',ends_at:'2099-12-31'});
+  h.campaigns.push({id:'ws-old',org_id:'a',advertiser_id:'ws-adv',name:'Ended campaign',campaign_type:'own',screen_ids:['screen-a'],creative_ids:['ws-cr'],rate_type:'per_play',rate_value:1,committed_budget:100,accrued_spend:0,invoice_status:'not_invoiced',status:'active',starts_at:'2020-01-01',ends_at:'2020-01-31'});
+  await h.page.goto(base+'/admin?org=a#a/ws-adv');await h.page.reload();await h.page.getByRole('heading',{name:'Workspace client',exact:true}).waitFor();
+  assert.deepEqual(await h.page.getByRole('tab').allInnerTexts(),['Overview','Campaigns','Creatives','Settings']);
+  await h.page.getByRole('tabpanel').getByText('Lifetime',{exact:true}).waitFor();await h.page.getByRole('tabpanel').getByText('₹12',{exact:true}).waitFor();
+  await h.page.getByRole('tab',{name:'Campaigns',exact:true}).click();await h.page.getByRole('button',{name:'Campaign status: Paused',exact:true}).waitFor();
+  await h.page.getByRole('tab',{name:'Settings',exact:true}).click();await h.page.getByRole('button',{name:'Archive advertiser',exact:true}).waitFor();
+  await h.page.getByRole('tab',{name:'Creatives',exact:true}).click();
+  const card=h.page.getByRole('group',{name:'Creative Library spot',exact:true});
+  await card.getByText('approved',{exact:true}).waitFor();await card.getByText(/^Used in 1 visible campaign · \+1 ended$/).waitFor();
+  await card.getByRole('button',{name:'Upload file for Library spot',exact:true}).click();
+  await card.getByText(/Uploading a new file sends this creative back to review\. It needs approval before it can play in any of its 1 unended visible campaign\./).waitFor();
+  await card.getByRole('button',{name:'Cancel',exact:true}).click();
+  await h.page.getByRole('button',{name:'+ New creative',exact:true}).click();await h.page.getByLabel('New creative name',{exact:true}).fill('Fresh spot');await h.page.getByRole('button',{name:'Create creative',exact:true}).click();
+  await h.page.getByLabel('MP4 or WebM video',{exact:true}).setInputFiles({name:'fresh.mp4',mimeType:'video/mp4',buffer:Buffer.from('synthetic mocked upload')});await h.page.getByRole('button',{name:'Upload selected video',exact:true}).click();
+  await h.page.getByText(/now has its video/).waitFor();
+  const created=h.requests.find(r=>r.path==='/creative').body;assert.equal(created.advertiser_id,'ws-adv');assert.equal(created.org_id,'a');assert.equal(created.purpose,'paid');
+  assert.match(h.requests.find(r=>r.path==='/assets/upload').body.multipart,new RegExp(h.creatives.find(c=>c.name==='Fresh spot').id));
+  await h.page.getByRole('group',{name:'Creative Fresh spot',exact:true}).getByText('pending',{exact:true}).waitFor();
+  await h.page.route('**/api/assets/upload',route=>route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:'Fixture upload failure'})}));
+  await h.page.getByRole('button',{name:'Add another',exact:true}).click();await h.page.getByLabel('New creative name',{exact:true}).fill('Broken spot');await h.page.getByRole('button',{name:'Create creative',exact:true}).click();
+  await h.page.getByLabel('MP4 or WebM video',{exact:true}).setInputFiles({name:'broken.mp4',mimeType:'video/mp4',buffer:Buffer.from('synthetic mocked upload')});await h.page.getByRole('button',{name:'Upload selected video',exact:true}).click();
+  await h.page.getByText(/was kept and shows as “No media yet”/).waitFor();assert.equal(await h.page.getByText(/Fixture upload failure/).count(),1);
+  await h.page.getByRole('group',{name:'Creative Broken spot',exact:true}).getByText('No media yet',{exact:true}).first().waitFor();
+  await h.page.getByRole('tab',{name:'Campaigns',exact:true}).click();await h.page.getByRole('button',{name:'+ New campaign',exact:true}).click();
+  await h.page.waitForFunction(()=>location.hash==='#new:a:ws-adv');assert.equal(await h.page.getByLabel('Campaign advertiser').inputValue(),'ws-adv');
+  await h.page.goto(base+'/admin#new:a:ws-adv');await h.page.reload();await h.page.waitForURL(/org=a#new:a:ws-adv/);await h.page.getByLabel('Campaign advertiser').waitFor();assert.equal(await h.page.getByLabel('Campaign advertiser').inputValue(),'ws-adv');
+  await h.page.goto(base+'/admin?org=a#a/archived-a');await h.page.reload();await h.page.getByRole('heading',{name:'Archived client',exact:true}).waitFor();
+  await h.page.getByRole('tab',{name:'Creatives',exact:true}).click();assert.equal(await h.page.getByRole('button',{name:'+ New creative',exact:true}).isDisabled(),true);
+  const archivedCard=h.page.getByRole('group',{name:'Creative Archived library item',exact:true});await archivedCard.waitFor();
+  assert.equal(await archivedCard.getByRole('button',{name:'Edit creative Archived library item',exact:true}).count(),0);
+  assert.equal(await archivedCard.getByRole('button',{name:'Upload file for Archived library item',exact:true}).count(),0);
+  await h.page.getByRole('tab',{name:'Campaigns',exact:true}).click();assert.equal(await h.page.getByRole('button',{name:'+ New campaign',exact:true}).isDisabled(),true);
+  await h.page.getByRole('tab',{name:'Settings',exact:true}).click();await h.page.getByRole('button',{name:'Restore advertiser',exact:true}).waitFor();
+  await h.nav('creatives');await h.page.getByLabel('Creative advertiser',{exact:true}).waitFor();assert.equal(await h.page.getByLabel('Creative advertiser',{exact:true}).locator('option[value="archived-a"]').count(),0);
+  assert.deepEqual(errors,[]);
+ }finally{await h.browser.close();}
+});
+
+test('direct campaign links for missing or archived advertisers never select another client',async()=>{
+ const h=await harness();try{
+  h.advertisers.push({id:'fallback-adv',org_id:'a',name:'Fallback client',status:'active'});
+  for(const id of ['missing-adv','archived-a']){
+   await h.page.goto(base+`/admin?org=a#new:a:${id}`);await h.page.reload();
+   const alert=h.page.getByRole('alert').filter({hasText:id==='archived-a'?'This advertiser is archived':'This advertiser is not available in the selected organisation'});await alert.waitFor();
+   await alert.getByText(id==='archived-a'?/This advertiser is archived\./:/This advertiser is not available in the selected organisation\./).waitFor();
+   assert.equal(await h.page.getByLabel('Campaign advertiser',{exact:true}).count(),0,`admin route exposed the campaign form for ${id}`);
+  }
+  await h.browser.close();
+  const operator=await harness('sales');try{
+   operator.advertisers.find(a=>a.id==='archived-a').org_id='gridcast';
+   operator.advertisers.push({id:'fallback-adv',org_id:'gridcast',name:'Fallback client',status:'active'});
+   for(const id of ['missing-adv','archived-a']){
+    await operator.page.goto(base+`/operator#new:a:${id}`);await operator.page.reload();
+    const alert=operator.page.getByRole('alert').filter({hasText:id==='archived-a'?'This advertiser is archived':'This advertiser is not available in the selected organisation'});
+    await alert.waitFor();await alert.getByText(id==='archived-a'?/This advertiser is archived\./:/This advertiser is not available in the selected organisation\./).waitFor();
+    assert.equal(await operator.page.getByLabel('Campaign advertiser',{exact:true}).count(),0,`operator route exposed the campaign form for ${id}`);
+   }
+  }finally{await operator.browser.close();}
+ }finally{if(h.browser.isConnected())await h.browser.close();}
 });

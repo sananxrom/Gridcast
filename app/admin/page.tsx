@@ -70,15 +70,24 @@ export default function Admin() {
     return () => {window.removeEventListener('hashchange', sync);window.removeEventListener('popstate',sync);};
   }, []);
   const go = (g: string, ownerOverride?:string) => {
-    const rows=g.startsWith('s/')?d?.screens:g.startsWith('c/')?d?.campaigns:g.startsWith('a/')?d?.advertisers:g.startsWith('cfg/')?d?.configs:null;
-    const owner=ownerOverride??rows?.find((r:any)=>r.id===g.slice(g.startsWith('cfg/')?4:2))?.org_id;
-    if(owner&&owner!==scopeRef.current){const url=new URL(location.href);url.searchParams.set('org',owner);url.hash=g;history.pushState(null,'',url);scopeRef.current=owner;setOrgFilter(owner);setView(g);setD(null);load(owner);return;}
+    // `new:a:<id>` opens the builder for an advertiser; switch scope to its organisation like `a/` links do.
+    const rows=g.startsWith('s/')?d?.screens:g.startsWith('c/')?d?.campaigns:g.startsWith('a/')||g.startsWith('new:a:')?d?.advertisers:g.startsWith('cfg/')?d?.configs:null;
+    const owner=ownerOverride??rows?.find((r:any)=>r.id===g.slice(g.startsWith('cfg/')?4:g.startsWith('new:a:')?6:2))?.org_id;
+    if(owner&&owner!==scopeRef.current){switchScope(owner,g);return;}
     location.hash = g; setView(g);
   };
+  function switchScope(owner:string,g:string){const url=new URL(location.href);url.searchParams.set('org',owner);url.hash=g;history.pushState(null,'',url);scopeRef.current=owner;setOrgFilter(owner);setView(g);setD(null);load(owner);}
+  // Direct links to `#new:a:<id>` under "All organisations": move to the advertiser's organisation so the builder can pre-fill.
+  useEffect(()=>{
+    if(!d||!view.startsWith('new:a:')||scopeRef.current!=='all')return;
+    const owner=d.advertisers?.find((a:any)=>a.id===view.slice(6))?.org_id;
+    if(owner)switchScope(owner,view);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[d,view]);
   const selectOrg=(id:string)=>{
     const url=new URL(location.href); if(id==='all')url.searchParams.delete('org');else url.searchParams.set('org',id);
     const current=location.hash.slice(1)||'overview';
-    const next=current.startsWith('s/')?'screens':current.startsWith('c/')||current==='new'?'campaigns':current.startsWith('a/')?'advertisers':current.startsWith('cfg/')?'configs':current==='new-screen'?'screens':current;
+    const next=current.startsWith('s/')?'screens':current.startsWith('c/')||current==='new'||current.startsWith('new:a:')?'campaigns':current.startsWith('a/')?'advertisers':current.startsWith('cfg/')?'configs':current==='new-screen'?'screens':current;
     url.hash=next;history.pushState(null,'',url);scopeRef.current=id;setOrgFilter(id);setView(next);setEditOrg('');setD(null);load(id);
   };
 
@@ -138,6 +147,8 @@ export default function Admin() {
     if (view.startsWith('c/')) return [root, { label: 'Campaigns', go: 'campaigns' }, nameOf(d.campaigns, view.slice(2), 'Campaign')];
     if (view.startsWith('a/')) return [root, { label: 'Advertisers', go: 'advertisers' }, nameOf(d.advertisers, view.slice(2), 'Advertiser')];
     if (view.startsWith('cfg/')) return [root, { label: 'Device configs', go: 'configs' }, 'Config'];
+    if (view.startsWith('new:a:')) return [root, { label: 'Advertisers', go: 'advertisers' }, { label: nameOf(d.advertisers, view.slice(6), 'Advertiser'), go: 'a/' + view.slice(6) }, 'New campaign'];
+    if (view === 'new') return [root, { label: 'Campaigns', go: 'campaigns' }, 'New campaign'];
     if (view.startsWith('set-') || view === 'settings') return [root, 'Settings', titleOf[view] ?? 'Settings'];
     if (view === 'overview') return [root];
     return [root, titleOf[view] ?? 'Overview'];
@@ -168,7 +179,7 @@ export default function Admin() {
       {view.startsWith('s/') && (orgFilter==='all'||d.screens.some((s:any)=>s.id===view.slice(2)&&s.org_id===orgFilter)) && <ScreenDetail id={view.slice(2)} onGo={go} onChanged={reload} />}
       {view.startsWith('c/') && orgFilter!=='all' && !d.campaigns.some((c:any)=>c.id===view.slice(2)) && <Empty>This campaign is outside the selected organisation. Select its organisation before opening it.</Empty>}
       {view.startsWith('c/') && (orgFilter==='all'||d.campaigns.some((c:any)=>c.id===view.slice(2))) && <CampaignDetail id={view.slice(2)} boot={d} onGo={go} onChanged={reload} />}
-      {view === 'new' && <CampaignBuilder boot={d} user={user} orgId={orgFilter==='all'?null:orgFilter} onGo={go} onDone={async (c: any) => { await reload(); go('c/' + c.id); }} />}
+      {(view === 'new' || view.startsWith('new:a:')) && <CampaignBuilder key={view} boot={d} user={user} orgId={orgFilter==='all'?null:orgFilter} advertiserId={view.startsWith('new:a:') ? view.slice(6) : undefined} onGo={go} onDone={async (c: any) => { await reload(); go('c/' + c.id); }} />}
 
       {view === 'overview' && (<>
         <PageHead title="Platform overview" sub={`${d.screens.length} loaded screens · ${d.campaigns.filter(isLive).length} live campaigns`} />
