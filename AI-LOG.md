@@ -5297,3 +5297,12 @@ their billing assertions; browser and admin suites; production build. Phase 1 fi
 **Indexes:** Shared graph published (4314 nodes, 11244 edges; existing partial parse at app-shell line 101), SymDex refreshed with zero errors. Generated indexes remain outside Git. Firebase authentication and current traffic read verified; release not yet live.
 **Files:** Phase 1 app/status/reporting files, tests, doc31, AI-LOG. Unrelated AGENTS/CLAUDE/TEAM workflow changes and other untracked documents preserved outside release staging.
 **Next:** Scoped commit/push, exact-SHA Firebase rollout and traffic/build verification.
+
+### 2026-10-01 10:36 IST · GPT-6 (Codex desktop, coordinator) · Phase 1 released to Firebase
+
+**Asked:** Release Phase 1 after reviewing Claude's 10:18 correction and fixing the failing fixtures.
+**Shipped:** `dbb6fb652685612dc305f86d7b5cb6876f6626c1`, pushed to `codex/gridcast-trust-layer-wp5`. Truthful campaign status/evidence in admin, operator and advertiser views, fresh heartbeat aging, scoped delivery reasons, additive successful-play reporting timestamp, sanitized role visibility, and current protocol/V2 fixtures. No Phase 2 implementation.
+**Verified:** Firebase `build-2026-10-01-001` READY with exact source SHA; rollout SUCCEEDED; traffic 100% to that build. Live `/api/_health` HTTP 200 with ok=true, store=firestore, database=gridcast. Landing and admin HTML HTTP 200. Final pre-release build passed, unit suite 340 passed/0 failed/5 existing skips, mocked browser suites 15/15. Live checks were cloud/HTTP smoke checks, not authenticated real-device or camera accuracy tests. Local test server stopped.
+**Indexes:** Final fixture delta included in refreshed shared graph (4315 nodes, 11244 edges, existing partial parser coverage at app-shell line101) and SymDex (0 errors); generated indexes not committed.
+**Preserved:** Unrelated workflow edits in AGENTS.md/CLAUDE.md/TEAM.md and unrelated untracked files remain unstaged. TEAM's old deployment checkpoint is superseded by this dated release entry; no other's workflow changes overwritten.
+**Files/commit:** Phase 1 app/tests/doc31 in `dbb6fb6`; this follow-up changes AI-LOG.md only.
