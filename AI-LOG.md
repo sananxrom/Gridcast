@@ -5755,3 +5755,10 @@ Sanan ran `graphify query "attemptActivation" --graph /Users/sanan/Downloads/gc/
 
 **Asked:** Proceed with reviewed cleanup release. **Verified:** Production build exit 0; both complete browser suites passed 29/29 in one run (`/tmp/gridcast-redaction-browser.log`); prior focused 74/74 and timestamp-equivalence checks remain applicable to unchanged application source. `git diff --check` clean. Refreshed Graphify, SymDex and codebase-memory with all commands successful; stopped local test server.
 **Scope:** Commit only `lib/access.ts`, `lib/api.ts`, `tests/authorization.test.cjs` and this log atop `3221794`; preserve unrelated tooling/docs. Preparing push and exact-commit Firebase rollout. No login/password or campaign mutation. Release outcome follows.
+
+
+### 2026-10-01 18:08 IST · GPT-6 (Codex desktop, coordinator) · Advertiser receipt cleanup live
+
+**Released:** `5fa997b730f3bad279005dca54ce6c8d6938413f`, pushed to `codex/gridcast-trust-layer-wp5`. Firebase backend `gridcast-backend`, project `gridcast-508011`, region `asia-southeast1`, build/rollout `build-2026-10-01-008`: authenticated API confirms exact source SHA, READY build, SUCCEEDED rollout and 100% current traffic. CLI completed successfully.
+**Verified:** Live health returns ok=true, Firestore database gridcast. Pre-release build passed, complete admin/reporting browser suites 29/29 passed; reviewed focused suites 74/74 passed and corrected-time equivalence verified. No additional live advertiser-role login performed, so do not call the health check a live authorization test. All nine demo accounts and their passwords were left unchanged. Shared indexes refreshed before commit; generated artifacts remain local.
+**Outcome:** Requested cleanup shipped. No application failure during this release; cloud build/rollout required a few minutes. Log-only follow-up commit does not need deployment. Unrelated local docs/tooling changes preserved.
