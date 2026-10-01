@@ -104,8 +104,13 @@ function ReportPending({ report }: { report: DeliveryReportState }) {
   return <p role="status" className="py-6 text-sm text-muted-foreground">{report.loading ? `Loading the report for ${periodLabel(report.period)}…` : 'The report for this period is not available.'}</p>;
 }
 
-export function CampaignDashboard({ d, report, status, actions, mayMoney, scopedNetwork, rate, onGo, children }: {
+/**
+ * `diagnostics={false}` is the read-only advertiser view (doc 31 Phase 6): no Diagnostics tab and no eligibility column.
+ * Edit and Money are absent there because the advertiser page passes no actions and `mayMoney={false}`.
+ */
+export function CampaignDashboard({ d, report, status, actions, mayMoney, scopedNetwork, rate, onGo, children, diagnostics = true, back = { label: 'Campaigns', go: 'campaigns' } }: {
   d: any; report: DeliveryReportState; status: CampaignStatus; actions?: React.ReactNode; mayMoney: boolean; scopedNetwork: boolean; rate: string; onGo: (g: string) => void; children?: React.ReactNode;
+  diagnostics?: boolean; back?: { label: string; go: string };
 }) {
   const c = d.campaign;
   const screens = d.byScreen.map((r: any) => r.screen), creatives = d.byCreative.map((r: any) => r.creative);
@@ -114,7 +119,7 @@ export function CampaignDashboard({ d, report, status, actions, mayMoney, scoped
   const selected = view.selectedAttention;
   const [tab, setTab] = useState('screens');
   const idBase = useId();
-  const tabs = [{ id: 'screens', label: 'Screens' }, { id: 'creatives', label: 'Creatives' }, { id: 'audience', label: 'Audience' }, ...(mayMoney ? [{ id: 'money', label: 'Money' }] : []), { id: 'diagnostics', label: 'Diagnostics' }];
+  const tabs = [{ id: 'screens', label: 'Screens' }, { id: 'creatives', label: 'Creatives' }, { id: 'audience', label: 'Audience' }, ...(mayMoney ? [{ id: 'money', label: 'Money' }] : []), ...(diagnostics ? [{ id: 'diagnostics', label: 'Diagnostics' }] : [])];
   const activeTab = tabs.some(t => t.id === tab) ? tab : 'screens';
   const ready = data && !loading ? data : null;
 
@@ -133,7 +138,7 @@ export function CampaignDashboard({ d, report, status, actions, mayMoney, scoped
     <>
       <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
-          <button onClick={() => onGo('campaigns')} className="mb-1 text-[12.5px] text-muted-foreground transition-colors hover:text-foreground">← Campaigns</button>
+          <button onClick={() => onGo(back.go)} className="mb-1 text-[12.5px] text-muted-foreground transition-colors hover:text-foreground">← {back.label}</button>
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-[22px] font-semibold tracking-tight">{c.name}</h1>
             <CampaignStatusBadge status={status} />
@@ -153,7 +158,7 @@ export function CampaignDashboard({ d, report, status, actions, mayMoney, scoped
         <TabList tabs={tabs} value={activeTab} onChange={setTab} label="Campaign sections" idBase={idBase} />
         <TabPanel idBase={idBase} id={activeTab}>
           {activeTab === 'screens' && <>
-            <p className="mb-3 text-xs text-muted-foreground">Bookings are current. Plays and people cover {periodLabel(period)} for this campaign. Eligibility is the server’s latest schedule decision.</p>
+            <p className="mb-3 text-xs text-muted-foreground">Bookings are current. Plays and people cover {periodLabel(period)} for this campaign.{diagnostics && ' Eligibility is the server’s latest schedule decision.'}</p>
             <DataTable
               cols={[
                 { label: 'Screen', render: (r: any) => <><div className="font-medium">{r.screen.name}</div><div className="text-[12px] text-muted-foreground">{r.screen.address}</div></> },
@@ -161,7 +166,7 @@ export function CampaignDashboard({ d, report, status, actions, mayMoney, scoped
                 {label:'Booking',render:(r:any)=>{const b=c.bookings?.find((x:any)=>x.screen_id===r.screen.id);return b?<span className="text-xs">{b.rotation_weight ?? b.slots_per_loop ?? 1} turns / round<br/>{b.rate_type==='per_play'&&typeof b.rate_value==='number'?`${inrRate(b.rate_value)} / play`:b.rate_type==='flat'?'Agreed flat rate':'Rate unavailable'}</span>:<span className="text-xs text-muted-foreground">Legacy booking</span>;}},
                 { label: 'Plays', num: true, render: (r: any) => playsCell(ready?.byScreen[r.screen.id]) },
                 { label: selected ? 'Avg people · selected profile' : 'Legacy avg people', num: true, render: (r: any) => screenPeople(r.screen.id) },
-                { label: 'Eligibility', render: (r: any) => { const text = ineligible.get(r.screen.id); if (text) return <Badge variant="warn" className="whitespace-normal">{text}</Badge>; if (decisions?.some(x => x.screen_id === r.screen.id && x.eligible)) return <Badge variant="ok">Eligible</Badge>; return <span className="text-xs text-muted-foreground">{decisions ? 'No decision' : 'Not checked'}</span>; } },
+                ...(!diagnostics ? [] : [{ label: 'Eligibility', render: (r: any) => { const text = ineligible.get(r.screen.id); if (text) return <Badge variant="warn" className="whitespace-normal">{text}</Badge>; if (decisions?.some(x => x.screen_id === r.screen.id && x.eligible)) return <Badge variant="ok">Eligible</Badge>; return <span className="text-xs text-muted-foreground">{decisions ? 'No decision' : 'Not checked'}</span>; } }]),
               ]}
               rows={d.byScreen.map((r:any)=>({screen:r.screen}))} rowId={(r: any) => r.screen.id} exportName="campaign-screens" empty="No screens on this campaign" />
           </>}
@@ -190,7 +195,7 @@ export function CampaignDashboard({ d, report, status, actions, mayMoney, scoped
             <Settlement buckets={d.settlement_buckets??[]} campaigns={[c]} screens={screens}/>
           </>}
 
-          {activeTab === 'diagnostics' && <div className="space-y-4">
+          {activeTab === 'diagnostics' && diagnostics && <div className="space-y-4">
             {ready ? <>
               <Card className="space-y-3 p-4"><h2 className="text-sm font-semibold">Report coverage</h2><ReportCoverageNote data={ready} period={period} /><ReportInvalidTimeNote data={ready} /></Card>
               <DeliveryCards data={ready} period={period} />

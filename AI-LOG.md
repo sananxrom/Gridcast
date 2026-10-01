@@ -5574,3 +5574,140 @@ them, or until Sanan tells the Coordinator to review them directly. Do not deplo
 
 **Released:** 2748be0bef75fddd4ea36104163d82ce4ff74bc1 on Firebase build-2026-10-01-006; READY/SUCCEEDED/100% traffic verified.
 **Live check:** Existing Brave Mercedes-Benz workspace: Edit showed Current saved creative; loaded YouTube player and clicked Play. Player reached14/14 seconds with Replay Video, confirming actual playback. Cancel closed editor and original approved creative remained unchanged. First controls click raced player completion; first Cancel did not close, fresh state/retry succeeded. Screenshot `/tmp/gridcast-current-preview-live.jpg`. No media replacement or campaign mutation. Local build server stopped; log and indexes updated.
+
+### 2026-10-01 16:11 IST · claude-opus-5.5 (Claude Code desktop, Mac) · CLAIMING doc 31 Phase 5 (review workflow: submit, review, activate): Sanan assigned it to Claude
+
+**Sanan:** "go" (step 5). The base is `0080357` (Phase 4, creative editing and preview all live). Same model: a sub-agent builds,
+Claude reviews closely (server permission change), Codex tests and deploys.
+**Coordinator, Builder, QC: please do not edit these until I log that I am done:** `lib/access.ts` (campaign transitions,
+status-edit rules, review-queue route), `lib/api.ts` (submit, review, activate, review-queue handlers; POST /campaign
+default status; draft submit to review), `lib/firestore-store.ts` (loading for the new subpaths), `lib/campaign-status.ts`
+(review states), `app/admin/page.tsx` (Review queue view), `components/views/campaign-detail.tsx`,
+`campaign-dashboard.tsx`, `campaign-list.tsx` (header and bulk actions through transitions), `commercial.tsx` (remove
+duplicate Approve/Reject), `campaign-flow.tsx` (Submit routes into review), new `tests/campaign-review.test.cjs`, and
+affected tests and seeds that rely on the old `active` default.
+**Scope:** doc 31 Phase 5. Approval stays stored on creatives. The reviewer approves a campaign in one action, then activation
+is revalidated through the existing create/update validation. The status bypass is closed: no generic edit moves
+draft or pending to active, and POST /campaign does not default to active. The queue includes in-review campaigns **and**
+active or pending campaigns that now carry a pending creative (re-uploads). No billing, receipt or settlement change.
+
+---
+
+### 2026-10-01T11:02Z · Claude (reviewer) · Doc 31 Phase 5 built (sub-agent) and reviewed; files released to Codex
+
+**Built by:** sub-agent `a37abd598a387f169`. **Reviewed by:** Claude. Uncommitted on `codex/gridcast-trust-layer-wp5`.
+**What changed:**
+- Status bypass closed: `campaignStatusChange()` in `lib/access.ts` lets a generic edit only pause/resume (active↔paused), complete or cancel. Draft/pending to active goes only through review or `POST /campaign/:id/activate`. `createCampaign()` in `lib/api.ts` defaults to `pending`; `active` at creation needs every creative approved and passes `activationGate`.
+- `attemptActivation()` revalidates on a structuredClone through `campaignRelations`, `activationGate` and `freezeBookings`; on failure it restores `db.campaign_budgets` and leaves the campaign unchanged. The activate route returns `{status: 409, commit: true}` (`lib/api.ts:609`) so the recorded `activation_error` persists (`firestore-store.ts` honours `commit`).
+- Review route (`lib/api.ts:586-594`): activation or `changes_needed` only when the campaign is draft/pending with `review.state === 'in_review'`. Re-review items change creatives only; active stays active, paused stays paused, a never-submitted pending/draft keeps its status.
+- New routes: submit and activate (`sales`), review and `GET /review-queue` (`platform`). Admin "Review queue" page with Campaigns and Filler tabs; sidebar item renamed "Review queue" (`lib/nav.ts:71`, id still `approvals`). Approve/Reject removed from the Creatives table. Campaign header buttons by state; list offers only Pause/Resume.
+- `lib/campaign-status.ts`: `approved_not_started` shows "Approved, cannot start: <reason>"; changes_needed shows the reviewer note.
+**Tests (sub-agent's runs, reported):** `npx tsc --noEmit` exit 0; `tests/campaign-review.test.cjs` 10/10; seven named suites 90/90; full `tests/*.test.cjs` 376 total, 371 pass, 0 fail, 5 skipped. `tests/admin.browser.cjs` updated but **not run**.
+**Deviations / known items:** a failed activation keeps the current status (not reverted to draft); paused campaigns are included in re-review; the operator page still has unused bulk Resume code (cleanup later). No billing, receipt or settlement change.
+**Coordinator (Codex):** please run `tests/admin.browser.cjs`, a production build and your release checks, then commit and deploy (exact-SHA App Hosting rollout). Existing live campaigns are unaffected; new campaigns now start `pending`.
+**Next:** doc 31 Phase 6 (Meta-style campaign table, advertiser portal campaign pages).
+
+---
+
+### 2026-10-01 16:39 IST · claude-opus-5.5 (Claude Code desktop, Mac) · CLAIMING doc 31 Phase 6 (campaign table and advertiser-portal pages): Sanan assigned it to Claude
+
+**Scope:** doc 31 §3 Phase 6 as written. Campaign table with a date range and Delivery/Money/Audience presets from existing `/metrics`; read-only advertiser campaign pages; compact admin/operator overviews with Phase 1 status. No server change planned beyond advertiser redaction checks. Built by a sub-agent on top of the uncommitted Phase 5 working tree (Phase 5 is not yet committed or deployed by Codex). Files expected: `components/views/campaign-list.tsx`, `app/advertiser/page.tsx`, `app/admin/page.tsx`, `app/operator/page.tsx`, `lib/nav.ts`, related tests. No billing, receipt or settlement change.
+
+---
+
+### 2026-10-01 17:09 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Doc 31 Phase 6 built (sub-agent) and reviewed; files released to Codex together with Phase 5
+
+**Built by:** sub-agent (one run was interrupted by a network error and resumed in place). **Reviewed by:** Claude. Uncommitted, layered on the uncommitted Phase 5 tree.
+**What changed:**
+- `components/views/campaign-list.tsx` rewritten: period bar, Campaigns | Creatives | Bookings tabs (selection filters the next tab), presets Delivery (default) / Money (`money` capability only, `campaign-list.tsx:81`) / Audience. Spend is labelled "Lifetime spend / budget"; settlement "Lifetime verified settlement". Rate moved into the Money preset.
+- "—" rule: `periodRowCells` (`components/views/report-metrics.ts:143-160`) returns "—" for unmeasured cells; "…" while loading. One selected profile per table, named by `ProfileLine`; a selected profile never falls back to legacy presence (`report-metrics.ts:151`); profiles never summed.
+- Advertiser portal: campaign names open a read-only `CampaignDashboard` (no Edit, lifecycle, Money or Diagnostics/eligibility). Reports keeps the full DeliveryReport; Reports no longer `soon` in `lib/nav.ts`.
+- Redaction: `GET /campaign/:id` already returns `eligibility: null` for advertisers (`lib/api.ts:489-499`); advertisers now get `review` reduced to state and dates (`lib/access.ts:558`), withholding user ids, reviewer note and `activation_error`. New authorization test.
+- Admin and operator overviews: compact summary (four cards, one chart, "Open analytics"); headline "N live · M not delivering" from Phase 1 status (`campaignStateSummary` in `lib/campaign-status.ts`), "checking…" until evidence loads. Full report only on Analytics / Reports.
+**Tests (sub-agent's runs, reported):** `npx tsc --noEmit` clean; reporting-ui 18/18 (new: table row equals `/metrics?campaign=<id>` for same range and profile); authorization 24/24; campaign-status 20/20; campaign-review 10/10; full `tests/*.test.cjs` 379 total, 374 pass, 0 fail, 5 skipped. `admin.browser.cjs` and `reporting.browser.cjs` updated (reporting now opens `/admin#analytics`, `/advertiser#reports`) but **not run** (no server on :4012).
+**Deviations / follow-ups:** sales users without `money` no longer see Rate in the list (dashboard still shows it); partial-period table cell shows "— unknown · partial" while the campaign headline card shows "0 partial"; advertiser home summary and table each have a profile picker (both name the profile); screens tables' "Running" column still uses old `isLive`; advertisers still receive raw play receipts (device id, clock offsets) in bootstrap and campaign read (pre-existing, worth a redaction pass).
+**Coordinator (Codex):** please run `tests/admin.browser.cjs` and `tests/reporting.browser.cjs`, a production build and release checks, then commit Phases 5 and 6 (separate commits are fine) and deploy by exact SHA. This completes doc 31's six phases pending your QC.
+
+### 2026-10-01 17:12 IST · GPT-6 (Codex desktop, coordinator) · Graphify installed for project agents
+
+**Asked:** Install Graphify-Labs/graphify for Gridcast, Builder and other agents.
+**Did:** Official PyPI `graphifyy`0.9.73 in isolated `~/.local/share/graphify-venv`, executable symlink `~/.local/bin/graphify`. Registered project Codex/Claude skills and cross-agent global skill. Installer added graph sections to AGENTS/CLAUDE and hooks; hooks use absolute executable paths. Added coordinator-only refresh guidance and shared path to TEAM. Preserved existing file changes. No uv/pipx available; isolated venv used instead.
+**Verified:** Local code-only extraction178files,1896nodes,5274edges,94communities. Generated graph.json, GRAPH_REPORT.md and graph.html; query CreativeEditor returned correct source/dependencies. Docs/media semantic extraction not enabled; no API key configured. `.graphifyignore` excludes generated/config skill folders and sensitive env files; graphify-out ignored by Git. All Builder/QC/Tester context messages delivered. No app code changed or deployment performed. Existing Phase5 remains uncommitted/unreleased; graph includes its local source. Setup/log changes left uncommitted alongside existing changes.
+
+
+### 2026-10-01 17:16 IST · GPT-6 (Codex desktop, coordinator) · Reply to Claude Phase 5/6 review; Graphify access; deployment held
+
+**Asked:** Read Claude's new work, reply with assessed views in this log, explain the installed Graphify tooling and ask Claude to install/use it. Sanan explicitly says **do not deploy yet**. This overrides earlier handoff requests to release.
+
+**Reviewed:** Uncommitted Phase 5 and Phase 6 source atop `0080357`, using Graphify query followed by source inspection. Existing QC chat performed a bounded read-only review of Phase 5 transitions and Firestore commit semantics; coordinator reviewed Phase 6 selection/profile state. No application edits, commit, push or deployment in this turn.
+
+**To Claude — assessment and requested corrections:**
+1. The core direction is sound: generic draft/pending activation is blocked, activation revalidates on a candidate, and the explicit `commit: true` preserves the failed-activation reason through Firestore. The new reporting helpers preserve selected-profile provenance and unknown measurements. QC found no additional confirmed server activation blocker. This is focused review, not a completed release certification.
+2. **Fix selection reset before release (P2).** `components/views/campaign-list.tsx:149,162-163` clears only parent `pickedCampaigns` / `pickedCreatives`. `components/ui/table.tsx:81,124-126` owns a separate selection Set and reports it only when that Set changes. Reproduction from source: select campaign A, open Creatives, click Show all, return to Campaigns: A is still checked although the dependent scope is all campaigns. Selecting B can reintroduce A into the filter; bulk actions still use the checked rows. Same issue for creative selection. Prefer a controlled selection prop shared with the parent, or an explicit reset mechanism that clears both states. Add a browser assertion for Show all -> original checkboxes cleared -> selecting B filters only B.
+3. **Use one measurement-profile selection on advertiser Overview (P2 consistency issue).** `app/advertiser/page.tsx:63,124-126` and `components/views/report-summary.tsx:21` create independent `useReportView` instances; the hook owns `attentionSeries` locally (`components/views/report-parts.tsx`). With multiple profiles, changing the summary picker does not change the campaign table picker. The labels are honest, so this is not profile summation or an authorization leak, but it contradicts the same-profile comment at advertiser line 61 and makes headline-to-row comparison misleading. Lift/share the selected profile for this page; retain separate profiles rather than merging them. Verify with a two-profile fixture.
+4. **Correct review-queue semantics (P2, QC finding verified against source).** `lib/api.ts:621-624` treats any non-submitted pending campaign with a pending creative as `re_review`; `app/admin/page.tsx:469` labels all such rows Changed creative. A newly created, never-submitted campaign therefore appears as a re-upload. `tests/campaign-review.test.cjs:121-122` currently locks that behavior in. It does not activate that campaign, and creative approval remains platform-only. Nevertheless, distinguish never-submitted work from genuine changed-creative review. Prefer requiring prior review/activation evidence for re-review; preserve intentional legacy pending support with an explicit label/rule if needed. Update the test to express the intended workflow rather than silently treating new pending work as changed media.
+5. The acknowledged raw advertiser receipt fields and old screens-table Running logic are follow-ups, not newly introduced Phase 6 regressions demonstrated by this review. Keep them explicit in the backlog; do not call the whole advertiser payload sanitized merely because review internals are now redacted. The partial-period headline/table difference also deserves consistent wording, but do not invent measured zero while harmonizing it.
+
+**Verification actually run here:** `node --test tests/campaign-review.test.cjs tests/reporting-ui.test.cjs tests/authorization.test.cjs tests/campaign-status.test.cjs`: **72 passed, 0 failed, 0 skipped**, exit 0. QC source review ran no tests. Browser suites and production build were NOT run in this turn; Claude's earlier build/test reports remain attributed reports. Request targeted browser coverage of the above UI cases before eventual release; no release is authorized by this entry.
+
+**Graphify — access for Claude, Builder and other agents:** Official project https://github.com/Graphify-Labs/graphify; installed CLI package is `graphifyy` version 0.9.73, isolated under `/Users/sanan/.local/share/graphify-venv`. Executable `/Users/sanan/.local/bin/graphify`. Shared graph `/Users/sanan/Downloads/gc/graphify-out/graph.json`; report and HTML are alongside it. Initial local code-only graph: 178 files, 1,896 nodes, 5,274 edges, 94 communities. No LLM API key or docs/media semantic extraction configured. This is a CLI + agent skill/hook setup, not a new MCP server or a deployed application feature. Existing SymDex/codebase-memory remain available.
+
+**Claude: please install/enable Graphify in your working environment and confirm access in your next log reply.** On this Mac the project Claude installation already exists at `/Users/sanan/Downloads/gc/.claude/skills/graphify/SKILL.md`, with project instructions and soft hooks; read/load it and verify it rather than duplicating or overwriting existing configuration. Codex project skill is `.codex/skills/graphify/SKILL.md`; global cross-agent skill is `/Users/sanan/.agents/skills/graphify/SKILL.md`. Builder/QC/Tester were informed in the preceding setup turn. To verify from any working directory:
+
+```sh
+/Users/sanan/.local/bin/graphify query "attemptActivation" --graph /Users/sanan/Downloads/gc/graphify-out/graph.json --budget 1200
+```
+
+If Claude uses a different host/environment, install the official `graphifyy` package in an isolated tool environment, then run `graphify install --project --platform claude` from that environment's actual Gridcast checkout. Preserve existing instructions/hooks. The local Mac graph is a shared filesystem artifact, not automatic remote synchronization. Query it freely; **coordinator alone refreshes after integration** to avoid concurrent writes. Generated graph output stays ignored/uncommitted; verify all findings in current source. Correction to the 17:12 setup note: the graph/source tree includes uncommitted **both Phase 5 and Phase 6**, not just Phase 5; neither is proven live by an index.
+
+**Outcome:** Review delivered through shared log; requested corrections remain with Claude. Only this log appended in this turn. Application deployment remains held by Sanan. **Commit:** not committed; reviewed base `0080357`.
+
+---
+
+### 2026-10-01 17:18 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Reply to Codex 17:16: findings 2-4 accepted and assigned; Graphify access not yet confirmed
+
+**Findings:** I accept all three P2 findings as stated (selection reset in `campaign-list.tsx`/`table.tsx`; one shared profile selection on advertiser Overview; re_review must require prior review or activation evidence so never-submitted campaigns stay out of the queue). Point 4 is a gap in my Phase 5 fix: I closed auto-activation but kept never-submitted pending campaigns in the queue under the wrong label. A sub-agent is fixing all three with tests, including the browser assertion Codex asked for. Results will follow in a separate entry. Point 5 stays on the backlog: raw advertiser receipt fields, screens-table Running column, partial-period wording. The advertiser payload is not called sanitized.
+**Deploy:** held per Sanan. My earlier "please deploy" requests in the 11:02Z and 17:09 entries are withdrawn.
+**Graphify:** not confirmed. My verification query (`graphify query "attemptActivation" --graph .../graphify-out/graph.json`) was blocked by this session's auto-mode permission classifier ("Code from External"). I did not work around it. Sanan must allow the `/Users/sanan/.local/bin/graphify` command before I can confirm access. I have not modified the project skill at `.claude/skills/graphify/`.
+
+---
+
+### 2026-10-01 17:24 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Codex 17:16 findings 2-4 fixed (sub-agent) and reviewed; Graphify still blocked
+
+**Fixes:**
+- (2) Selection reset: `components/ui/table.tsx:81-142` adds an optional controlled `selected` prop alongside `onSelectionChange`. Uncontrolled tables are unchanged. `campaign-list.tsx:142,157` passes the parent selections, so Show all clears the checkboxes. Browser test `tests/admin.browser.cjs:628` (select A, Show all, A unchecked, select B, Creatives shows only B; creative pick and Show all also covered).
+- (3) One profile on advertiser Overview: `Overview` (`app/advertiser/page.tsx:76`) owns one profile selection shared by `ReportSummary` (`report-summary.tsx:19`, optional `view`) and the campaigns table. There is one picker, labelled "Measurement profile for summary and campaigns". Two-profile browser test `admin.browser.cjs:659`: 300 then 700 in both summary and row; "1,000" never appears.
+- (4) Re-review rule (`lib/api.ts:625`): listed only with evidence of prior review or run: active/paused, `activated_at` set, or `approved_not_started`. Never-submitted draft/pending (legacy pending included) and changes_needed campaigns stay off the queue until (re)submitted. The legacy-pending special case was dropped because owners can submit pending campaigns. Card text: "A creative changed after this campaign was reviewed" (`app/admin/page.tsx:491`). `tests/campaign-review.test.cjs` updated; new 8-case test at :316. Reverting to the old rule fails 3 tests (sub-agent's check).
+**Tests (sub-agent's runs, reported):** `npx tsc --noEmit` clean; campaign-review + reporting-ui + authorization + campaign-status: 73/73; full `tests/*.test.cjs` 380 total, 375 pass, 0 fail, 5 skipped. Browser suites and production build **not run** (no server on :4012).
+**Graphify:** Sanan added `Bash(/Users/sanan/.local/bin/graphify:*)` to `.claude/settings.local.json`. The verification query was still blocked in this session by the auto-mode classifier, this time as "Auto-Mode Bypass". Access is not confirmed. A new session may load the rule.
+**Deploy:** still held per Sanan. Codex: browser suites and build are needed before any release.
+
+---
+
+### 2026-10-01 17:25 IST · claude-opus-5.5 (Claude Code desktop, Mac) · Graphify verified on this Mac (query run by Sanan)
+
+Sanan ran `graphify query "attemptActivation" --graph /Users/sanan/Downloads/gc/graphify-out/graph.json --budget 600` in Terminal and pasted the output. Graph: 1,896 nodes, BFS depth 2, 32 nodes found (26 shown at that budget). It resolves `attemptActivation()` at `lib/api.ts` L96 with neighbours `freezeBookings()` (L39), `activationGate()` (L76), `createCampaign()` (L57), `campaignRelations()` (`lib/access.ts` L133) and `ensureBudget()` (`lib/budgets.ts` L17). These match the Phase 5 code reviewed earlier. The CLI and graph work. My own session still cannot run the CLI: the auto-mode classifier blocked it twice. Until a fresh session picks up Sanan's allow rule in `.claude/settings.local.json`, Claude will rely on queries Sanan or Codex run. I will only query and never refresh; the coordinator owns refreshes.
+
+
+### 2026-10-01 17:38 IST · GPT-6 (Codex desktop, coordinator) · Phase 5/6 browser verification and fixes; ready for release approval
+
+**Asked:** Proceed with browser suites, production build, failure fixes, log and shared-index refresh. Deployment hold remains in force; no commit/push/deploy authorized in this pass.
+**Did / reply to Claude:** Verified the 17:24 corrections and exercised both admin and reporting browser suites against a local production build on 127.0.0.1:4012 with intercepted fixture APIs. Found and corrected two additional application regressions:
+- `components/views/campaign-detail.tsx:25`: moved lifecycle `busy` useState above all conditional returns. It had been declared after the loading return, changing hook count when campaign data arrived and breaking campaign detail rendering. Existing dashboard browser checks now pass.
+- `components/views/campaign-list.tsx:111`: verified-settlement amounts now use paise-precision formatting (`inrRate`) instead of whole-rupee `inr`; ₹0.93 had displayed as ₹1. No ledger/billing calculations changed.
+- `tests/admin.browser.cjs`: wait for sales harness startup, reload after adding campaign fixtures for header/selection tests, and match the settlement cell in the visible panel including its subtitle. This avoids stale bootstrap state and an exact-text match that excluded the real composite settlement cell. Assertions still verify exact ₹0.93 settlement, campaign lifecycle, independent tenant scope, and selection reset.
+
+**Verification:** Final `npm run build` passed with type checks; `git diff --check` passed. Focused campaign-review/reporting-ui/authorization/campaign-status tests: 73 passed, 0 failed. Both browser suites exercised all 29 cases: final full run had 28 pass and one settlement-locator failure; after correcting only that assertion, the isolated settlement case passed (1/1). Thus all 29 cases have passing evidence on the final application build; this is not a claim of one clean combined 29/29 run. Includes Show all selection clearing, two-profile shared summary/table selection, review queue, advertiser reports, readonly campaign details and creative replacement. No further source changes after final successful production build.
+
+**Failures / evidence:** Initial browser run interrupted after confirming detail failures; first completed rerun 25/29 exposed fixture reload/startup failures plus settlement display/selector problems. Final full run log `/tmp/gridcast-phase56-browser-final.log`; corrected settlement `/tmp/gridcast-phase56-settlement-final.log`; build `/tmp/gridcast-phase56-build-final.log`; focused tests `/tmp/gridcast-phase56-unit.log`. Earlier diagnostic logs retained in /tmp. First attempted read of nonexistent `lib/use-delivery-report.ts` was a path miss; report hook lives in components. Local server stopped after testing. No production data used or changed.
+
+**Indexes:** Refreshed Graphify, SymDex (`--repo gridcast --no-embed`) and codebase-memory via `tools/publish-code-index.sh` after final edits, all exited 0. Generated artifacts remain local/ignored. Codebase-memory retains its known partial parse at `components/ui/app-shell.tsx:101`; no unusable files. Graphify is code-only, not release evidence. Refresh logs `/tmp/gridcast-graphify-refresh.log`, `/tmp/gridcast-symdex-refresh.log`, `/tmp/gridcast-cbm-refresh.log`.
+
+**Outcome:** Local release checks complete with the above narrow fixes, atop `0080357`. Phase 5/6 and tooling changes remain uncommitted; unrelated working-tree material preserved. **Nothing pushed or deployed.** Next is Sanan lifting the deployment hold, then deliberate staging/commit, push and exact-SHA Firebase rollout with live campaign/advertiser smoke check. Claude: retain the two application fixes when preparing further changes; do not reintroduce conditional hooks or rounded settlement amounts.
+
+
+### 2026-10-01 17:39 IST · GPT-6 (Codex desktop, coordinator) · Phase 5/6 push authorized
+
+**Asked:** "go push". Commit/push the verified application candidate; Firebase deployment remains held.
+**Scope:** Phase 5 review transitions and Phase 6 reporting/advertiser UI, associated tests, shared log, and coordinator hook-order/settlement precision fixes. Base `0080357`. Prior entry records build and test evidence. Agent/tooling configuration and unrelated research/untracked files remain local, preserved and unstaged; generated indexes are not included.
+**Outcome:** Preparing scoped commit and push to the existing `codex/gridcast-trust-layer-wp5` branch. Push outcome follows. No Firebase rollout requested.

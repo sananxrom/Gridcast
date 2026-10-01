@@ -413,3 +413,28 @@ test('campaign drafts: reads load only the caller\'s drafts; writes keep the cro
  // No ledger exists yet, so the POST /campaign budget path falls back to settlement buckets per loaded campaign.
  for(const cid of [id,'ca'])assert.ok(g.database.reads.some(q=>typeof q==='object'&&q.collection==='settlement_buckets'&&q.filters.some(x=>x[0]==='campaign_id'&&x[2]===cid)),'submit loads budgets like POST /campaign for '+cid);
 });
+
+test('review workflow: campaign subpaths load creatives, budgets and other campaigns; review queue is platform-wide; a recorded 409 commits only with commit:true',async()=>{
+ const rows={'creatives/cra':{id:'cra',org_id:'a',advertiser_id:'adv',approval_status:'pending'},'creatives/crb':{id:'crb',org_id:'b',advertiser_id:'advb',approval_status:'pending'},
+  'campaigns/ca':{id:'ca',org_id:'a',advertiser_id:'adv',creative_ids:['cra'],screen_ids:['sa'],status:'pending'},'campaigns/cb':{id:'cb',org_id:'b',advertiser_id:'advb',creative_ids:['crb'],screen_ids:['sb'],status:'active'},
+  'campaigns/cn':{id:'cn',org_id:'g',campaign_type:'network',participant_org_ids:['a'],advertiser_id:'advg',creative_ids:[],screen_ids:['sa'],status:'active'},
+  'users/admin':{id:'admin',org_id:'g',role:'platform_admin',email:'admin@example.invalid',auth_version:0},'orgs/g':{id:'g',status:'active',type:'gridcast'}};
+ for(const action of ['submit','activate']){
+  const f=fixture(rows);
+  const d=await f.store.transact({...f.context,method:'POST',path:['campaign','ca',action]},()=>f.store.read());
+  assert.ok(d.creatives.some(c=>c.id==='cra'));assert.ok(d.campaigns.some(c=>c.id==='cn'),'network campaigns on the seller\'s screens are loaded for capacity');
+  assert.equal(d.campaigns.some(c=>c.id==='cb'),false,'another organisation\'s operator campaign is not loaded');
+  assert.ok(f.database.reads.some(q=>typeof q==='object'&&q.collection==='settlement_buckets'&&q.filters.some(x=>x[0]==='campaign_id'&&x[2]==='ca')),'budget baseline loaded for '+action);
+  await assert.rejects(f.store.transact({...f.context,method:'POST',path:['campaign','ca',action]},async()=>{const s=await f.store.read();s.creatives.push({id:'evil',org_id:'b'});await f.store.write(s);}),{status:403},'cross-organisation write guard intact');
+ }
+ const r=fixture(rows),admin={...r.context,uid:'admin'};
+ const review=await r.store.transact({...admin,method:'POST',path:['campaign','ca','review']},()=>r.store.read());
+ assert.ok(review.campaigns.some(c=>c.id==='cb')&&review.creatives.some(c=>c.id==='crb'),'platform review loads across organisations');
+ const queue=await r.store.transact({...admin,path:['review-queue'],orgId:'a'},()=>r.store.read());
+ assert.deepEqual(new Set(queue.campaigns.map(c=>c.id)),new Set(['ca','cb','cn']));assert.ok(queue.creatives.some(c=>c.id==='crb'));
+ // A plain failure never commits; a recorded activation failure (status 409, commit:true) does.
+ await r.store.transact({...admin,method:'POST',path:['campaign','ca','activate']},async()=>{const s=await r.store.read();s.campaigns.find(c=>c.id==='ca').review={state:'approved_not_started'};await r.store.write(s);return {status:409,body:{}};});
+ assert.equal(r.database.commits.length,0);
+ await r.store.transact({...admin,method:'POST',path:['campaign','ca','activate']},async()=>{const s=await r.store.read();s.campaigns.find(c=>c.id==='ca').review={state:'approved_not_started'};await r.store.write(s);return {status:409,commit:true,body:{}};});
+ assert.deepEqual(r.database.commits.at(-1).map(x=>x[1]),['campaigns/ca']);assert.equal(r.database.rows['campaigns/ca'].review.state,'approved_not_started');
+});

@@ -61,7 +61,7 @@ function download(name: string, text: string) {
 
 export function DataTable<T>({
   cols, rows, empty = 'Nothing here yet', className,
-  rowId, bulk, exportName, onDone, search, facets, toolbar,
+  rowId, bulk, exportName, onDone, search, facets, toolbar, onSelectionChange, selected,
 }: {
   cols: Col<T>[];
   rows: T[]; empty?: string; className?: string;
@@ -74,8 +74,28 @@ export function DataTable<T>({
   /** Dropdown filters built from the data itself. */
   facets?: Facet<T>[];
   toolbar?: React.ReactNode;
+  /** Called with the selected row ids whenever the selection changes (rows filtered away drop out). */
+  onSelectionChange?: (ids: string[]) => void;
+  /** Controlled selection. When supplied, the parent owns the checked ids and must update them from
+   *  onSelectionChange; clearing it in the parent clears the checkboxes too. Omit for internal state. */
+  selected?: string[];
 }) {
-  const [sel, setSel] = React.useState<Set<string>>(new Set());
+  const controlled = selected !== undefined;
+  const [innerSel, setInnerSel] = React.useState<Set<string>>(new Set());
+  const sel = React.useMemo(() => (controlled ? new Set(selected) : innerSel), [controlled, selected, innerSel]);
+  const selNow = React.useRef(sel);
+  selNow.current = sel;
+  const selectionRef = React.useRef(onSelectionChange);
+  selectionRef.current = onSelectionChange;
+  const setSel = React.useCallback((update: Set<string> | ((prev: Set<string>) => Set<string>)) => {
+    if (!controlled) { setInnerSel(update); return; }
+    const prev = selNow.current;
+    const next = typeof update === 'function' ? update(prev) : update;
+    if (next === prev) return;
+    if (next.size === prev.size && Array.from(next).every(id => prev.has(id))) return;
+    selNow.current = next;
+    selectionRef.current?.(Array.from(next));
+  }, [controlled]);
   const [busy, setBusy] = React.useState('');
   const [undo, setUndo] = React.useState<{ label: string; rows: T[]; fn: (r: T[]) => any } | null>(null);
   const [sort, setSort] = React.useState<{ i: number; dir: 1 | -1 } | null>(null);
@@ -117,6 +137,9 @@ export function DataTable<T>({
       return next.size === prev.size ? prev : next;
     });
   }, [ids]);
+
+  // Uncontrolled tables report their internal selection; controlled ones report from setSel.
+  React.useEffect(() => { if (!controlled) selectionRef.current?.(Array.from(sel)); }, [sel, controlled]);
 
   const allOn = ids.length > 0 && ids.every(id => sel.has(id));
   const someOn = sel.size > 0;

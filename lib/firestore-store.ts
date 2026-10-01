@@ -160,8 +160,10 @@ export function createFirestoreStore(database: Firestore) {
       const target = collection && context.path[1] ? await readDoc(tx, collection, context.path[1]) : null;
       orgId = context.orgId || (target ? (collection === 'orgs' ? target.id : target.org_id) : context.targetOrg) || (['team','invite','campaign','creative','advertiser','screens','group'].includes(context.path[0]) && !context.path[1] ? actor.org_id : undefined);
     }
-    // Network administration validates all receiving inventories in this transaction.
-    if (state.admin && ['network-inventory','campaign'].includes(context.path[0])) orgId = undefined;
+    // Network administration validates all receiving inventories in this transaction. This includes the review
+    // workflow subpaths campaign/:id/submit|review|activate (creative writes, other campaigns on the targeted
+    // screens, budgets). The platform review queue reads campaigns and creatives across organisations.
+    if (state.admin && ['network-inventory','campaign','review-queue'].includes(context.path[0])) orgId = undefined;
     // Draft writes validate like campaign creation (network drafts may target any released screen).
     if (state.admin && context.method === 'POST' && context.path[0] === 'campaign-draft') orgId = undefined;
     if (state.admin && context.method === 'POST' && ['creative','advertiser'].includes(context.path[0])) orgId = undefined;
@@ -527,8 +529,10 @@ export function createFirestoreStore(database: Firestore) {
         const state = await load(tx, context);
         return storage.run(state, async () => {
           const result = await fn();
-          // Failed API requests can never commit partially staged mutations.
-          if (!result || typeof result !== 'object' || !('status' in result) || Number((result as any).status || 200) < 400)
+          // Failed API requests can never commit partially staged mutations. The one exception is an explicit
+          // `commit: true` result: a recorded outcome (an activation that could not start keeps its creative
+          // decisions and records review.activation_error) that the dispatcher returns as an HTTP failure.
+          if (!result || typeof result !== 'object' || !('status' in result) || Number((result as any).status || 200) < 400 || (result as any).commit === true)
             await flush(state);
           else if (state.dirty && state.maintenanceLimiterIds?.length) {
             // Denial must not reset the guessing budget. Commit ONLY the expected

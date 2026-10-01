@@ -68,7 +68,7 @@ export function adminNav(badges: { inbox: number; approvals: number }): { groups
         { id: 'advertisers', title: 'Advertisers', icon: Users },
         { id: 'creatives', title: 'Creatives', icon: Film },
         { id: 'campaigns', title: 'Campaigns', icon: Megaphone },
-        { id: 'approvals', title: 'Approvals', icon: ShieldCheck, badge: badges.approvals },
+        { id: 'approvals', title: 'Review queue', icon: ShieldCheck, badge: badges.approvals },
       ] },
       { heading: 'Developers', items: [
         { id: 'set-api', title: 'API keys', icon: Terminal, soon: true },
@@ -86,7 +86,7 @@ export function advertiserNav(): { groups: NavGroupData[]; bottom: NavItemData[]
         { id: 'search', title: 'Search', icon: Search, shortcut: '⌘K' },
         { id: 'overview', title: 'Delivery', icon: LayoutDashboard },
         { id: 'screens', title: 'Where it ran', icon: Monitor },
-        { id: 'reports', title: 'Reports', icon: FileBarChart, soon: true },
+        { id: 'reports', title: 'Reports', icon: FileBarChart },
       ] },
     ],
     bottom: [

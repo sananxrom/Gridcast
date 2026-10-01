@@ -22,6 +22,7 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
   const [edit, setEdit] = useState(false);
   const [f, setF] = useState<any>(null);
   const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
   const [inventory,setInventory]=useState<any>(null);
   const [inventoryError,setInventoryError]=useState('');
   const platform=(boot.caps??[]).includes('platform');
@@ -71,10 +72,16 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
     });
     setEdit(false); await load(); onChanged(); }catch(e){setErr((e as Error).message);}
   };
-  const toggleStatus = async () => {
-    if (!lifecycle) return;
-    setErr('');try { await api(`/campaign/${id}`, { status: lifecycle.next });
-    await load(); onChanged(); }catch(e){setErr((e as Error).message);}
+  // Pause/Resume use the generic edit; Submit, Resubmit, Launch and Activate use the review transitions
+  // (doc 31 Phase 5). A failed activation is recorded on the campaign, so reload after errors too.
+  const runLifecycle = async () => {
+    if (!lifecycle || lifecycle.disabled) return;
+    setErr(''); setBusy(true);
+    try {
+      if (lifecycle.transition) await api(`/campaign/${id}/${lifecycle.transition}`, {});
+      else await api(`/campaign/${id}`, { status: lifecycle.next });
+    } catch (e) { setErr((e as Error).message); }
+    finally { setBusy(false); await load().catch(() => undefined); onChanged(); }
   };
   const tick = (arr: string[], v: string) => arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v];
   const mine = [...boot.creatives,...(inventory?.creatives??[])].filter((cr:any,i:number,rows:any[])=>rows.findIndex(x=>x.id===cr.id)===i).filter((x: any) => x.advertiser_id === c.advertiser_id);
@@ -82,12 +89,22 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
   // Device status comes from bootstrap screens (heartbeat _status); detail screen views do not carry it for every role.
   const statusScreens = d.byScreen.map((r:any)=>({...r.screen,_status:r.screen?._status??boot.screens?.find((s:any)=>s.id===r.screen?.id)?._status}));
   const status = campaignStatus({ campaign: c, creatives: d.byCreative.map((r:any)=>r.creative), screens: statusScreens, advertiser: d.advertiser, receipts: d.plays, decisions: Array.isArray(d.eligibility) ? d.eligibility : null, now });
-  // Header lifecycle action follows the campaign's state: ended → none, active → Pause, paused → Resume,
-  // draft/pending → Activate (same call, nothing was paused); never Pause on a non-active campaign.
-  const lifecycle: { label: string; next: string } | null = status.state === 'ended' || ['complete', 'cancelled'].includes(c.status) ? null
+  // Header lifecycle action follows the campaign's state (doc 31 Phase 5): ended → none, active → Pause,
+  // paused → Resume; draft/pending → Submit for review (or Launch when every creative is approved), In review
+  // (disabled), Resubmit after changes, or Activate (retry) when approval could not start the campaign.
+  const assigned = d.byCreative.map((r: any) => r.creative);
+  const allApproved = assigned.length > 0 && c.creative_ids.length === assigned.length && assigned.every((x: any) => x.approval_status === 'approved');
+  const review = c.review?.state;
+  type Lifecycle = { label: string; next?: string; transition?: 'submit' | 'activate'; disabled?: boolean };
+  const lifecycle: Lifecycle | null = ['complete', 'cancelled'].includes(c.status) || (status.state === 'ended' && review !== 'approved_not_started') ? null
     : c.status === 'active' ? { label: 'Pause', next: 'paused' }
     : c.status === 'paused' ? { label: 'Resume', next: 'active' }
-    : { label: 'Activate', next: 'active' };
+    : review === 'in_review' ? { label: 'In review', disabled: true }
+    : review === 'changes_needed' ? { label: 'Resubmit', transition: 'submit' }
+    : review === 'approved_not_started' ? { label: 'Activate', transition: 'activate' }
+    : allApproved ? { label: 'Launch', transition: 'activate' }
+    : { label: 'Submit for review', transition: 'submit' };
+  const rejectedCreatives = assigned.filter((x: any) => x.approval_status === 'rejected');
 
   return (
     <>
@@ -95,8 +112,13 @@ export function CampaignDetail({ id, boot, onGo, onChanged }: {
         actions={<>
           {c.campaign_type === 'network' && <Badge variant="default">network</Badge>}
           {mayEdit && <Button variant="outline" size="sm" onClick={() => setEdit(!edit)}>Edit</Button>}
-          {mayEdit && lifecycle && <Button variant="outline" size="sm" onClick={toggleStatus}>{lifecycle.label}</Button>}
+          {mayEdit && lifecycle && <Button variant={lifecycle.transition ? 'default' : 'outline'} size="sm" disabled={busy || lifecycle.disabled} onClick={runLifecycle}
+            title={lifecycle.disabled ? 'Gridcast is reviewing this campaign’s creatives' : undefined}>{lifecycle.label}</Button>}
         </>}>
+      {review === 'in_review' && <Card role="status" className="mb-4 p-4 text-sm">Submitted for review{c.review.submitted_at ? ` on ${new Date(c.review.submitted_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST` : ''}. Gridcast reviews the creatives; the campaign starts when they are approved. Its screens are held meanwhile.</Card>}
+      {review === 'changes_needed' && <Card role="alert" className="mb-4 border-warn/40 p-4 text-sm"><b>Changes needed.</b> {c.review.note ? <>Reviewer note: “{c.review.note}”. </> : null}Change or replace the rejected creatives with Edit, then Resubmit. Its screens stay held.</Card>}
+      {review === 'approved_not_started' && <Card role="alert" className="mb-4 border-destructive/40 p-4 text-sm"><b>Approved, cannot start:</b> {c.review.activation_error || 'activation failed'}. Fix this with Edit, then Activate again.</Card>}
+      {c.status !== 'draft' && review !== 'changes_needed' && rejectedCreatives.length > 0 && <Card className="mb-4 p-4 text-sm"><b>Changes needed:</b> {rejectedCreatives.map((x: any) => x.name).join(', ')} {rejectedCreatives.length === 1 ? 'was' : 'were'} rejected and will not play. Replace {rejectedCreatives.length === 1 ? 'it' : 'them'} to send for review again.</Card>}
 
       {scopedNetwork && <Card className="mb-4 p-4 text-sm text-muted-foreground">Gridcast manages this network campaign. Delivery and amounts below cover your organisation’s screens only.</Card>}
       {!edit && err && <p role="alert" className="mb-3 text-sm text-destructive">{err}</p>}

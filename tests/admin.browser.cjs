@@ -48,6 +48,25 @@ async function harness(role='platform_admin') {
     const creative=creatives.find(c=>c.id===creativeId);if(creative){for(const key of ['name','category']){const value=multipartField(body.multipart,key);if(value!==undefined)creative[key]=value;}creative.assets=[asset];creative.media_type=asset.media_type;delete creative.youtube_id;creative.duration_s=asset.media_type==='image'?Number(multipartField(body.multipart,'image_duration_s')||20):asset.duration_s;creative.approval_status='pending';delete creative.approved_at;result.creative={...creative};}
    }
   }
+  // Review workflow (doc 31 Phase 5): queue, submit, review and activate, mirroring lib/api.ts outcomes.
+  else if(path==='/review-queue'){
+   const pend=id=>{const c=creatives.find(x=>x.id===id);return !!c&&!['approved','rejected'].includes(c.approval_status);};
+   // Re-review needs prior review/activation evidence (lib/api.ts): never-submitted pending/draft stays with its owner.
+   const reviewedBefore=c=>['active','paused'].includes(c.status)||!!c.activated_at||c.review?.state==='approved_not_started';
+   result={items:campaigns.filter(c=>(['draft','pending'].includes(c.status)&&c.review?.state==='in_review')||(reviewedBefore(c)&&['active','pending','paused'].includes(c.status)&&(c.creative_ids||[]).some(pend))).map(c=>({reason:['draft','pending'].includes(c.status)&&c.review?.state==='in_review'?'submitted':'re_review',
+    campaign:{id:c.id,name:c.name,campaign_type:c.campaign_type,advertiser_id:c.advertiser_id,advertiser_name:advertisers.find(a=>a.id===c.advertiser_id)?.name,org_id:c.org_id,org_name:orgs.find(o=>o.id===c.org_id)?.name,starts_at:c.starts_at,ends_at:c.ends_at,screens:c.screen_ids.length,status:c.status,review:c.review||null},
+    creatives:c.creative_ids.filter(pend).map(id=>{const cr=creatives.find(x=>x.id===id),others=campaigns.filter(o=>o.id!==c.id&&o.creative_ids.includes(id));return {...cr,media_type:cr.media_type||'video',usage:{other_campaigns:others.length,other_active:others.filter(o=>o.status==='active').length}};}),decided:[]})),
+    filler:creatives.filter(c=>c.purpose==='filler'&&c.approval_status==='pending').map(c=>({...c,media_type:c.media_type||'image',org_name:orgs.find(o=>o.id===c.org_id)?.name}))};
+  }
+  else if(/^\/campaign\/[^/]+\/(submit|review|activate)$/.test(path)&&body){
+   const [,,id,action]=path.split('/'),c=campaigns.find(x=>x.id===id);
+   if(action==='review')for(const [cid,v] of Object.entries(body.creatives||{}))creatives.find(x=>x.id===cid).approval_status=v;
+   const states=c.creative_ids.map(cid=>creatives.find(x=>x.id===cid)?.approval_status);let activation={attempted:false,activated:c.status==='active',error:null};
+   if(action==='submit'){c.status='pending';c.review={state:'in_review',submitted_at:new Date().toISOString()};}
+   else if(['draft','pending'].includes(c.status)&&(action==='activate'||c.review?.state==='in_review')&&!states.some(v=>!['approved','rejected'].includes(v))&&states.includes('approved')){c.status='active';delete c.review;activation={attempted:true,activated:true,error:null};}
+   else if(action==='review'&&c.review?.state==='in_review'&&states.every(v=>v==='rejected'))c.review={...c.review,state:'changes_needed',note:body.note||null};
+   result={campaign:c,activation};
+  }
   else if(path==='/campaign'&&body){result={id:'campaign-'+campaigns.length,accrued_spend:0,invoice_status:'not_invoiced',...body};campaigns.push(result);}
   // Server drafts (doc 31 Phase 4): create, revisioned save, read, list, discard and submit.
   else if(path==='/campaign-drafts')result={items:drafts.filter(d=>!d.submitted_campaign_id&&(!url.searchParams.get('org')||d.org_id===url.searchParams.get('org')))};
@@ -56,7 +75,7 @@ async function harness(role='platform_admin') {
    if(!d){await route.fulfill({status:404,contentType:'application/json',body:JSON.stringify({error:'Not found'})});return;}
    if(!body)result=d;
    else if(action==='discard'){drafts.splice(drafts.indexOf(d),1);result={ok:true};}
-   else if(action==='submit'){const f=d.fields;const c={id:'campaign-'+campaigns.length,org_id:d.org_id,advertiser_id:d.advertiser_id,campaign_type:d.campaign_type,name:f.name,starts_at:f.starts_at,ends_at:f.ends_at,screen_ids:f.screen_ids,creative_ids:f.creative_ids,bookings:f.bookings,rate_type:f.rate_type,rate_value:f.rate_value,committed_budget:f.committed_budget,status:body.mode==='launch'?'active':'pending',accrued_spend:0,invoice_status:'not_invoiced'};campaigns.push(c);d.submitted_campaign_id=c.id;result={campaign:c,draft:d};}
+   else if(action==='submit'){const f=d.fields;const c={id:'campaign-'+campaigns.length,org_id:d.org_id,advertiser_id:d.advertiser_id,campaign_type:d.campaign_type,name:f.name,starts_at:f.starts_at,ends_at:f.ends_at,screen_ids:f.screen_ids,creative_ids:f.creative_ids,bookings:f.bookings,rate_type:f.rate_type,rate_value:f.rate_value,committed_budget:f.committed_budget,status:body.mode==='launch'?'active':'pending',review:body.mode==='launch'?undefined:{state:'in_review',submitted_at:new Date().toISOString()},accrued_spend:0,invoice_status:'not_invoiced'};campaigns.push(c);d.submitted_campaign_id=c.id;result={campaign:c,draft:d};}
    else{if(body.revision!==d.revision){await route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({error:'This draft changed in another tab. Reload it before saving again.'})});return;}
     const fields={...d.fields,...body.fields};for(const k of Object.keys(fields))if(fields[k]===null)delete fields[k];Object.assign(d,{step:body.step,advertiser_id:body.advertiser_id,campaign_type:body.campaign_type,fields,revision:d.revision+1,updated_at:new Date().toISOString()});result=d;}}
   else if(path==='/invite')result={user:{email:body.email},temp_password:'local-test-only'};
@@ -64,7 +83,7 @@ async function harness(role='platform_admin') {
   else if(path==='/config')result=[];
   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(result)});
  });
- await page.goto(base+(role==='sales'?'/operator#campaigns':'/admin?org=a#advertisers'));if(role!=='sales')await page.getByRole('button',{name:'Add advertiser',exact:true}).waitFor();
+ await page.goto(base+(role==='sales'?'/operator#campaigns':'/admin?org=a#advertisers'));if(role!=='sales')await page.getByRole('button',{name:'Add advertiser',exact:true}).waitFor();else await page.getByRole('heading',{name:'Campaigns',exact:true}).waitFor();
  const nav=async hash=>{await page.evaluate(h=>location.hash=h,hash);};
  const field=(label)=>page.locator('label').filter({hasText:new RegExp('^'+label+'$')}).locator('..').locator('input,select').first();
  const step=async name=>{await page.getByRole('navigation',{name:'Campaign steps'}).getByRole('button',{name:new RegExp('^'+name)}).click();};
@@ -76,7 +95,10 @@ test('master admin creates client, uploads and approves creative, books campaign
   await page.getByRole('button',{name:'Add advertiser',exact:true}).click();await page.getByLabel('Advertiser name',{exact:true}).fill('Alpha Client');await page.getByLabel('Advertiser email',{exact:true}).fill('fixture@example.invalid');await page.getByRole('button',{name:'Save advertiser'}).click();await page.getByRole('heading',{name:'Alpha Client',exact:true}).waitFor();
   assert.equal(requests.find(r=>r.path==='/advertiser').body.org_id,'a');await page.screenshot({path:'/tmp/gridcast-admin-advertiser.png',fullPage:true});
   await nav('creatives');await field('Name').fill('Alpha Video');await page.getByLabel('Creative advertiser').selectOption('adv-1');await page.getByRole('button',{name:'Add creative',exact:true}).click();await page.getByRole('button',{name:'Upload video',exact:true}).click();await page.getByLabel('MP4 or WebM video').setInputFiles({name:'fixture.mp4',mimeType:'video/mp4',buffer:Buffer.from('synthetic mocked upload')});await page.getByRole('button',{name:'Upload media',exact:true}).click();await page.getByRole('status').waitFor();assert.match(requests.find(r=>r.path==='/assets/upload').body.multipart,/cr-0/);await page.screenshot({path:'/tmp/gridcast-admin-creative.png',fullPage:true});
-  assert.equal(requests.find(r=>r.path==='/creative').body.org_id,'a');await page.getByRole('button',{name:'Approve',exact:true}).click();
+  assert.equal(requests.find(r=>r.path==='/creative').body.org_id,'a');
+  // Doc 31 Phase 5: the Creatives table no longer approves; review happens in the Review queue. Approve in the fixture.
+  assert.equal(await page.getByRole('button',{name:'Approve',exact:true}).count(),0);
+  h.creatives.find(c=>c.id==='cr-0').approval_status='approved';await page.reload();await page.getByRole('button',{name:'Add creative',exact:true}).waitFor();
   await nav('new');await field('Campaign name').fill('Alpha Campaign');await page.getByLabel('Campaign advertiser').selectOption('adv-1');await page.getByLabel('Starts',{exact:true}).fill('2026-10-01');await page.getByLabel('Ends',{exact:true}).fill('2026-10-31');
   await page.getByRole('button',{name:'Next',exact:true}).click();await page.getByLabel('Use screen Alpha screen').check();
   await page.getByRole('button',{name:'Next',exact:true}).click();await page.getByLabel('Use creative Alpha Video').check();
@@ -112,6 +134,14 @@ test('sales operator can read campaign list without redacted invoice data',async
   await h.page.goto(base+'/operator#campaigns');await h.page.getByRole('button',{name:'Sales campaign',exact:true}).waitFor();assert.equal(await h.page.getByRole('columnheader',{name:'Invoice',exact:true}).count(),0);
   assert.equal(await h.page.getByRole('columnheader',{name:'People / play',exact:true}).count(),0);
   await h.page.getByRole('button',{name:'Campaign status: Draft',exact:true}).waitFor();
+  // Phase 6 Delivery preset; the fixture /metrics answer is incomplete, so every period cell is "—", never 0.
+  for(const name of ['Status','Dates','Screens','Plays','Legacy avg people','Est. impressions','Lifetime spend / budget'])await h.page.getByRole('columnheader',{name,exact:true}).waitFor();
+  const presets=h.page.getByRole('group',{name:'Column preset',exact:true});
+  assert.deepEqual(await presets.getByRole('button').allInnerTexts(),['Delivery','Audience']);
+  const row=h.page.getByRole('row').filter({hasText:'Sales campaign'});
+  assert.ok((await row.innerText()).split('—').length>=4,'plays, people and impressions are unmeasured');
+  await presets.getByRole('button',{name:'Audience',exact:true}).click();
+  for(const name of ['Avg looking','Attentive impressions','Attention coverage'])await h.page.getByRole('columnheader',{name,exact:true}).waitFor();
  }finally{await h.browser.close();}
 });
 
@@ -305,7 +335,12 @@ test('operator network campaign is readonly with scoped money and exact verified
   await h.page.route('**/api/campaign/network',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({campaign,byScreen:[{screen:h.screen,plays:1,avg:null}],byCreative:[],totals:{plays:1,measured:0,avg:null},plays:[],settlement_buckets:[bucket]})}));
   await h.page.addInitScript(()=>localStorage.setItem('gc_user',JSON.stringify({id:'owner',org_id:'a',role:'owner',name:'Owner',orgName:'Operator Alpha'})));
   await h.page.goto(base+'/operator#campaigns');await h.page.getByRole('button',{name:campaign.name,exact:true}).waitFor();
-  assert.equal(await h.page.getByRole('button',{name:'live',exact:true}).count(),0);assert.equal(await h.page.getByText('Managed by Gridcast',{exact:true}).count(),1);
+  assert.equal(await h.page.getByRole('button',{name:'live',exact:true}).count(),0);
+  // Phase 6: invoice and settlement live in the Money preset (money capability only); the default preset is Delivery.
+  assert.equal(await h.page.getByText('Managed by Gridcast',{exact:true}).count(),0);
+  await h.page.getByRole('group',{name:'Column preset',exact:true}).getByRole('button',{name:'Money',exact:true}).click();
+  assert.equal(await h.page.getByText('Managed by Gridcast',{exact:true}).count(),1);
+  await h.page.getByRole('columnheader',{name:'Lifetime verified settlement',exact:true}).waitFor();await h.page.getByRole('tabpanel').getByRole('cell').filter({hasText:/^₹0\.93/}).waitFor();
   await h.page.getByRole('button',{name:campaign.name,exact:true}).click();await h.page.getByRole('heading',{name:campaign.name,exact:true}).waitFor();
   assert.equal(await h.page.getByRole('button',{name:'Edit',exact:true}).count(),0);assert.equal(await h.page.getByRole('button',{name:'Pause',exact:true}).count(),0);
   // Phase 2: settlement moved into the Money tab; the spend card labels the redacted budget.
@@ -500,6 +535,150 @@ test('guided flow saves a Basics-only server draft, resumes at its step, keeps i
   assert.equal(await h.page.getByRole('button',{name:'Resume draft Draft only',exact:true}).count(),0);
   await h.page.getByRole('button',{name:'Discard draft Keep or toss',exact:true}).click();await h.page.getByRole('button',{name:'Discard',exact:true}).click();
   await h.page.getByRole('button',{name:'Resume draft Keep or toss',exact:true}).waitFor({state:'detached'});
+  assert.deepEqual(errors,[]);
+ }finally{await h.browser.close();}
+});
+
+test('review queue approves a submitted campaign in one action with reuse counts; changed creatives are labelled; filler keeps creative approval',async()=>{
+ const h=await harness();try{
+  const advertiser={id:'rq-adv',org_id:'a',name:'Queue client',status:'active'};h.advertisers.push(advertiser);
+  h.creatives.push({id:'rq-cr',org_id:'a',advertiser_id:advertiser.id,purpose:'paid',name:'Queue spot',category:'general',youtube_id:'dQw4w9WgXcQ',duration_s:15,approval_status:'pending'});
+  h.creatives.push({id:'rq-fill',org_id:'a',purpose:'filler',name:'House filler',category:'house',media_type:'image',approval_status:'pending'});
+  const base={org_id:'a',advertiser_id:advertiser.id,campaign_type:'operator',screen_ids:['screen-a'],creative_ids:['rq-cr'],rate_type:'per_play',rate_value:1,committed_budget:100,accrued_spend:0,starts_at:'2026-01-01',ends_at:'2027-12-31'};
+  h.campaigns.push({...base,id:'rq-sub',name:'Submitted campaign',status:'pending',review:{state:'in_review',submitted_at:'2026-10-01T05:00:00.000Z'}});
+  h.campaigns.push({...base,id:'rq-live',name:'Live campaign',status:'active'});
+  h.campaigns.push({...base,id:'rq-new',name:'Never submitted campaign',status:'pending'});
+  await h.nav('approvals');await h.page.getByRole('heading',{name:'Review queue',exact:true}).waitFor();
+  const card=h.page.getByRole('group',{name:'Review Submitted campaign',exact:true});await card.waitFor();
+  await card.getByText('Also used in 2 other campaigns (1 active). Approval applies there too.',{exact:true}).waitFor();
+  assert.equal(await h.page.getByRole('group',{name:'Review Never submitted campaign',exact:true}).count(),0,'never-submitted pending is not shown as a changed creative');
+  const liveCard=h.page.getByRole('group',{name:'Review Live campaign',exact:true});await liveCard.getByText('Changed creative',{exact:true}).waitFor();
+  await liveCard.getByRole('button',{name:'Approve creative',exact:true}).waitFor();await liveCard.getByText(/Decisions apply to the creatives only; the campaign stays active/).waitFor();
+  assert.equal(await card.getByRole('button',{name:'Reject',exact:true}).isDisabled(),true,'reject needs a note');
+  await card.getByRole('button',{name:'Approve campaign',exact:true}).click();
+  await h.page.getByRole('status').filter({hasText:'Submitted campaign: approved and now active.'}).waitFor();
+  assert.deepEqual(h.requests.find(r=>r.path==='/campaign/rq-sub/review').body,{creatives:{'rq-cr':'approved'}});
+  assert.equal(h.campaigns.find(c=>c.id==='rq-sub').status,'active');
+  assert.equal(h.requests.filter(r=>/\/creative\/[^/]+\/approve$/.test(r.path)).length,0,'campaign review is one call, not a loop over creatives');
+  await h.page.getByText('No campaigns are waiting for review.',{exact:true}).waitFor();
+  await h.page.getByRole('tab',{name:'Filler (1)',exact:true}).click();await h.page.getByRole('button',{name:'Approve filler House filler',exact:true}).click();
+  await h.page.getByRole('status').filter({hasText:'House filler: approved.'}).waitFor();assert.deepEqual(h.requests.find(r=>r.path==='/creative/rq-fill/approve').body,{status:'approved'});
+  await h.nav('creatives');await h.page.getByRole('button',{name:'Edit creative Queue spot',exact:true}).waitFor();
+  assert.equal(await h.page.getByRole('button',{name:'Approve',exact:true}).count(),0);assert.equal(await h.page.getByRole('button',{name:'Reject',exact:true}).count(),0);
+ }finally{await h.browser.close();}
+});
+
+test('campaign header actions follow review state: Submit, In review, Resubmit, Activate with the error, Launch; list Resume never activates pending',async()=>{
+ const h=await harness();try{
+  const advertiser={id:'hd-adv',org_id:'a',name:'Header client',status:'active'};h.advertisers.push(advertiser);
+  const creative={id:'hd-cr',org_id:'a',advertiser_id:advertiser.id,purpose:'paid',name:'Header spot',category:'general',youtube_id:'dQw4w9WgXcQ',duration_s:15,approval_status:'pending'};h.creatives.push(creative);
+  const campaign={id:'hd',org_id:'a',advertiser_id:advertiser.id,name:'Header campaign',campaign_type:'operator',screen_ids:['screen-a'],creative_ids:['hd-cr'],rate_type:'per_play',rate_value:1,committed_budget:100,accrued_spend:0,status:'pending',starts_at:'2026-01-01',ends_at:'2027-12-31'};h.campaigns.push(campaign);
+  await h.page.route('**/api/campaign/hd',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({campaign,advertiser,byScreen:[{screen:h.screen,plays:0,avg:null}],byCreative:[{creative,plays:0,avg:null}],totals:{plays:0,measured:0,avg:null},plays:[],settlement_buckets:[],eligibility:[]})}));
+  const open=async()=>{await h.page.reload();await h.nav('campaigns');await h.page.getByRole('heading',{name:'Campaigns',exact:true}).waitFor();await h.nav('c/hd');await h.page.getByRole('heading',{name:campaign.name,exact:true}).waitFor();};
+  await open();
+  await h.page.getByRole('button',{name:'Submit for review',exact:true}).click();
+  await h.page.getByRole('button',{name:'In review',exact:true}).waitFor();assert.equal(await h.page.getByRole('button',{name:'In review',exact:true}).isDisabled(),true);
+  await h.page.getByText(/Submitted for review.*the campaign starts when they are approved/).waitFor();
+  assert.equal(h.requests.filter(r=>r.path==='/campaign/hd'&&r.body).length,0,'no generic status edit');
+  creative.approval_status='rejected';campaign.review={state:'changes_needed',note:'Logo unreadable'};await open();
+  await h.page.getByRole('button',{name:'Resubmit',exact:true}).waitFor();await h.page.getByRole('button',{name:'Edit',exact:true}).waitFor();await h.page.getByText(/Logo unreadable/).first().waitFor();
+  creative.approval_status='approved';campaign.review={state:'approved_not_started',activation_error:'The campaign end date has passed. Change the dates, then activate again.'};await open();
+  await h.page.getByText(/Approved, cannot start/).first().waitFor();
+  await h.page.getByRole('button',{name:'Activate',exact:true}).click();await h.page.getByRole('button',{name:'Pause',exact:true}).waitFor();
+  assert.ok(h.requests.some(r=>r.path==='/campaign/hd/activate'));
+  campaign.status='pending';delete campaign.review;await open();
+  await h.page.getByRole('button',{name:'Launch',exact:true}).waitFor();assert.equal(await h.page.getByRole('button',{name:'Submit for review',exact:true}).count(),0);
+  // Campaign list: no 'active' choice for a pending campaign; bulk Resume refuses non-paused rows.
+  await h.nav('campaigns');await h.page.getByRole('button',{name:campaign.name,exact:true}).waitFor();
+  assert.equal(h.requests.filter(r=>r.path==='/campaign/hd'&&r.body?.status==='active').length,0);
+ }finally{await h.browser.close();}
+});
+
+test('advertiser portal: campaigns home summary, read-only campaign dashboard, screens with period bar only, one full report',async()=>{
+ const h=await harness(),errors=[];h.page.on('pageerror',e=>errors.push(e.message));try{
+  const now=Date.now(),today=new Date(now+330*60000).toISOString().slice(0,10),end=new Date(now+8*86400000+330*60000).toISOString().slice(0,10);
+  const advertiser={id:'portal-adv',org_id:'a',name:'Portal client',status:'active'};
+  const creative={id:'portal-cr',org_id:'a',advertiser_id:'portal-adv',name:'Portal creative',duration_s:10,approval_status:'approved'};
+  const campaign={id:'portal',org_id:'a',advertiser_id:'portal-adv',name:'Portal campaign',campaign_type:'operator',screen_ids:['screen-a'],creative_ids:['portal-cr'],bookings:[{screen_id:'screen-a',rotation_weight:1,rate_type:'per_play',rate_value:1}],rate_type:'per_play',rate_value:1,committed_budget:1000,accrued_spend:120,status:'active',starts_at:today,ends_at:end};
+  await h.page.route('**/api/bootstrap**',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({...h.boot('a'),caps:[],advertisers:[advertiser],creatives:[creative],campaigns:[campaign]})}));
+  // GET /campaign/:id for an advertiser carries no eligibility decisions (lib/api.ts); the dashboard must not invent them.
+  await h.page.route('**/api/campaign/portal',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({campaign,advertiser,org:{id:'a',name:'Operator Alpha'},byScreen:[{screen:h.screen}],byCreative:[{creative}],plays:[],settlement_buckets:[],eligibility:null})}));
+  const counters={plays_rendered:42,plays_billable:40,plays_not_rendered:1,plays_filler:0,presence_sum:10,presence_n:4,airtime_ms:420000};
+  await h.page.route('**/api/metrics**',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({totals:counters,byScreen:{'screen-a':counters},byCampaign:{portal:counters},byCreative:{'portal-cr':counters},daily:{[today]:counters},hourly:{},attentionProfiles:{},attention_page:{has_more:false,next_cursor:null},coverage:{started_at:'2026-01-01T00:00:00Z',complete:true},last_at:null,rows:1,has_more:false,next_cursor:null,campaignScreens:{}})}));
+  await h.page.addInitScript(()=>localStorage.setItem('gc_user',JSON.stringify({id:'advertiser-user',org_id:'a',role:'advertiser_viewer',name:'Portal client',orgName:'Portal client',advertiser_id:'portal-adv'})));
+  await h.page.goto(base+'/advertiser#overview');
+  const summary=h.page.getByRole('region',{name:'Delivery summary',exact:true});await summary.getByRole('group',{name:'Paid plays',exact:true}).getByText('42',{exact:true}).waitFor();
+  assert.equal(await h.page.getByRole('region',{name:'Delivery report',exact:true}).count(),0,'no full report on the campaigns home');
+  await h.page.getByRole('columnheader',{name:'Lifetime spend / budget',exact:true}).waitFor();
+  const row=h.page.getByRole('row').filter({hasText:'Portal campaign'});await row.getByText('42',{exact:true}).waitFor();await row.getByText('2.5',{exact:true}).waitFor();
+  await h.page.getByRole('button',{name:'Portal campaign',exact:true}).click();await h.page.getByRole('heading',{name:'Portal campaign',exact:true}).waitFor();
+  assert.deepEqual(await h.page.getByRole('tab').allInnerTexts(),['Screens','Creatives','Audience'],'no Money or Diagnostics');
+  for(const name of ['Edit','Pause','Resume','Submit for review','Launch'])assert.equal(await h.page.getByRole('button',{name,exact:true}).count(),0,name);
+  assert.equal(await h.page.getByRole('columnheader',{name:'Eligibility',exact:true}).count(),0);
+  await h.page.getByRole('region',{name:'Campaign headline',exact:true}).getByRole('group',{name:'Plays',exact:true}).getByText('42',{exact:true}).waitFor();
+  await h.page.getByRole('button',{name:'← Delivery',exact:true}).click();await h.page.waitForFunction(()=>location.hash==='#overview');
+  await h.nav('screens');await h.page.getByRole('heading',{name:'Where it ran',exact:true}).waitFor();
+  await h.page.getByLabel('Reporting period · IST').waitFor();assert.equal(await h.page.getByRole('region',{name:'Delivery report',exact:true}).count(),0,'period bar only');
+  await h.page.getByRole('row').filter({hasText:'Alpha screen'}).getByText('42',{exact:true}).waitFor();
+  await h.nav('reports');assert.equal(await h.page.getByRole('region',{name:'Delivery report',exact:true}).count(),1);
+  assert.deepEqual(errors,[]);
+ }finally{await h.browser.close();}
+});
+
+test('campaign table selection: Show all clears the checked campaign rows and creatives, so a new pick filters only that campaign',async()=>{
+ const h=await harness();try{
+  const advertiser={id:'sel-adv',org_id:'a',name:'Selection client',status:'active'};h.advertisers.push(advertiser);
+  for(const k of ['A','B'])h.creatives.push({id:'sel-cr-'+k,org_id:'a',advertiser_id:advertiser.id,purpose:'paid',name:'Spot '+k,category:'general',youtube_id:'dQw4w9WgXcQ',duration_s:15,approval_status:'approved'});
+  const base={org_id:'a',advertiser_id:advertiser.id,campaign_type:'operator',screen_ids:['screen-a'],rate_type:'per_play',rate_value:1,committed_budget:100,accrued_spend:0,status:'active',starts_at:'2026-01-01',ends_at:'2027-12-31',invoice_status:'not_invoiced'};
+  h.campaigns.push({...base,id:'sel-a',name:'Campaign A',creative_ids:['sel-cr-A']},{...base,id:'sel-b',name:'Campaign B',creative_ids:['sel-cr-B']});
+  await h.page.reload();
+  await h.nav('campaigns');await h.page.getByRole('heading',{name:'Campaigns',exact:true}).waitFor();
+  const panel=()=>h.page.getByRole('tabpanel');
+  const box=name=>panel().getByRole('row').filter({hasText:name}).getByRole('checkbox',{name:'Select row'});
+  const tab=name=>h.page.getByRole('tab',{name:new RegExp('^'+name)});
+  await box('Campaign A').check();assert.equal(await tab('Campaigns').innerText(),'Campaigns · 1');
+  await tab('Creatives').click();await panel().getByText('Spot A',{exact:true}).waitFor();assert.equal(await panel().getByText('Spot B',{exact:true}).count(),0);
+  await box('Spot A').check();assert.equal(await tab('Creatives').innerText(),'Creatives · 1');
+  await panel().getByRole('button',{name:'Show all',exact:true}).click();
+  await panel().getByText('Spot B',{exact:true}).waitFor();
+  assert.equal(await box('Spot A').isChecked(),true,'creative selection is independent of the campaign filter');
+  await tab('Campaigns').click();
+  assert.equal(await box('Campaign A').isChecked(),false,'Show all cleared the original campaign checkbox');
+  assert.equal(await tab('Campaigns').innerText(),'Campaigns');
+  await box('Campaign B').check();
+  assert.equal(await box('Campaign A').isChecked(),false,'selecting B does not reintroduce A');
+  await tab('Creatives').click();await panel().getByText('Spot B',{exact:true}).waitFor();
+  assert.equal(await panel().getByText('Spot A',{exact:true}).count(),0,'the filter is B only');
+  assert.equal(await tab('Creatives').innerText(),'Creatives','the creative pick outside B was dropped with its row');
+  // Creative Show all clears the creative checkboxes too.
+  await box('Spot B').check();await tab('Bookings').click();
+  await panel().getByRole('button',{name:'Show all',exact:true}).last().click();
+  await tab('Creatives').click();assert.equal(await box('Spot B').isChecked(),false,'creative Show all cleared the creative checkbox');
+ }finally{await h.browser.close();}
+});
+
+test('advertiser overview: one measurement-profile picker drives both the summary and the campaigns table, never a sum',async()=>{
+ const h=await harness(),errors=[];h.page.on('pageerror',e=>errors.push(e.message));try{
+  const now=Date.now(),today=new Date(now+330*60000).toISOString().slice(0,10),end=new Date(now+8*86400000+330*60000).toISOString().slice(0,10);
+  const advertiser={id:'portal-adv',org_id:'a',name:'Portal client',status:'active'};
+  const creative={id:'portal-cr',org_id:'a',advertiser_id:'portal-adv',name:'Portal creative',duration_s:10,approval_status:'approved'};
+  const campaign={id:'portal',org_id:'a',advertiser_id:'portal-adv',name:'Portal campaign',campaign_type:'operator',screen_ids:['screen-a'],creative_ids:['portal-cr'],rate_type:'per_play',rate_value:1,committed_budget:1000,accrued_spend:120,status:'active',starts_at:today,ends_at:end};
+  await h.page.route('**/api/bootstrap**',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({...h.boot('a'),caps:[],advertisers:[advertiser],creatives:[creative],campaigns:[campaign]})}));
+  const counters={plays_rendered:42,plays_billable:40,plays_not_rendered:1,plays_filler:0,presence_sum:10,presence_n:4,airtime_ms:420000};
+  const att=n=>({plays:10,playing_ms:100000,body_observed_ms:80000,body_unknown_ms:20000,face_observed_ms:70000,face_unknown_ms:30000,attention_observed_ms:50000,attention_unknown_ms:50000,expression_observed_ms:40000,expression_unknown_ms:60000,presence_person_ms:30000,looking_person_ms:20000,longest_look_ms:15000,face_assessable_person_ms:25000,smile_person_ms:10000,expression_assessable_person_ms:15000,estimated_impressions:n,attentive_impressions:n,tracked_visits:n});
+  const series=(profile,n)=>({profile,manifest_sha256:'m',pipeline_sha256:'p',calibration_revision:'c',asset_id:'asset',asset_sha256:'sha',config_version:1,totals:att(n),byScreen:{'screen-a':att(n)},byCampaign:{portal:att(n)},byCreative:{'portal-cr':att(n)},daily:{[today]:att(n)},hourly:{},dayHours:{}});
+  await h.page.route('**/api/metrics**',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({totals:counters,byScreen:{'screen-a':counters},byCampaign:{portal:counters},byCreative:{'portal-cr':counters},daily:{[today]:counters},hourly:{},attentionProfiles:{a:series('attention-v1/a',300),b:series('presence-v2/b',700)},attention_page:{has_more:false,next_cursor:null},coverage:{started_at:'2026-01-01T00:00:00Z',complete:true},last_at:null,rows:1,has_more:false,next_cursor:null,campaignScreens:{}})}));
+  await h.page.addInitScript(()=>localStorage.setItem('gc_user',JSON.stringify({id:'advertiser-user',org_id:'a',role:'advertiser_viewer',name:'Portal client',orgName:'Portal client',advertiser_id:'portal-adv'})));
+  await h.page.goto(base+'/advertiser#overview');
+  const summary=h.page.getByRole('region',{name:'Delivery summary',exact:true}),impressions=summary.getByRole('group',{name:'Est. impressions',exact:true});
+  const row=h.page.getByRole('row').filter({hasText:'Portal campaign'});
+  await impressions.getByText('300',{exact:true}).waitFor();await row.getByText('300',{exact:true}).waitFor();
+  const pickers=h.page.getByRole('combobox',{name:/measurement profile/i});
+  assert.equal(await pickers.count(),1,'one picker for summary and table');
+  await pickers.selectOption('b');
+  await impressions.getByText('700',{exact:true}).waitFor();await row.getByText('700',{exact:true}).waitFor();
+  assert.equal(await row.getByText('300',{exact:true}).count(),0,'the table follows the same profile');
+  assert.equal(await h.page.getByText('1,000',{exact:true}).count(),0,'profiles are never summed');
   assert.deepEqual(errors,[]);
  }finally{await h.browser.close();}
 });

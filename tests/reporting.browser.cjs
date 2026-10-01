@@ -22,7 +22,7 @@ async function fixture(role='platform_admin',withCoverage=true){
   }
   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(result)});
  });
- await page.goto(base+(role==='advertiser_viewer'?'/advertiser':'/admin'));
+ await page.goto(base+(role==='advertiser_viewer'?'/advertiser#reports':'/admin#analytics'));
  const report=page.getByRole('region',{name:'Delivery report',exact:true});await report.getByRole('button',{name:'Export CSV',exact:true}).waitFor();
  await page.waitForFunction(()=>!document.querySelector('[aria-label="Delivery report"]').getAttribute('aria-busy')||document.querySelector('[aria-label="Delivery report"]').getAttribute('aria-busy')==='false');
  return{browser,page,report,date,errors,calls};

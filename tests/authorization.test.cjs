@@ -78,6 +78,25 @@ test('advertiser sees only their campaigns and related evidence, without account
  expectStatus(await f.call('POST','settings',{},t),403);
 });
 
+test('advertiser campaign read is read-only evidence without eligibility diagnostics, review internals or billing fields',async()=>{
+ const f=fixture();
+ f.change(db=>{db.campaigns.find(c=>c.id==='cmp_1').review={state:'approved_not_started',submitted_at:'2026-09-01T00:00:00.000Z',submitted_by:'u_op1',decided_at:'2026-09-02T00:00:00.000Z',decided_by:'u_admin',note:'internal reviewer note',activation_error:'screen capacity exceeded on scr_x',attempted_by:'u_admin'};});
+ const adv=expectStatus(await f.call('GET','campaign/cmp_1',{},f.token('u_adv1')),200);
+ assert.equal(adv.campaign.id,'cmp_1');
+ // Phase 1 eligibility decisions are server diagnostics; advertisers get none.
+ assert.equal(adv.eligibility,null);
+ assert.deepEqual(adv.campaign.review,{state:'approved_not_started',submitted_at:'2026-09-01T00:00:00.000Z',decided_at:'2026-09-02T00:00:00.000Z'});
+ for(const k of ['invoice_status','platform_fee_pct','fee_basis','password_hash','payload_hash','storage_path']) assert.ok(!hasKey(adv,k),k);
+ assert.ok(adv.campaign.bookings.every(b=>Object.keys(b).every(k=>['screen_id','slots_per_loop','rotation_weight','rate_type','rate_value','rate_version','booked_at'].includes(k))));
+ assert.ok(adv.plays.every(p=>p.campaign_id==='cmp_1'));
+ // The operator who owns the campaign still sees eligibility and the full review record.
+ const op=expectStatus(await f.call('GET','campaign/cmp_1',{},f.token('u_op1')),200);
+ assert.ok(Array.isArray(op.eligibility));
+ assert.equal(op.campaign.review.activation_error,'screen capacity exceeded on scr_x');
+ expectStatus(await f.call('GET','campaign/cmp_2',{},f.token('u_adv1')),404);
+ assert.equal(f.writes(),0);
+});
+
 test('manager cannot take over owners, assign owner roles, change fees or payouts',async()=>{
  const f=fixture(), t=f.token('u_op3');
  for(const [p,b] of [['invite',{role:'owner',email:'x@example.invalid'}],['user/u_op4/role',{role:'owner'}],

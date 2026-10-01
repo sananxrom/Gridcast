@@ -293,3 +293,39 @@ test('dashboard daily series keep missing days as gaps and use one profile', () 
   assert.deepEqual(m.dailyPeopleRows(legacy, period, profile).map(r => r.value), [null, 6000 / 16000, null]);
   assert.deepEqual(m.dailyImpressionRows(legacy, period, profile).map(r => r.value), [null, 2, null]);
 });
+
+// Phase 6: campaign table rows come from the org-wide /metrics report and must equal the campaign-filtered report.
+test('table rows for a range equal /metrics?campaign for the same campaign, range and profile; unmeasured is "—"', () => {
+  const { m } = metrics(), { summarizeReport } = require('./load-lib.cjs')('reporting');
+  const range = { from: '2026-01-01', to: '2026-01-02' }, covered = { started_at: '2025-12-01T00:00:00Z' };
+  const day = (campaign, screen, date, counters) => ({ id: `${date}__${campaign}${screen}`, date, campaign_id: campaign, screen_id: screen, creative_id: campaign + '-cr', hours: {}, ...zero(), ...counters });
+  const att = (profile, campaign, screen, date, n) => ({ id: `${date}__a${profile}${campaign}${screen}`, date, profile, manifest_sha256: profile + '-m', pipeline_sha256: profile + '-p', campaign_id: campaign, screen_id: screen, creative_id: campaign + '-cr', totals: attentionCounters(n), hours: {} });
+  const rows = [day('c1', 's1', '2026-01-01', { plays_rendered: 30, presence_n: 3, presence_sum: 6 }), day('c1', 's2', '2026-01-02', { plays_rendered: 12 }), day('c2', 's1', '2026-01-01', { plays_rendered: 99, presence_n: 9, presence_sum: 9 })];
+  const attention = [att('v1', 'c1', 's1', '2026-01-01', 3), att('v1', 'c1', 's2', '2026-01-02', 2), att('v2', 'c1', 's1', '2026-01-01', 11), att('v1', 'c2', 's1', '2026-01-01', 50)];
+  const org = summarizeReport(rows, range, covered, attention);
+  const only = summarizeReport(rows.filter(r => r.campaign_id === 'c1'), range, covered, attention.filter(r => r.campaign_id === 'c1'));
+  for (const key of Object.keys(org.attentionProfiles)) {
+    const row = m.periodRowCells(org, 'byCampaign', 'c1', m.selectAttention(org, key).profile), profile = m.selectAttention(only, key).profile;
+    assert.equal(row.plays.value, m.paidDeliveredCard(only).value);
+    assert.equal(row.people.value, m.presenceCard(only, profile).value, key);
+    assert.equal(row.looking.value, m.lookingCard(only, profile).value, key);
+    assert.equal(row.impressions.value, m.estimatedImpressionsCard(only, profile).value, key);
+    assert.equal(row.attentive.value, m.attentiveImpressionsCard(only, profile).value, key);
+  }
+  const keys = Object.keys(org.attentionProfiles).sort(), v1 = keys.find(k => org.attentionProfiles[k].profile === 'v1'), v2 = keys.find(k => org.attentionProfiles[k].profile === 'v2');
+  assert.equal(m.periodRowCells(org, 'byCampaign', 'c1', org.attentionProfiles[v1]).impressions.value, '5', 'v1 only');
+  assert.equal(m.periodRowCells(org, 'byCampaign', 'c1', org.attentionProfiles[v2]).impressions.value, '11', 'v2 only, never 5 + 11');
+  // Legacy people without a profile; c2 has no v2 rows, so its v2 cells are unmeasured, not 0.
+  assert.equal(m.periodRowCells(org, 'byCampaign', 'c1').people.value, m.presenceCard(only).value);
+  assert.deepEqual(m.periodRowCells(org, 'byCampaign', 'c2', org.attentionProfiles[v2]), { plays: { value: '99' }, people: { value: '—' }, looking: { value: '—' }, impressions: { value: '—' }, attentive: { value: '—' }, coverage: { value: '—' } });
+  assert.equal(m.periodRowCells(org, 'byCampaign', 'c1').impressions.value, '—', 'no profile selected: no impressions');
+  // Coverage: missing campaign is 0 only after complete coverage; partial is unknown; no collection is all "—".
+  assert.deepEqual(m.periodRowCells(org, 'byCampaign', 'none').plays, { value: '0' });
+  const partial = summarizeReport(rows, range, { started_at: '2026-01-01T12:00:00Z' }, attention);
+  assert.deepEqual(m.periodRowCells(partial, 'byCampaign', 'none').plays, { value: '—', cue: 'unknown · partial' });
+  assert.deepEqual(m.periodRowCells(partial, 'byCampaign', 'c1').plays, { value: '42', cue: 'recorded · partial' });
+  const none = summarizeReport([], range, null, []);
+  assert.ok(Object.values(m.periodRowCells(none, 'byCampaign', 'c1', undefined)).every(cell => cell.value === '—'));
+  assert.equal(m.periodRowCells(org, 'byCampaign', 'c1', org.attentionProfiles[v1]).coverage.value, '50%');
+  assert.equal(m.profileLabel(undefined), 'No measurement profile');
+});

@@ -129,3 +129,32 @@ export function spendCard(campaign: { accrued_spend?: number | null; committed_b
     pct, bar: known && budget !== null, hot: pct >= 80, cues,
   };
 }
+
+/** Display name of one measurement profile, as the report's profile selector shows it. */
+export const profileLabel = (profile?: AttentionProfile) => !profile ? 'No measurement profile' : profile.profile?.startsWith('presence-v2/') ? 'Combined body + face · V2' : 'Attention V1 · ' + profile.profile;
+
+// Table rows (doc 31 Phase 6): the campaign table and the advertiser tables read one row of one dimension from the same
+// merged /metrics data as the report, with the one selected profile. Unmeasured is "—", never 0. Plays keep the
+// breakdown rule: recorded rows as-is, "0" only after complete period coverage. People and looking use the headline
+// cards' precision, so a row equals the card of /metrics?campaign=<id> for the same range and profile.
+export type MetricCell = { value: string; cue?: string };
+export type PeriodRowCells = { plays: MetricCell; people: MetricCell; looking: MetricCell; impressions: MetricCell; attentive: MetricCell; coverage: MetricCell };
+export type RowDimension = 'byScreen' | 'byCampaign' | 'byCreative';
+const UNMEASURED: MetricCell = { value: '—' };
+export function periodRowCells(data: DeliveryData, dimension: RowDimension, id: string, selected?: AttentionProfile): PeriodRowCells {
+  const counters = data[dimension][id], row = selected?.[dimension]?.[id];
+  const plays = periodBreakdownPlays(data, counters);
+  if (!data.coverage.started_at) return { plays, people: UNMEASURED, looking: UNMEASURED, impressions: UNMEASURED, attentive: UNMEASURED, coverage: UNMEASURED };
+  const legacy = counters ? average(counters) : null, assessable = row ? row.attention_observed_ms + row.attention_unknown_ms : 0;
+  return {
+    plays,
+    // A selected profile never falls back to legacy presence (same rule as `rowPeople`).
+    people: selected ? (row?.body_observed_ms ? { value: attentionPeopleRate(row.presence_person_ms, row.body_observed_ms)!.toFixed(1) } : UNMEASURED)
+      : legacy === null ? UNMEASURED : { value: legacy.toFixed(1) },
+    looking: row?.attention_observed_ms ? { value: attentionPeopleRate(row.looking_person_ms, row.attention_observed_ms)!.toFixed(1) } : UNMEASURED,
+    impressions: row?.body_observed_ms ? { value: number(row.estimated_impressions) } : UNMEASURED,
+    attentive: row?.attention_observed_ms ? { value: number(row.attentive_impressions) } : UNMEASURED,
+    // Attention coverage: assessable share of observed-or-unknown time, as the report's coverage-by-hour chart.
+    coverage: row && assessable > 0 ? { value: `${Math.round(100 * row.attention_observed_ms / assessable)}%`, cue: `${(row.attention_observed_ms / 60000).toFixed(1)} assessable min` } : UNMEASURED,
+  };
+}

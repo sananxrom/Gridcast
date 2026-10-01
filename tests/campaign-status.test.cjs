@@ -207,3 +207,27 @@ test('regression: future evidence beyond the clock tolerance is ignored on recei
   assert.equal(status({ receipts: [receipt('s1', -1)] }).state, 'live');
   assert.equal(status({ reportLoaded: true, reportScreens: { s1: iso(now + 60_000) } }).state, 'live');
 });
+
+test('review states (doc 31 Phase 5): in review, changes needed with the reviewer note, approved but cannot start', () => {
+  const inReview = status({ campaign: { status: 'pending', review: { state: 'in_review' } } });
+  assert.equal(inReview.state, 'in_review'); assert.equal(inReview.label, 'In review');
+  const changes = status({ campaign: { status: 'pending', review: { state: 'changes_needed', note: 'Logo unreadable' } } });
+  assert.equal(changes.state, 'changes_needed'); assert.equal(changes.label, 'Changes needed'); assert.equal(changes.reason, 'Logo unreadable');
+  const blocked = status({ campaign: { status: 'pending', review: { state: 'approved_not_started', activation_error: 'Advertiser capacity exceeded for Cafe.' } } });
+  assert.equal(blocked.state, 'not_delivering'); assert.equal(blocked.reason_code, 'approved_not_started');
+  assert.equal(blocked.label, 'Not delivering · Approved, cannot start: Advertiser capacity exceeded for Cafe');
+  // An expired end date is the activation reason here, so it is shown instead of Ended.
+  const expired = status({ campaign: { status: 'pending', ends_at: '2026-06-30', review: { state: 'approved_not_started', activation_error: 'The campaign end date has passed. Change the dates, then activate again.' } } });
+  assert.match(expired.label, /^Not delivering · Approved, cannot start: The campaign end date has passed/);
+  // A pending campaign without review keeps the Phase 1 wording; an activated campaign ignores stale review data.
+  assert.equal(status({ campaign: { status: 'pending' } }).label, 'Not delivering · Not started');
+  assert.notEqual(status({ campaign: { status: 'active', review: { state: 'approved_not_started', activation_error: 'x' } } }).reason_code, 'approved_not_started');
+});
+
+test('overview counts come from Phase 1 states; the live count is unknown until delivery evidence loads', () => {
+  const { campaignStateSummary } = load('campaign-status');
+  const states = ['live', 'live', 'not_delivering', 'scheduled', 'unknown'].map(state => ({ state }));
+  assert.deepEqual(campaignStateSummary(states, { loaded: true }), { live: 2, not_delivering: 1, text: '2 live · 1 not delivering campaigns' });
+  assert.deepEqual(campaignStateSummary(states, { loaded: false }), { live: null, not_delivering: 1, text: 'live checking… · 1 not delivering campaigns' });
+  assert.equal(campaignStateSummary(states, { loaded: false, error: 'x' }).text, 'live unknown · 1 not delivering campaigns');
+});

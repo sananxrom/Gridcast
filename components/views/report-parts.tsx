@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input, Select } from '@/components/ui/input';
 import { type AttentionCounters, type AttentionProfile, type DeliveryData, type DeliveryReportState, type ReportCounters, attentionHours, attentionPeopleRate, average, dailyReportCsv, emptyCounters, formatAverage, istDate, number, periodError, rangeDays, reportPreset } from '@/components/views/delivery-report';
-import { attentiveImpressionsCard, billableCard, dailyPlayRows, estimatedImpressionsCard, failedCard, fillerCard, lookingCard, paidDeliveredCard, presenceCard, rowPeople, selectAttention, type CardText } from '@/components/views/report-metrics';
+import { attentiveImpressionsCard, billableCard, profileLabel, dailyPlayRows, estimatedImpressionsCard, failedCard, fillerCard, lookingCard, paidDeliveredCard, presenceCard, rowPeople, selectAttention, type CardText } from '@/components/views/report-metrics';
 
 export function ProfileHourTable({profile}:{profile:AttentionProfile}) {
   return <Card className="p-4"><h3 className="text-sm font-semibold">Average people present by hour · {profile.profile.startsWith('presence-v2/')?'V2':'selected profile'}</h3>
@@ -127,7 +127,7 @@ export function DeliveryCards({ data, period }: { data: DeliveryData; period: Pe
 /** Measurement profile selector plus presence, looking and impression cards for the selected profile only. */
 export function MeasurementCards({ data, period, view }: { data: DeliveryData; period: Period; view: ReportView }) {
   const { attentionKeys, selectedAttentionKey, setAttentionSeries, selectedAttention } = view;
-  return <div><div className="mb-2 flex flex-wrap items-center gap-3"><h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Measurement profile</h3>{attentionKeys.length>1&&<Select aria-label="Measurement model profile" className="ml-auto w-auto" value={selectedAttentionKey} onChange={e=>setAttentionSeries(e.target.value)}>{attentionKeys.map(key=>{const p=data.attentionProfiles[key];return <option key={key} value={key}>{p.profile?.startsWith('presence-v2/')?'Combined body + face · V2':'Attention V1 · '+p.profile}</option>;})}</Select>}</div><div className="grid grid-cols-2 gap-3 xl:grid-cols-4">{([
+  return <div><div className="mb-2 flex flex-wrap items-center gap-3"><h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Measurement profile</h3>{attentionKeys.length>1&&<Select aria-label="Measurement model profile" className="ml-auto w-auto" value={selectedAttentionKey} onChange={e=>setAttentionSeries(e.target.value)}>{attentionKeys.map(key=>{const p=data.attentionProfiles[key];return <option key={key} value={key}>{profileLabel(p)}</option>;})}</Select>}</div><div className="grid grid-cols-2 gap-3 xl:grid-cols-4">{([
     ['presence_avg', 'Avg people present', presenceCard(data, selectedAttention)],
     ['attention_avg_people', 'Avg people looking', lookingCard(data, selectedAttention)],
     ['estimated_impressions', 'Estimated impressions', estimatedImpressionsCard(data, selectedAttention)],

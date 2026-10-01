@@ -20,8 +20,9 @@ import { GroupManager } from '@/components/views/groups';
 import { CampaignDetail } from '@/components/views/campaign-detail';
 import { CameraReadiness } from '@/components/views/camera-readiness';
 import { CampaignList } from '@/components/views/campaign-list';
-import { approvalAlerts, blockedAlerts } from '@/lib/campaign-status';
-import { usePeriodicRefresh } from '@/components/views/campaign-status-badge';
+import { approvalAlerts, blockedAlerts, campaignStateSummary, campaignStatus } from '@/lib/campaign-status';
+import { useCampaignEvidence, useNow, usePeriodicRefresh } from '@/components/views/campaign-status-badge';
+import { ReportSummary } from '@/components/views/report-summary';
 import { CampaignFlow } from '@/components/views/campaign-flow';
 import type { CmdItem } from '@/components/ui/command-palette';
 import { BootLoader } from '@/components/ui/loader';
@@ -29,6 +30,9 @@ import { ConfigList, ConfigEditor } from '@/components/views/config-views';
 import { Advertisers, AdvertiserDetail, Creatives } from '@/components/views/commercial';
 import { ProfilePage, OrgPage, PayoutPage, TeamPage } from '@/components/views/account';
 import { useDirtyForm, SaveBar } from '@/components/ui/form';
+import { TabList, TabPanel } from '@/components/ui/tabs';
+import { Thumb } from '@/components/views/bits';
+import { campaignInterval } from '@/lib/inventory';
 
 export default function Admin() {
   const [user, setUser] = useState<SessionUser | null>(null);
@@ -37,6 +41,9 @@ export default function Admin() {
   const [editOrg, setEditOrg] = useState('');
   const [orgFilter, setOrgFilter] = useState('all');
   const report = useDeliveryReport({ org: orgFilter === 'all' ? undefined : orgFilter, enabled: !!user && ['overview', 'screens', 'devices', 'analytics'].includes(view) });
+  // Overview campaign counts use Phase 1 status, which needs the recent delivery-evidence summary for Live.
+  const evidence = useCampaignEvidence(orgFilter === 'all' ? null : orgFilter, !!user && view === 'overview');
+  const now = useNow();
   const [orgDirectory,setOrgDirectory]=useState<any[]>([]);
   const [loadError,setLoadError]=useState('');
   const request = useRef(0);
@@ -103,6 +110,7 @@ export default function Admin() {
   const advName = (id: string) => d.advertisers.find((a: any) => a.id === id)?.name ?? '—';
   const byOrg = <T extends { org_id: string }>(rows: T[]) => orgFilter === 'all' ? rows : rows.filter(r => r.org_id === orgFilter);
   const pending = d.creatives.filter((c: any) => c.approval_status === 'pending');
+  const queueCount = reviewQueueCount(d);
   const offline = d.screens.filter((s: any) => s._status?.state === 'offline' || s._status?.state === 'stalled');
   const measurementAlerts = d.screens.flatMap((screen:any) => {
     const device = d.devices?.find((v:any)=>v.screen_id===screen.id && v.status!=='revoked');
@@ -114,25 +122,14 @@ export default function Admin() {
   const alerts = [
     ...measurementAlerts,
     ...offline.map((s: any) => ({ kind: 'Screen', tone: 'destructive', text: `${s.name} (${orgName(s.org_id)}) is ${s._status?.label}`, go: 's/' + s.id })),
-    ...approvalAlerts(d, pending, 'approvals', (c: any) => `${c.name} awaiting platform approval`),
+    ...approvalAlerts(d, pending, 'approvals', (c: any) => `${c.name} awaiting platform review`).map(a => ({ ...a, go: 'approvals' })),
     ...blockedAlerts(d),
   ];
-  const nav = adminNav({ inbox: alerts.length, approvals: pending.length });
+  const nav = adminNav({ inbox: alerts.length, approvals: queueCount });
   const orgs = [{ id: 'all', name: 'All organisations', type: 'gridcast' }, ...orgDirectory.map((o: any) => ({ id: o.id, name: o.name, type: o.type }))];
   const currentOrg = orgs.find(o => o.id === orgFilter) ?? orgs[0];
-  const titleOf: Record<string, string> = { overview: 'Overview', advertisers:'Advertisers', creatives:'Creatives', groups:'Screen groups', orgs: 'Organisations', screens: 'All screens', devices: 'Device health', campaigns: 'Campaigns', approvals: 'Approvals', inbox: 'Inbox', analytics: 'Analytics', profile: 'Profile', configs: 'Device configs', settings: 'Organisation', 'set-org': 'Organisation', 'set-api': 'API keys', 'set-hooks': 'Webhooks', 'set-billing': 'Billing & payouts', 'set-team': 'Team & users' };
+  const titleOf: Record<string, string> = { overview: 'Overview', advertisers:'Advertisers', creatives:'Creatives', groups:'Screen groups', orgs: 'Organisations', screens: 'All screens', devices: 'Device health', campaigns: 'Campaigns', approvals: 'Review queue', inbox: 'Inbox', analytics: 'Analytics', profile: 'Profile', configs: 'Device configs', settings: 'Organisation', 'set-org': 'Organisation', 'set-api': 'API keys', 'set-hooks': 'Webhooks', 'set-billing': 'Billing & payouts', 'set-team': 'Team & users' };
   const screenPeople = (id: string) => { const r = report.data?.byScreen[id]; return r?.presence_n ? (r.presence_sum / r.presence_n).toFixed(1) : '—'; };
-  const setCampaign = async (c: any, patch: any) => { await api(`/campaign/${c.id}`, patch); reload(); };
-  const STATUS_CHOICES = [
-    { value: 'active', label: 'Active', dot: 'hsl(var(--ok))' },
-    { value: 'paused', label: 'Paused', dot: 'hsl(var(--warn))' },
-    { value: 'complete', label: 'Complete', dot: 'hsl(var(--muted-foreground))' },
-  ];
-  const restoreStatus = async (rows: any[]) => { for (const c of rows) await api(`/campaign/${c.id}`, { status: c.status }); };
-  const campaignBulk: BulkAction<any>[] = [
-    { label: 'Pause', run: async rows => { for (const c of rows) await api(`/campaign/${c.id}`, { status: 'paused' }); }, undo: restoreStatus },
-    { label: 'Resume', run: async rows => { for (const c of rows) await api(`/campaign/${c.id}`, { status: 'active' }); }, undo: restoreStatus },
-  ];
   const screenBulk: BulkAction<any>[] = [
     { label: 'Activate', run: async rows => { for (const x of rows) await api(`/screen/${x.id}`, { status: 'active' }); },
       undo: async rows => { for (const x of rows) await api(`/screen/${x.id}`, { status: x.status }); } },
@@ -183,7 +180,7 @@ export default function Admin() {
       {(view === 'new' || view.startsWith('new:a:') || view.startsWith('draft:')) && <CampaignFlow key={view} boot={d} user={user} orgId={orgFilter==='all'?null:orgFilter} advertiserId={view.startsWith('new:a:') ? view.slice(6) : undefined} draftId={view.startsWith('draft:') ? view.slice(6) : undefined} onGo={go} onChanged={reload} onDone={async (c: any) => { await reload(); go('c/' + c.id); }} />}
 
       {view === 'overview' && (<>
-        <PageHead title="Platform overview" sub={`${d.screens.length} loaded screens · ${d.campaigns.filter(isLive).length} live campaigns`} />
+        <PageHead title="Platform overview" sub={`${d.screens.length} loaded screens · ${campaignStateSummary(d.campaigns.map((c: any) => campaignStatus({ campaign: c, creatives: d.creatives, screens: d.screens, advertiser: d.advertisers.find((a: any) => a.id === c.advertiser_id), reportScreens: evidence.loaded ? (evidence.campaignScreens[c.id] ?? {}) : null, reportLoaded: evidence.loaded, now })), evidence).text}`} />
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Stat metric="live_screen_count" period={{from:'',to:'',label:'Current loaded records'}} label="Screens on air now" value={`${d.screens.filter((s: any) => s._status?.state === 'live').length}/${d.screens.length}`} hint="Current device status · loaded inventory" />
           <Stat metric="current_exceptions" period={{from:'',to:'',label:'Current loaded records'}} label="Needs attention" value={alerts.length} hint="Screen, measurement and approval exceptions" />
@@ -195,7 +192,7 @@ export default function Admin() {
           { label: 'Issue', render: (a: any) => a.text },
           { label: '', render: (a: any) => <Button variant="ghost" size="sm" onClick={() => go(a.go)}>Open →</Button> },
         ]} rows={alerts} empty="No screen, measurement or approval exceptions in the loaded inventory." />
-        <DeliveryReport report={report} screens={d.screens} campaigns={d.campaigns} creatives={d.creatives} />
+        <ReportSummary report={report} metadata={{ byScreen: d.screens, byCampaign: d.campaigns, byCreative: d.creatives }} onOpen={() => go('analytics')} />
       </>)}
 
       {view === 'orgs' && (<>
@@ -243,26 +240,7 @@ export default function Admin() {
       {view==='campaigns'&&<div className="mb-3 text-right"><a className="text-sm text-primary" href="/admin/demo">Set up the brand demo →</a></div>}
       {view==='campaigns'&&<CampaignList d={{...d,orgs:orgDirectory}} orgId={orgFilter==='all'?null:orgFilter} onGo={go} onChanged={reload}/>}
 
-      {view === 'approvals' && (<>
-        <PageHead title="Creative approvals" sub={`${pending.length} awaiting review · platform policy gate`} />
-        <DataTable cols={[
-          { label: 'Creative', render: (c: any) => <><div className="font-medium">{c.name}</div><div className="text-[12px] text-muted-foreground">{advName(c.advertiser_id)} · {orgName(c.org_id)}</div></> },
-          { label: 'Category', render: (c: any) => <Badge variant="muted">{c.category}</Badge> },
-          { label: 'Source', render: (c: any) => <span className="text-[12px] text-muted-foreground">{c.content_source}</span> },
-          { label: 'Status', render: (c: any) => <Badge variant={c.approval_status === 'approved' ? 'ok' : c.approval_status === 'rejected' ? 'destructive' : 'warn'}>{c.approval_status}</Badge> },
-          { label: '', render: (c: any) => c.approval_status === 'pending'
-            ? <div className="flex gap-1.5"><Button size="sm" onClick={async () => { await api(`/creative/${c.id}/approve`, { status: 'approved' }); reload(); }}>Approve</Button>
-                <Button size="sm" variant="outline" onClick={async () => { await api(`/creative/${c.id}/approve`, { status: 'rejected' }); reload(); }}>Reject</Button></div>
-            : <span className="text-muted-foreground">—</span> },
-        ]} rows={byOrg(d.creatives)} rowId={(c: any) => c.id} exportName="approvals" onDone={reload}
-          search={(c: any) => c.name}
-          facets={[{ label: 'Status', get: (c: any) => c.approval_status }, { label: 'Org', get: (c: any) => orgName(c.org_id) }]}
-          bulk={[
-          { label: 'Approve', run: async (rows: any[]) => { for (const c of rows) await api(`/creative/${c.id}/approve`, { status: 'approved' }); } },
-          { label: 'Reject', variant: 'outline' as const, run: async (rows: any[]) => { for (const c of rows) await api(`/creative/${c.id}/approve`, { status: 'rejected' }); },
-            confirm: 'Reject {n} creative(s)?' },
-        ]} />
-      </>)}
+      {view === 'approvals' && <ReviewQueue orgName={orgName} onGo={go} onChanged={reload} />}
 
       {view === 'devices' && (<>
         <PageHead title="Device health" sub="Paired players across the fleet" />
@@ -394,4 +372,130 @@ function EditOrg({ org, onDone }: { org: any; onDone: () => void }) {
       })} onDiscard={fm.discard} />
     </Card>
   );
+}
+
+/** Client-side count for the nav badge, mirroring GET /review-queue over the loaded bootstrap records. */
+function reviewQueueCount(d: any) {
+  const now = Date.now();
+  const byId = new Map((d.creatives || []).map((c: any) => [c.id, c]));
+  const ended = (c: any) => { try { return campaignInterval(c)[1] <= now; } catch { return false; } };
+  const campaigns = (d.campaigns || []).filter((c: any) => {
+    const submitted = ['draft', 'pending'].includes(c.status) && c.review?.state === 'in_review';
+    const waiting = (c.creative_ids || []).some((id: string) => { const cr: any = byId.get(id); return cr && !['approved', 'rejected'].includes(cr.approval_status); });
+    return submitted || (['active', 'pending', 'paused'].includes(c.status) && waiting && !ended(c));
+  }).length;
+  return campaigns + (d.creatives || []).filter((c: any) => c.purpose === 'filler' && c.approval_status === 'pending').length;
+}
+
+/** Doc 31 Phase 5: the reviewer decides per campaign; approval is stored on each creative and the campaign activates. */
+function ReviewQueue({ orgName, onGo, onChanged }: { orgName: (id: string) => string; onGo: (g: string, owner?: string) => void; onChanged: () => void }) {
+  const [q, setQ] = useState<any>(null);
+  const [err, setErr] = useState('');
+  const [tab, setTab] = useState('campaigns');
+  const idBase = React.useId();
+  const load = useCallback(async () => { setErr(''); try { setQ(await api('/review-queue')); } catch (e) { setErr((e as Error).message); } }, []);
+  useEffect(() => { load(); }, [load]);
+  const [flash, setFlash] = useState('');
+  const done = async (message = '') => { setFlash(message); await load(); onChanged(); };
+  if (!q) return <><PageHead title="Review queue" />{err ? <Card className="p-4"><p role="alert" className="text-sm">{err}</p><Button className="mt-3" onClick={load}>Retry</Button></Card> : <Card role="status" className="p-4 text-sm">Loading the review queue…</Card>}</>;
+  return (<>
+    <PageHead title="Review queue" sub={`${q.items.length} campaign${q.items.length === 1 ? '' : 's'} · ${q.filler.length} filler · content review only`} />
+    <TabList idBase={idBase} label="Review queue" value={tab} onChange={setTab} tabs={[{ id: 'campaigns', label: `Campaigns (${q.items.length})` }, { id: 'filler', label: `Filler (${q.filler.length})` }]} />
+    {err && <p role="alert" className="mt-3 text-sm text-destructive">{err}</p>}
+    {flash && <p role="status" className="mt-3 rounded-md bg-primary/[0.06] p-3 text-sm">{flash}</p>}
+    {tab === 'campaigns' && <TabPanel idBase={idBase} id="campaigns">
+      {q.items.length ? <div className="space-y-3">{q.items.map((item: any) => <ReviewCard key={item.campaign.id + ':' + item.creatives.map((c: any) => c.id).join(',')} item={item} onGo={onGo} onDone={done} />)}</div>
+        : <Empty>No campaigns are waiting for review.</Empty>}
+    </TabPanel>}
+    {tab === 'filler' && <TabPanel idBase={idBase} id="filler">
+      <DataTable cols={[
+        { label: 'Filler creative', render: (c: any) => <><div className="font-medium">{c.name}</div><div className="text-[12px] text-muted-foreground">{c.org_name ?? orgName(c.org_id)} · {c.media_type}{c.has_upload ? ' · uploaded' : ' · awaiting upload'}</div></> },
+        { label: 'Category', render: (c: any) => <Badge variant="muted">{c.category}</Badge> },
+        { label: '', render: (c: any) => <FillerDecision c={c} onDone={done} /> },
+      ]} rows={q.filler} rowId={(c: any) => c.id} empty="No filler creatives are waiting for approval." />
+      <p className="mt-2 text-xs text-muted-foreground">Filler belongs to no campaign, so it is approved per creative.</p>
+    </TabPanel>}
+  </>);
+}
+
+function FillerDecision({ c, onDone }: { c: any; onDone: (message?: string) => Promise<void> }) {
+  const [busy, setBusy] = useState(false), [err, setErr] = useState('');
+  const decide = async (status: string) => { setBusy(true); setErr(''); try { await api(`/creative/${c.id}/approve`, { status }); await onDone(`${c.name}: ${status}.`); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); } };
+  return <div className="flex items-center gap-1.5"><Button size="sm" disabled={busy} aria-label={`Approve filler ${c.name}`} onClick={() => decide('approved')}>Approve</Button>
+    <Button size="sm" variant="outline" disabled={busy} aria-label={`Reject filler ${c.name}`} onClick={() => decide('rejected')}>Reject</Button>{err && <span role="alert" className="text-xs text-destructive">{err}</span>}</div>;
+}
+
+function CreativePreview({ c }: { c: any }) {
+  const [open, setOpen] = useState(false), [media, setMedia] = useState<any>(null), [err, setErr] = useState('');
+  const show = async () => { setOpen(!open); if (media || open) return; try { setMedia(await api(`/creative/${c.id}/preview`)); } catch (e) { setErr((e as Error).message); } };
+  const variant = media?.variants?.find((v: any) => v.url);
+  return <div className="min-w-0">
+    <div className="flex items-center gap-2">{c.youtube_id && <Thumb id={c.youtube_id} w={88} />}
+      {(c.has_upload || c.youtube_id) && <Button size="sm" variant="ghost" aria-expanded={open} aria-label={`Preview ${c.name}`} onClick={show}>{open ? 'Hide preview' : 'Preview'}</Button>}</div>
+    {open && <div className="mt-2">
+      {err && <p role="alert" className="text-xs text-destructive">{err}</p>}
+      {!media && !err && <p role="status" className="text-xs text-muted-foreground">Loading preview…</p>}
+      {media?.source === 'youtube' && <a className="text-xs text-primary hover:underline" target="_blank" rel="noreferrer" href={`https://www.youtube.com/watch?v=${media.youtube_id}`}>Watch on YouTube</a>}
+      {media?.source === 'uploaded' && variant && (variant.media_type === 'image'
+        // eslint-disable-next-line @next/next/no-img-element
+        ? <img src={variant.url} alt={`Preview of ${c.name}`} className="max-h-48 rounded border border-border" />
+        : <video src={variant.url} controls preload="metadata" aria-label={`Preview video for ${c.name}`} className="max-h-48 rounded border border-border" />)}
+      {media && !variant && media.source !== 'youtube' && <p className="text-xs text-muted-foreground">No playable media is attached yet.</p>}
+    </div>}
+  </div>;
+}
+
+function ReviewCard({ item, onGo, onDone }: { item: any; onGo: (g: string, owner?: string) => void; onDone: (message?: string) => Promise<void> }) {
+  const c = item.campaign;
+  const [choice, setChoice] = useState<Record<string, 'approved' | 'rejected'>>(() => Object.fromEntries(item.creatives.map((cr: any) => [cr.id, 'approved'])));
+  const [note, setNote] = useState(''), [busy, setBusy] = useState(false), [err, setErr] = useState('');
+  const mixed = Object.values(choice).some(v => v === 'rejected');
+  const reReview = item.reason === 're_review';
+  const approveLabel = mixed ? 'Submit decisions' : reReview ? (item.creatives.length === 1 ? 'Approve creative' : 'Approve creatives') : 'Approve campaign';
+  const send = async (decisions: Record<string, string>) => {
+    setBusy(true); setErr('');
+    try {
+      const r = await api(`/campaign/${c.id}/review`, { creatives: decisions, ...(note.trim() ? { note: note.trim() } : {}) });
+      await onDone(`${c.name}: ` + (r.activation?.attempted ? (r.activation.activated ? 'approved and now active.' : `approved, but it cannot start: ${r.activation.error}`)
+        : r.campaign?.review?.state === 'changes_needed' ? 'sent back to the seller, changes needed.' : 'decisions saved.'));
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  const ended = c.ends_at && c.ends_at < new Date().toISOString().slice(0, 10);
+  return <Card role="group" aria-label={`Review ${c.name}`} className="p-4">
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <button className="text-left text-[15px] font-semibold text-primary hover:underline" onClick={() => onGo('c/' + c.id, c.org_id)}>{c.name}</button>
+          {item.reason === 're_review' ? <Badge variant="warn">Changed creative</Badge> : <Badge variant="default">Submitted</Badge>}
+          {c.campaign_type === 'network' && <Badge variant="default">network</Badge>}
+          <Badge variant="muted">{c.status}</Badge>
+        </div>
+        <p className="mt-0.5 text-[13px] text-muted-foreground">{c.advertiser_name ?? '—'} · {c.org_name ?? c.org_id} · <span className="font-mono">{c.starts_at} → {c.ends_at}</span> · {c.screens} screen{c.screens === 1 ? '' : 's'}{ended ? ' · end date passed' : ''}</p>
+        {c.review?.submitted_at && <p className="text-xs text-muted-foreground">Submitted {new Date(c.review.submitted_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST</p>}
+      </div>
+    </div>
+    <ul className="mt-3 divide-y divide-border/60 rounded-lg border border-border/60">
+      {item.creatives.map((cr: any) => <li key={cr.id} className="flex flex-wrap items-start justify-between gap-3 p-3">
+        <div className="min-w-0 space-y-1">
+          <div className="font-medium">{cr.name} <span className="text-xs font-normal text-muted-foreground">· {cr.media_type}{cr.duration_s ? ` · ${cr.duration_s}s` : ''} · {cr.category}</span></div>
+          <p className="text-xs text-muted-foreground">{cr.usage.other_campaigns ? `Also used in ${cr.usage.other_campaigns} other campaign${cr.usage.other_campaigns === 1 ? '' : 's'} (${cr.usage.other_active} active). Approval applies there too.` : 'Not used in other open campaigns.'}</p>
+          <CreativePreview c={cr} />
+        </div>
+        <div role="radiogroup" aria-label={`Decision for ${cr.name}`} className="flex gap-1.5">
+          {(['approved', 'rejected'] as const).map(v => <Button key={v} size="sm" role="radio" aria-checked={choice[cr.id] === v} variant={choice[cr.id] === v ? (v === 'approved' ? 'default' : 'destructive') : 'outline'}
+            onClick={() => setChoice({ ...choice, [cr.id]: v })}>{v === 'approved' ? 'Approve' : 'Reject'}</Button>)}
+        </div>
+      </li>)}
+      {!item.creatives.length && <li className="p-3 text-sm text-muted-foreground">Every creative already has a decision. Approving re-runs activation.</li>}
+    </ul>
+    {reReview && <p className="mt-2 text-xs text-muted-foreground">A creative changed after this campaign was reviewed{c.review?.state === 'approved_not_started' ? ' (approved, not started)' : ''}. Decisions apply to the creatives only; the campaign stays {c.status}{c.status === 'active' ? ' and delivers these creatives once approved' : ''}.</p>}
+    {item.decided?.length > 0 && <p className="mt-2 text-xs text-muted-foreground">Already decided: {item.decided.map((x: any) => `${x.name} (${x.approval_status})`).join(', ')}</p>}
+    <div className="mt-3 flex flex-wrap items-end gap-2">
+      <Field label="Note to the seller" className="min-w-[240px] flex-1"><Input aria-label={`Review note for ${c.name}`} maxLength={1000} value={note} onChange={e => setNote(e.target.value)} placeholder="Required when rejecting" /></Field>
+      <Button disabled={busy} onClick={() => send(choice)}>{busy ? 'Saving…' : approveLabel}</Button>
+      <Button variant="outline" disabled={busy || !note.trim() || !item.creatives.length} title={!note.trim() ? 'Add a note explaining what to change' : undefined}
+        onClick={() => send(Object.fromEntries(item.creatives.map((cr: any) => [cr.id, 'rejected'])))}>Reject</Button>
+    </div>
+    {err && <p role="alert" className="mt-2 text-sm text-destructive">{err}</p>}
+  </Card>;
 }

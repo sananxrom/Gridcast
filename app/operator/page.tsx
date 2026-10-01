@@ -29,8 +29,9 @@ import { CampaignList } from '@/components/views/campaign-list';
 import { Settlement } from '@/components/views/settlement';
 import { CampaignFlow } from '@/components/views/campaign-flow';
 import type { CmdItem } from '@/components/ui/command-palette';
-import { approvalAlerts, blockedAlerts } from '@/lib/campaign-status';
-import { usePeriodicRefresh } from '@/components/views/campaign-status-badge';
+import { approvalAlerts, blockedAlerts, campaignStateSummary, campaignStatus } from '@/lib/campaign-status';
+import { ReportSummary } from '@/components/views/report-summary';
+import { useCampaignEvidence, useNow, usePeriodicRefresh } from '@/components/views/campaign-status-badge';
 
 export default function Operator() {
   const [user, setUser] = useState<SessionUser | null>(null);
@@ -39,6 +40,9 @@ export default function Operator() {
   const [screenPage, setScreenPage] = useState(0);
   const [screenSearch, setScreenSearch] = useState('');
   const report = useDeliveryReport({ enabled: !!user && ['overview', 'screens', 'analytics', 'reports'].includes(view) });
+  // Overview campaign counts use Phase 1 status, which needs the recent delivery-evidence summary for Live.
+  const evidence = useCampaignEvidence(null, !!user && view === 'overview');
+  const now = useNow();
 
   const reload = useCallback(async (u?: SessionUser) => {
     const who = u ?? user; if (!who) return;
@@ -158,7 +162,7 @@ export default function Operator() {
       {view.startsWith('a/') && caps.includes('sales') && <AdvertiserDetail key={view} id={view.slice(2)} d={d} user={user} orgId={user.org_id} onGo={go} onChanged={reload} />}
 
       {view === 'overview' && (<>
-        <PageHead title={user.orgName} sub={`${d.screens.length} screens · ${d.advertisers.length} advertisers · ${d.campaigns.filter(isLive).length} live campaigns`} />
+        <PageHead title={user.orgName} sub={`${d.screens.length} screens · ${d.advertisers.length} advertisers · ${campaignStateSummary(d.campaigns.map((c: any) => campaignStatus({ campaign: c, creatives: d.creatives, screens: d.screens, advertiser: d.advertisers.find((a: any) => a.id === c.advertiser_id), reportScreens: evidence.loaded ? (evidence.campaignScreens[c.id] ?? {}) : null, reportLoaded: evidence.loaded, now })), evidence).text}`} />
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {caps.includes('sales') && <Stat metric="monthly_inventory_value" period={{from:'',to:'',label:'Current loaded records'}} label="Monthly inventory" value={inr(d.screens.reduce((s: number, x: any) => s + x.monthly_value, 0))} hint="at full sell-through" />}
           {caps.includes('sales') && <Stat metric="recorded_campaign_accrual" period={{from:'',to:'',label:'Campaign lifetime · visible records'}} label="Accrued on your screens" value={d.campaigns.some((c:any)=>typeof c.accrued_spend!=='number')?'—':inr(d.campaigns.reduce((s: number, c: any) => s + c.accrued_spend, 0))} hint={d.campaigns.some((c:any)=>typeof c.accrued_spend!=='number')?'Full totals require finance access':'reported lifetime accrual'} />}
@@ -174,7 +178,7 @@ export default function Operator() {
           { label: 'Issue', render: (a: any) => a.text },
           { label: '', render: (a: any) => <Button variant="ghost" size="sm" onClick={() => go(a.go)}>Open →</Button> },
         ]} rows={alerts} empty="No screen, measurement, budget or approval exceptions in this view." />
-        <DeliveryReport report={report} screens={d.screens} campaigns={d.campaigns} creatives={d.creatives} />
+        <ReportSummary report={report} metadata={{ byScreen: d.screens, byCampaign: d.campaigns, byCreative: d.creatives }} onOpen={() => go('analytics')} />
         <SectionHead>Your screens</SectionHead>
         <DataTable cols={[
           { className: 'min-w-[168px]', label: 'Screen', sort: (s: any) => s.name, render: (s: any) => <><button onClick={() => go('s/' + s.id)} className="text-left font-medium text-primary hover:underline">{s.name}</button><div className="text-[12px] text-muted-foreground">{s.address}</div></> },

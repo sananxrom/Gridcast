@@ -89,6 +89,7 @@ export function CampaignFlow({ boot, user, orgId, advertiserId, draftId, onGo, o
   const [save, setSave] = useState<SaveState>({ kind: 'idle' });
   const [savedSnapshot, setSavedSnapshot] = useState<string | null>(null);
   const [actionError, setActionError] = useState('');
+  const [notice, setNotice] = useState('');
   const [submitting, setSubmitting] = useState<'' | 'submit' | 'launch'>('');
   const [addedAdvertisers, setAddedAdvertisers] = useState<any[]>([]);
   const [localCreatives, setLocalCreatives] = useState<any[]>([]);
@@ -185,6 +186,8 @@ export function CampaignFlow({ boot, user, orgId, advertiserId, draftId, onGo, o
       const saved = dirty || !draft ? await saveDraft('review') : draft;
       if (!saved) return;
       const result = await api(`/campaign-draft/${encodeURIComponent(saved.id)}/submit`, { mode });
+      // The campaign page then shows "Submitted for review" (or the live campaign after Launch).
+      setNotice(mode === 'launch' ? 'Campaign launched.' : 'Submitted for review. Gridcast reviews the creatives; the campaign starts when they are approved.');
       onDone(result.campaign);
     } catch (e) { setActionError((e as Error).message); } finally { setSubmitting(''); }
   };
@@ -298,7 +301,8 @@ export function CampaignFlow({ boot, user, orgId, advertiserId, draftId, onGo, o
           {save.conflict && draft && <Button size="sm" variant="ghost" onClick={() => loadDraft(draft.id)}>Load the newer version (discards these edits)</Button>}
         </div>}
         {actionError && <p role="alert" className="mt-3 text-[12.5px] text-destructive">{actionError}</p>}
-        {step === 'review' && !allApproved && chosenCreatives.length > 0 && <p className="mt-2 text-[12px] text-muted-foreground">Launch is available when every chosen creative is approved. Submit for review keeps the campaign pending until then.</p>}
+        {notice && <p role="status" className="mt-3 text-[12.5px]">{notice}</p>}
+        {step === 'review' && !allApproved && chosenCreatives.length > 0 && <p className="mt-2 text-[12px] text-muted-foreground">Launch is available when every chosen creative is approved. Submit for review sends the campaign to Gridcast review and holds its screens; it starts when the creatives are approved.</p>}
       </section>
     </div>
   </>;
@@ -439,7 +443,7 @@ function Review({ form, network, advertiser, chosenScreens, chosenCreatives, org
       {row('Committed budget', form.budget.trim() ? inr(Number(form.budget)) : missing, 'budget')}
       {row('List price', chosenScreens.length ? (unknownPrices ? '—' : `${inr(listPrice)} / month per advertiser allocation`) : missing, 'budget')}
     </dl>
-    <p className="text-[12.5px] text-muted-foreground">Submit for review creates the campaign as pending and holds its screens. Launch starts it now and is available only when every chosen creative is approved. Both run the full checks: dates, capacity and budget.</p>
+    <p className="text-[12.5px] text-muted-foreground">Submit for review creates the campaign, holds its screens and puts it in the Gridcast review queue; it starts automatically when its creatives are approved. Launch starts it now and is available only when every chosen creative is approved. Both run the full checks: dates, capacity and budget.</p>
   </div>;
 }
 

@@ -1,21 +1,21 @@
 import { maintenanceRoute, maintenanceCodeId, maintenanceTokenId, maintenanceLimiterIds } from './maintenance';
 import { ReportingError, reportRange, reportingVisible, summarizeReport, REPORT_PAGE_SIZE } from './reporting';
-import { ensureBudget, validateBudgetEdit } from './budgets';
+import { ensureBudget, validateBudgetEdit, budgetLimit } from './budgets';
 import { createHash, randomUUID } from 'node:crypto';
 import { draftCampaignBody, draftCampaignId, draftExpiry, draftVisibleTo, missingForSubmit, missingMessage } from './campaign-drafts';
 import { creativeRotationIndex } from './rotation';
-import { economics, freezeEconomics } from './settlement';
+import { economics, freezeEconomics, paise } from './settlement';
 import { DiagnosticError, requestDiagnostic, revokeDiagnostic, assertNoDiagnosticLease } from './diagnostics';
 import { auditSnapshot, appendAudit, auditView } from './audit';
 import { summarizeReadiness } from './readiness';
 import { openMedia, mediaUrl } from './media';
 import * as store from './store';
-import { AccessError, authorize, authorizeCampaignCreate, bootstrap, publicUser, orgView, screenView, advertiserView, capabilities, campaignView, settlementView, redact } from './access';
+import { AccessError, authorize, authorizeCampaignCreate, campaignRelations, bootstrap, publicUser, orgView, screenView, advertiserView, capabilities, campaignView, settlementView, redact } from './access';
 import { seed, uid, nowISO, code6 } from './seed';
 import * as cfg from './config';
 import { ATTENTION_PROFILE } from './vision/attention-contracts';
 import { deviceRoute, deviceIdFromToken, pairingCodeHash, issuePairing, revokeDevices, calibrationForDevice } from './devices';
-import { InventoryError, validateScreenInput, reverseCalculate, validateBooking, eligibility, groupMatches, defaultSlotsPerLoop, rotationWeight, authorizationUntil } from './inventory';
+import { InventoryError, validateScreenInput, reverseCalculate, validateBooking, eligibility, groupMatches, defaultSlotsPerLoop, rotationWeight, authorizationUntil, campaignInterval } from './inventory';
 import { can, ROLES, PLATFORM_ADMIN, ADVERTISER, tabFor } from './roles';
 import { hashPassword, verifyPassword, issueToken, readToken, tempPassword, throttled, noteFailure, clearFailures, assertAuthConfigured, type Claims } from './auth';
 
@@ -51,10 +51,73 @@ function freezeBookings(c: any, previousCampaign?: any) {
   });
   c.participant_org_ids = [...new Set([...(previousCampaign?.participant_org_ids || []), ...c.screen_ids.map((id: string) => db.screens.find((s: any) => s.id === id).org_id)])];
 }
-/** The one campaign create path. POST /campaign and draft submit both call it with an authorized body. */
+/** The one campaign create path. POST /campaign and draft submit both call it with an authorized body.
+ * Doc 31 Phase 5: a new campaign is `pending` unless the caller asks otherwise, and it may start `active` only
+ * when every assigned creative is already approved (Launch); that path still runs the activation checks. */
 function createCampaign(body: any, id?: string) {
-  const c = { id: id ?? creationId('cmp',body), created_at: nowISO(), accrued_spend: 0, status: 'active', campaign_type: 'operator', platform_fee_pct: 0, fee_basis: 'gross', invoice_status: 'not_invoiced', ...body };
+  const c = { id: id ?? creationId('cmp',body), created_at: nowISO(), accrued_spend: 0, campaign_type: 'operator', platform_fee_pct: 0, fee_basis: 'gross', invoice_status: 'not_invoiced', ...body, status: body.status ?? 'pending' };
+  if (!['draft','pending','active'].includes(c.status)) throw new AccessError(400, 'A new campaign starts as draft, pending or active');
+  if (c.status === 'active') {
+    const decisions = creativeDecisions(c);
+    if (!decisions.approved || decisions.pending || decisions.rejected) throw new AccessError(409, 'A campaign can start active only when every assigned creative is approved. Submit it for review instead.');
+    activationGate(c);
+  }
   freezeBookings(c); db.campaigns.push(c); return c;
+}
+/** Writes one creative decision exactly as POST /creative/:id/approve always has. Approval lives on the creative. */
+function setCreativeApproval(cr: any, status: string) { cr.approval_status = status; cr.approved_at = nowISO(); }
+/** Approval counts for the creatives assigned to a campaign. Anything not approved or rejected counts as pending. */
+function creativeDecisions(c: any) {
+  const rows = (c.creative_ids || []).map((id: string) => db.creatives.find((x: any) => x.id === id)).filter(Boolean);
+  const approved = rows.filter((x: any) => x.approval_status === 'approved').length, rejected = rows.filter((x: any) => x.approval_status === 'rejected').length;
+  return { rows, approved, rejected, pending: rows.length - approved - rejected };
+}
+/** Checks that apply only when a campaign goes live. Capacity, economics and relations run separately. */
+function activationGate(c: any) {
+  let end: number;
+  try { end = campaignInterval(c)[1]; } catch (e) { if (e instanceof InventoryError) throw new AccessError(409, e.message); throw e; }
+  if (end <= Date.now()) throw new AccessError(409, 'The campaign end date has passed. Change the dates, then activate again.');
+  const organisation = db.orgs.find((o: any) => o.id === c.org_id);
+  if (organisation && organisation.status !== 'active') throw new AccessError(409, 'The campaign organisation is not active');
+  const screens = (c.screen_ids || []).map((id: string) => db.screens.find((s: any) => s.id === id)).filter(Boolean);
+  if (screens.length && screens.every((s: any) => s.status !== 'active')) throw new AccessError(409, 'None of the selected screens is active');
+  if (c.rate_type === 'per_play') {
+    const ledger = (db.campaign_budgets || []).find((b: any) => b.campaign_id === c.id);
+    const spent = ledger ? ledger.spent_paise : paise(Number(c.accrued_spend) || 0);
+    if (spent >= budgetLimit(c)) throw new AccessError(409, 'The committed budget is already used up. Increase the budget, then activate again.');
+  }
+}
+/**
+ * The activate transition (doc 31 Phase 5). Re-runs relations, the activation gate and freezeBookings with
+ * status 'active' (dates, capacity, budget edit rule, diagnostics lease, frozen economics) on a copy. Success
+ * makes the campaign active and clears review. Failure leaves the campaign and budgets untouched and returns
+ * the human-readable reason; the caller records it.
+ */
+function attemptActivation(c: any, actor: any): { activated: true } | { activated: false; error: string } {
+  const previous = structuredClone(c), budgets = structuredClone(db.campaign_budgets || []);
+  const candidate: any = { ...structuredClone(c), status: 'active' };
+  delete candidate.review;
+  try {
+    campaignRelations(db, candidate, actor);
+    activationGate(candidate);
+    freezeBookings(candidate, previous);
+  } catch (e) {
+    if (e instanceof AccessError || e instanceof InventoryError || e instanceof DiagnosticError) {
+      db.campaign_budgets = budgets;
+      return { activated: false, error: e.message };
+    }
+    throw e;
+  }
+  for (const key of Object.keys(c)) if (!(key in candidate)) delete c[key];
+  Object.assign(c, candidate, { activated_at: nowISO() });
+  return { activated: true };
+}
+/** Other open campaigns that would also be affected by approving this creative. */
+function creativeUsage(creativeId: string, campaignId: string) {
+  const now = Date.now();
+  const others = db.campaigns.filter((x: any) => x.id !== campaignId && (x.creative_ids || []).includes(creativeId) && !['complete','cancelled'].includes(x.status)
+    && (() => { try { return campaignInterval(x)[1] > now; } catch { return true; } })());
+  return { other_campaigns: others.length, other_active: others.filter((x: any) => x.status === 'active').length };
 }
 /** Campaign drafts live in `campaign_drafts`, which no playback, inventory, settlement, budget, reporting or
  * bootstrap code reads. Bodies here were already authorized by authorizeDraft in lib/access.ts. */
@@ -94,6 +157,8 @@ async function draftRoute(method: string, seg: string[], q: URLSearchParams, bod
     if (body.mode === 'launch' && draft.fields.creative_ids.some((cid: string) => db.creatives.find((x: any) => x.id === cid)?.approval_status !== 'approved'))
       throw new AccessError(400, 'Launch needs every creative approved');
     const campaign = createCampaign(authorizeCampaignCreate(db, actor, draftCampaignBody(draft, body.mode === 'launch' ? 'active' : 'pending')), campaignId);
+    // Submit for review lands the campaign in the review queue (doc 31 Phase 5); Launch is already active.
+    if (body.mode !== 'launch') campaign.review = { state: 'in_review', submitted_at: nowISO(), submitted_by: actor.id, decided_at: null, decided_by: null, note: null, activation_error: null };
     Object.assign(draft, { submitted_campaign_id: campaign.id, submitted_at: nowISO(), updated_at: nowISO(), revision: draft.revision + 1 });
     await save(); return { body: { campaign, draft } };
   }
@@ -166,7 +231,8 @@ export function screenStatus(screen: any) {
   return { state, label: state === 'live' ? 'on air' : state === 'stalled' ? 'not responding' : 'offline', device: dev, age_s: Math.round(age), observed_at: new Date().toISOString() };
 }
 
-type Res = { status?: number; body: any };
+/** `commit` lets a recorded failure (activation that could not start) persist even though status >= 400. */
+type Res = { status?: number; body: any; commit?: boolean };
 
 const OPEN = new Set(['GET _health', 'POST login']);
 
@@ -486,7 +552,88 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
     if (!c) return { status: 404, body: { error: 'not found' } };
     const previousCampaign = structuredClone(c);
     for (const k of ['name','starts_at','ends_at','committed_budget','rate_type','rate_value','status','invoice_status','screen_ids','creative_ids','bookings','dayparts']) if (k in body) c[k] = body[k];
+    // authorize() already rejected draft/pending → active (campaignStatusChange); a closed campaign leaves review.
+    if (['complete','cancelled'].includes(c.status)) delete c.review;
     freezeBookings(c, previousCampaign); await save(); return { body: c };
+  }
+  if (method === 'POST' && seg[0] === 'campaign' && seg[1] && seg[2] === 'submit') {
+    const c = db.campaigns.find((x: any) => x.id === seg[1]);
+    if (!c) return { status: 404, body: { error: 'not found' } };
+    if (c.status === 'pending' && c.review?.state === 'in_review') return { body: { campaign: c, unchanged: true } };
+    if (!['draft','pending'].includes(c.status)) throw new AccessError(409, 'Only a draft or pending campaign can be submitted for review');
+    if (!(c.creative_ids || []).length) throw new AccessError(400, 'Add at least one creative before submitting for review');
+    // Same validation as create/update: freezeBookings with status 'pending' holds capacity as pending does today.
+    const previousCampaign = structuredClone(c);
+    c.status = 'pending';
+    freezeBookings(c, previousCampaign);
+    c.review = { state: 'in_review', submitted_at: nowISO(), submitted_by: actor.id, decided_at: null, decided_by: null, note: null, activation_error: null };
+    await save(); return { body: { campaign: c } };
+  }
+  if (method === 'POST' && seg[0] === 'campaign' && seg[1] && seg[2] === 'review') {
+    const c = db.campaigns.find((x: any) => x.id === seg[1]);
+    if (!c) return { status: 404, body: { error: 'not found' } };
+    if (['complete','cancelled'].includes(c.status)) throw new AccessError(409, 'This campaign is closed');
+    const results: any[] = [];
+    for (const [id, decision] of Object.entries(body.creatives || {}) as [string, string][]) {
+      const cr = db.creatives.find((x: any) => x.id === id);
+      if (!cr) throw new AccessError(400, 'Creative not found');
+      const changed = cr.approval_status !== decision;
+      if (changed) setCreativeApproval(cr, decision);
+      results.push({ id, approval_status: cr.approval_status, approved_at: cr.approved_at ?? null, changed });
+    }
+    const decisions = creativeDecisions(c), decided = { decided_at: nowISO(), decided_by: actor.id, note: body.note ?? null };
+    let activation: any = { attempted: false, activated: c.status === 'active', error: null };
+    // Only a campaign the seller submitted (review.state in_review) is activated or sent back here. For re-review
+    // items the decisions apply to the creatives alone and the campaign status is left as it is.
+    if (['draft','pending'].includes(c.status) && c.review?.state === 'in_review' && !decisions.pending) {
+      if (decisions.approved) {
+        const outcome = attemptActivation(c, actor);
+        activation = { attempted: true, activated: outcome.activated, error: outcome.activated ? null : outcome.error };
+        if (!outcome.activated) c.review = { ...(c.review || {}), state: 'approved_not_started', ...decided, activation_error: outcome.error, attempted_at: nowISO(), attempted_by: actor.id };
+      } else if (decisions.rejected) c.review = { ...(c.review || {}), state: 'changes_needed', ...decided, activation_error: null };
+    }
+    await save();
+    return { body: { campaign: c, creatives: results, activation, rejected: decisions.rows.filter((x: any) => x.approval_status === 'rejected').map((x: any) => x.id) } };
+  }
+  if (method === 'POST' && seg[0] === 'campaign' && seg[1] && seg[2] === 'activate') {
+    const c = db.campaigns.find((x: any) => x.id === seg[1]);
+    if (!c) return { status: 404, body: { error: 'not found' } };
+    if (c.status === 'active') return { body: { campaign: c, activation: { attempted: false, activated: true, error: null }, unchanged: true } };
+    if (!['draft','pending'].includes(c.status)) throw new AccessError(409, 'Only a draft or pending campaign can be activated. Resume a paused campaign instead.');
+    const decisions = creativeDecisions(c);
+    if (decisions.pending) throw new AccessError(409, 'Every assigned creative needs a review decision before the campaign can start');
+    if (!decisions.approved) throw new AccessError(409, 'At least one assigned creative must be approved before the campaign can start');
+    const outcome = attemptActivation(c, actor);
+    if (outcome.activated) { await save(); return { body: { campaign: c, activation: { attempted: true, activated: true, error: null } } }; }
+    // Creative decisions stand; the campaign keeps its status and hold, and the reason is recorded for the seller.
+    c.review = { ...(c.review || {}), state: 'approved_not_started', activation_error: outcome.error, attempted_at: nowISO(), attempted_by: actor.id };
+    await save();
+    return { status: 409, commit: true, body: { error: outcome.error, campaign: c, activation: { attempted: true, activated: false, error: outcome.error } } };
+  }
+  if (method === 'GET' && p === 'review-queue') {
+    const now = Date.now();
+    const ended = (c: any) => { try { return campaignInterval(c)[1] <= now; } catch { return false; } };
+    const nameOf = (rows: any[], id: string) => rows.find((x: any) => x.id === id)?.name ?? null;
+    const creativeItem = (cr: any, campaignId: string) => ({ id: cr.id, name: cr.name, org_id: cr.org_id, category: cr.category, media_type: cr.media_type || 'video', approval_status: cr.approval_status,
+      youtube_id: cr.youtube_id || null, has_upload: Array.isArray(cr.assets) && cr.assets.length > 0, duration_s: cr.duration_s, updated_at: cr.updated_at ?? null, usage: creativeUsage(cr.id, campaignId) });
+    const items = db.campaigns.flatMap((c: any) => {
+      const decisions = creativeDecisions(c), pending = decisions.rows.filter((x: any) => !['approved','rejected'].includes(x.approval_status));
+      const submitted = ['draft','pending'].includes(c.status) && c.review?.state === 'in_review';
+      // Re-review needs evidence the campaign was already reviewed or ran: it is live/paused, was activated before, or
+      // every creative was approved and only activation failed (approved_not_started). A never-submitted draft/pending
+      // campaign (including legacy pending rows) and one sent back as changes_needed are the owner's to (re)submit.
+      const reviewedBefore = ['active','paused'].includes(c.status) || !!c.activated_at || c.review?.state === 'approved_not_started';
+      const reReview = !submitted && reviewedBefore && ['active','pending','paused'].includes(c.status) && pending.length > 0 && !ended(c);
+      if (!submitted && !reReview) return [];
+      return [{ reason: submitted ? 'submitted' : 're_review',
+        campaign: { id: c.id, name: c.name, campaign_type: c.campaign_type, advertiser_id: c.advertiser_id, advertiser_name: nameOf(db.advertisers, c.advertiser_id), org_id: c.org_id, org_name: nameOf(db.orgs, c.org_id),
+          starts_at: c.starts_at, ends_at: c.ends_at, screens: (c.screen_ids || []).length, status: c.status, review: c.review ?? null },
+        creatives: pending.map((cr: any) => creativeItem(cr, c.id)),
+        decided: decisions.rows.filter((x: any) => ['approved','rejected'].includes(x.approval_status)).map((x: any) => ({ id: x.id, name: x.name, approval_status: x.approval_status })) }];
+    }).sort((a: any, b: any) => String(a.campaign.review?.submitted_at ?? a.creatives[0]?.updated_at ?? '').localeCompare(String(b.campaign.review?.submitted_at ?? b.creatives[0]?.updated_at ?? '')));
+    const filler = db.creatives.filter((cr: any) => cr.purpose === 'filler' && cr.approval_status === 'pending')
+      .map((cr: any) => ({ id: cr.id, name: cr.name, org_id: cr.org_id, org_name: nameOf(db.orgs, cr.org_id), category: cr.category, media_type: cr.media_type || 'video', has_upload: Array.isArray(cr.assets) && cr.assets.length > 0, approval_status: cr.approval_status }));
+    return { body: { items, filler } };
   }
   if (method === 'POST' && p === 'campaign') {
     const c = createCampaign(body); await save(); return { body: c };
@@ -495,7 +642,7 @@ async function dispatch(method: string, seg: string[], q: URLSearchParams, body:
   if (method === 'POST' && seg[0] === 'creative' && seg[2] === 'approve') {
     const cr = db.creatives.find((x: any) => x.id === seg[1]);
     if (!cr) return { status: 404, body: { error: 'not found' } };
-    cr.approval_status = body.status || 'approved'; cr.approved_at = nowISO();
+    setCreativeApproval(cr, body.status || 'approved');
     await save(); return { body: cr };
   }
   if (method === 'GET' && seg[0] === 'creative' && seg[2] === 'preview') {

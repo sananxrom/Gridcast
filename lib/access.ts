@@ -44,6 +44,10 @@ export const ROUTES: { method: string; path: RegExp; caps: Cap[] }[] = [
   { method: 'POST', path: /^user\/[^/]+\/(role|status|newpassword)$/, caps: ['team'] },
   { method: 'GET', path: /^campaign\/[^/]+$/, caps: [] },
   { method: 'POST', path: /^campaign(?:\/[^/]+)?$/, caps: ['sales'] },
+  // Review workflow (doc 31 Phase 5): the seller submits and activates; only the platform reviews content.
+  { method: 'POST', path: /^campaign\/[^/]+\/(submit|activate)$/, caps: ['sales'] },
+  { method: 'POST', path: /^campaign\/[^/]+\/review$/, caps: ['platform'] },
+  { method: 'GET', path: /^review-queue$/, caps: ['platform'] },
   // Campaign drafts: creator-only, never read by playback, inventory, settlement or bootstrap.
   { method: 'POST', path: /^campaign-draft(?:\/[^/]+(?:\/(discard|submit))?)?$/, caps: ['sales'] },
   { method: 'GET', path: /^campaign-draft\/[^/]+$/, caps: ['sales'] },
@@ -125,7 +129,8 @@ function teamTarget(db: any, id: string, actor: any) {
     fail(403, 'You cannot manage an account above your role');
   return u;
 }
-function campaignRelations(db: any, c: any, actor: any) {
+/** Ownership and relation checks for a campaign body. Activation re-runs this, so it is exported. */
+export function campaignRelations(db: any, c: any, actor: any) {
   const origin = org(db, c.org_id, actor);
   if (c.campaign_type === 'network' && (!admin(actor) || origin.type !== 'gridcast' || c.origin_org_id !== c.org_id)) fail(403, 'Only platform administrators can manage Gridcast network campaigns');
   if (c.campaign_type === 'network' && c.rate_type !== 'per_play') fail(400, 'Network campaigns currently support per-play pricing only');
@@ -156,6 +161,19 @@ export function authorizeCampaignCreate(db: any, actor: any, input: any) {
   campaignRelations(db, body, actor);
   return body;
 }
+
+/**
+ * Generic campaign edits may pause, resume, complete or cancel (doc 31 Phase 5). A draft or pending campaign
+ * goes live only through POST /campaign/:id/activate, which requires approved creatives and revalidates.
+ * Pausing is allowed only from active, so pending → paused → active cannot be used as a detour.
+ */
+export function campaignStatusChange(from: string, to: string) {
+  if (from === to || to === 'complete' || to === 'cancelled') return;
+  if ((from === 'active' && to === 'paused') || (from === 'paused' && to === 'active')) return;
+  if (to === 'active') fail(409, 'A draft or pending campaign goes live through review: submit it for review, or activate it once every creative is approved');
+  fail(409, `A ${from} campaign cannot be set to ${to}`);
+}
+const REVIEW_DECISIONS = ['approved', 'rejected'];
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/, TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 const money = (v: any) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1e12;
@@ -283,9 +301,30 @@ export function authorize(db: any, actor: any, method: string, seg: string[], in
     if (!c || !campaignVisible(c, actor)) fail(404, 'Not found');
     if (method === 'POST') {
       if (c.campaign_type === 'network' && !admin(actor)) fail(403, 'Network campaigns are managed by the platform');
-      rejectUnknown(body, CAMPAIGN_EDIT);
-      if ('invoice_status' in body && !can(actor.role, 'money')) fail(403, 'Billing requires money access');
-      campaignRelations(db, { ...c, ...body }, actor);
+      if (!action) {
+        rejectUnknown(body, CAMPAIGN_EDIT);
+        if ('invoice_status' in body && !can(actor.role, 'money')) fail(403, 'Billing requires money access');
+        if ('status' in body) campaignStatusChange(c.status, body.status);
+        campaignRelations(db, { ...c, ...body }, actor);
+      } else if (action === 'submit') {
+        rejectUnknown(body, []);
+        campaignRelations(db, c, actor);
+      } else if (action === 'activate') {
+        // Relations, dates, capacity and budget are rechecked inside the activation attempt, so a failure is
+        // recorded on the campaign as review.activation_error instead of being lost.
+        rejectUnknown(body, []);
+      } else if (action === 'review') {
+        rejectUnknown(body, ['creatives', 'note']);
+        const decisions = body.creatives ?? {};
+        if (!decisions || typeof decisions !== 'object' || Array.isArray(decisions)) fail(400, 'Expected creative decisions as {creative id: approved | rejected}');
+        if (Object.keys(decisions).length > 200) fail(400, 'Too many creative decisions');
+        for (const [cid, decision] of Object.entries(decisions)) {
+          if (!(c.creative_ids || []).includes(cid)) fail(400, 'Only creatives assigned to this campaign can be reviewed here');
+          if (!REVIEW_DECISIONS.includes(decision as string)) fail(400, 'Each creative decision must be approved or rejected');
+        }
+        if (body.note !== undefined && body.note !== null && (typeof body.note !== 'string' || body.note.length > 1000)) fail(400, 'The review note must be text of up to 1000 characters');
+        body = { creatives: { ...decisions }, note: typeof body.note === 'string' && body.note.trim() ? body.note.trim() : null };
+      }
     }
   }
   if (path === 'campaign' && method === 'POST') body = authorizeCampaignCreate(db, actor, body);
@@ -514,6 +553,9 @@ export function campaignView(db: any, c: any, actor: any, orgId?: string | null)
     out.reporting_scope = 'organisation';
   }
   if (actor.role === ADVERTISER) out.bookings = (out.bookings || []).map((b: any) => pick(b,['screen_id','slots_per_loop','rotation_weight','rate_type','rate_value','rate_version','booked_at']));
+  // Advertisers get the review state for status, not reviewer/seller user ids, reviewer notes or activation diagnostics
+  // (doc 31 Phase 6). Eligibility decisions are already withheld from them by GET /campaign/:id.
+  if (actor.role === ADVERTISER && out.review) out.review = pick(out.review,['state','submitted_at','decided_at']);
   return out;
 }
 export function bootstrap(db: any, actor: any, screenStatus: (s: any) => any, orgId?: string | null) {

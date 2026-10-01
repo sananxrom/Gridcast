@@ -198,7 +198,12 @@ export function campaignStatus(input: CampaignStatusInput): CampaignStatus {
   // Rows 1-5: lifecycle states that need no delivery evidence.
   if (c?.status === 'draft') return out('draft', 'Draft', 'muted');
   if (c?.review?.state === 'in_review') return out('in_review', 'In review', 'default');
-  if (c?.review?.state === 'changes_needed') return out('changes_needed', 'Changes needed', 'warn');
+  if (c?.review?.state === 'changes_needed') return out('changes_needed', 'Changes needed', 'warn', 'changes_needed', c.review.note || 'Creatives rejected in review');
+  // Approved in review but activation failed (doc 31 Phase 5). Shown before Ended: an expired end date is the reason.
+  if (c?.review?.state === 'approved_not_started' && c.status !== 'active') {
+    const text = 'Approved, cannot start: ' + plain(String(c.review.activation_error || 'activation failed'));
+    return out('not_delivering', 'Not delivering · ' + text, 'destructive', 'approved_not_started', text);
+  }
   let interval: [number, number] | null = null;
   try { interval = campaignInterval(c); } catch { interval = null; }
   if (c?.status === 'complete' || c?.status === 'cancelled' || (interval && now >= interval[1])) return out('ended', 'Ended', 'muted');
@@ -290,4 +295,13 @@ export function blockedAlerts(d: { campaigns?: any[]; creatives?: any[]; screens
     const waitingOnApproval = s.reason_code === 'creative_not_approved' && (c.creative_ids || []).some((id: string) => (d.creatives || []).find((x: any) => x.id === id)?.approval_status === 'pending');
     return waitingOnApproval ? [] : [{ kind: 'Delivery', tone: 'destructive', text: `${c.name}: ${s.label}`, go: 'c/' + c.id }];
   });
+}
+/**
+ * Overview headline counts from Phase 1 states (doc 31 Phase 6), replacing date-only `isLive` counts. Live needs the
+ * delivery-evidence summary: before it loads the live count is unknown, not 0. Not delivering needs no evidence.
+ */
+export function campaignStateSummary(statuses: Pick<CampaignStatus, 'state'>[], evidence: { loaded: boolean; error?: string | null }) {
+  const count = (state: CampaignState) => statuses.filter(s => s.state === state).length;
+  const live = evidence.loaded ? `${count('live')} live` : evidence.error ? 'live unknown' : 'live checking…';
+  return { live: evidence.loaded ? count('live') : null, not_delivering: count('not_delivering'), text: `${live} · ${count('not_delivering')} not delivering campaigns` };
 }
