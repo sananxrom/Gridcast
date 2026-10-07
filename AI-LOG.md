@@ -5892,3 +5892,18 @@ Sanan ran `graphify query "attemptActivation" --graph /Users/sanan/Downloads/gc/
 **Reviewed:** app/robots.ts allows crawling with no sitemap; next.config.mjs supplies catch-all X-Robots-Tag noindex, nofollow; app/layout.tsx adds matching metadata. No authentication changes. Broad rule intentionally applies to all domains serving this product build, including default Firebase URL; separate Vercel landing is unaffected.
 **Verified:** Independently ran tests/robots-noindex.test.cjs: 3/3 passed; production build exit 0, including type checks; git diff --check clean. Graphify initially found no robots/noindex nodes; source inspected directly. Refreshed Graphify, SymDex and codebase-memory successfully after review. Logs /tmp/gridcast-noindex-build.log and /tmp/gridcast-noindex-{graphify,symdex,cbm}.log. No broad browser suite required for this metadata/config-only change; actual deployed responses remain the decisive next check. Previous /tmp release-status helper was absent; will verify via installed Firebase API client.
 **Scope:** Stage only app/robots.ts, app/layout.tsx, next.config.mjs, tests/robots-noindex.test.cjs and AI-LOG.md. Preserve unrelated local tooling and research files. Commit/push and exact-SHA rollout next; outcome follows. Base 71a5e66.
+
+
+### 2026-10-07 14:08 IST · GPT-6 (Codex desktop) · Noindex patch pushed; deployment blocked by expired Firebase login
+
+**Result:** Commit 539dc3a9baf2b882ac1337f16873358a05812693 pushed successfully to codex/gridcast-trust-layer-wp5. Exact-SHA Firebase rollout command failed with expired authentication before a rollout was created. Started fresh official reauthentication and opened Google account selection for Sanan; no auth codes/secrets logged.
+**Open:** User completes Firebase sign-in. Then deploy existing reviewed SHA 539dc3a9baf2b882ac1337f16873358a05812693 and verify live noindex headers, robots Allow: /, root metadata and app health. No application deployment completed in this turn; previous live application remains unchanged.
+**Files:** AI-LOG.md follow-up only, not committed yet.
+
+
+### 2026-10-07 14:15 IST · GPT-6 (Codex desktop) · App noindex correction deployed and verified live
+
+**Asked:** Complete Firebase reauthentication and finish authorized rollout.
+**Released:** 539dc3a9baf2b882ac1337f16873358a05812693 to gridcast-backend / gridcast-508011 / asia-southeast1. API verifies build-2026-10-07-001 READY, rollout SUCCEEDED, exact source hash and 100% current traffic. CLI completed successfully. Authentication refreshed; no credentials logged.
+**Live checks:** app.gridcast.si root HTTP 200 with X-Robots-Tag: noindex, nofollow and matching robots meta; robots.txt HTTP 200 with User-Agent: * / Allow: / and no sitemap; /api/_health HTTP 200, ok=true, Firestore database gridcast, with noindex header; /icon.svg HTTP 200 with same header. Separate gridcast.si landing HTTP 200, no X-Robots-Tag and robots meta index, follow. This confirms the product's directives do not affect the landing deployment. No claim that search engines have already removed existing results; that requires recrawling. No authenticated UI/player tests performed for this metadata-only patch.
+**Outcome:** Released and live responses verified. Prior entry records independent focused tests/build and shared-index refresh. Only this follow-up and previous failed-auth outcome appended since application commit; log-only commit follows, no redeploy needed. Unrelated local tooling/research preserved.
