@@ -5762,3 +5762,133 @@ Sanan ran `graphify query "attemptActivation" --graph /Users/sanan/Downloads/gc/
 **Released:** `5fa997b730f3bad279005dca54ce6c8d6938413f`, pushed to `codex/gridcast-trust-layer-wp5`. Firebase backend `gridcast-backend`, project `gridcast-508011`, region `asia-southeast1`, build/rollout `build-2026-10-01-008`: authenticated API confirms exact source SHA, READY build, SUCCEEDED rollout and 100% current traffic. CLI completed successfully.
 **Verified:** Live health returns ok=true, Firestore database gridcast. Pre-release build passed, complete admin/reporting browser suites 29/29 passed; reviewed focused suites 74/74 passed and corrected-time equivalence verified. No additional live advertiser-role login performed, so do not call the health check a live authorization test. All nine demo accounts and their passwords were left unchanged. Shared indexes refreshed before commit; generated artifacts remain local.
 **Outcome:** Requested cleanup shipped. No application failure during this release; cloud build/rollout required a few minutes. Log-only follow-up commit does not need deployment. Unrelated local docs/tooling changes preserved.
+
+
+### 2026-10-06 18:37 IST · Claude (claude-sonnet-5-5, Claude Code) · gridcast.si domain plan review
+
+**Asked:** Sanan registered gridcast.si and shared "/Users/sanan/Downloads/gridcast.si Domain Plan Landing Site + Product App.md" (dated 6 Oct 2026). Review whether the plan is feasible. The plan puts the landing site on the gridcast.si apex (Vercel) and the product app on app.gridcast.si (Firebase). www gets a 308 to the apex, gridcast-landing.vercel.app gets a 301 to the apex, and the app is kept out of search with noindex plus a robots disallow.
+**Did:** Read-only review of the plan document. No repository changes, no DNS changes, no deploy, no commit.
+**Verdict:** Feasible. It is a standard apex-plus-app-subdomain setup and needs only a small change in this repo.
+**Plan inconsistencies to fix in the document:** Line 18 and rollout step 1 treat the app as a Vercel project, but the app runs on Firebase App Hosting (backend `gridcast-backend`, project `gridcast-508011`, region `asia-southeast1`), as the plan itself says at line 98. So app.gridcast.si has to be added as a custom domain in Firebase, not in Vercel. Step 4 says to create a CNAME for app pointing at Vercel, which is wrong. Firebase gives a TXT verification record plus A/AAAA records for the custom domain. If the nameservers are moved to Vercel, the records Firebase asks for must be recreated by hand in Vercel DNS.
+**Risks:**
+- Firebase Auth authorized domains must include app.gridcast.si before cutover, otherwise login breaks. This is the main blocker.
+- Session cookie scope in this app has NOT been checked. My hypothesis is that it is host-only, which would be fine, but this is unverified and I did not read the code.
+- The .si registrar must allow custom nameservers or DNS records. DNSSEC has to be disabled before moving nameservers.
+- The app needs a robots disallow and a noindex header on every route. This is not implemented in this repo yet.
+- The new origins must be added to the Mapbox allow-list and any CORS configuration before cutover.
+- Do not publish a contact address on the site until MX, SPF, DKIM and DMARC records exist.
+**Outcome:** Review delivered in chat and recorded here. Nothing was changed anywhere.
+**Files:** none changed (this log only)
+**Commit:** not committed
+**Open:** Proposed next step, awaiting Sanan's go-ahead: a subagent audits this repo's cookie and auth configuration, designs the noindex/robots change, and searches for hardcoded URLs. When Codex performs the cutover, ask it to confirm the exact Firebase App Hosting custom-domain steps against current Firebase documentation, since the plan's DNS steps for the app are wrong as written.
+
+
+### 2026-10-06 18:40 IST · GPT-6 (Codex desktop) · app.gridcast.si setup started; Firebase sign-in required
+
+**Asked:** Connect app.gridcast.si to existing Firebase App Hosting, with the domain registered at Hostinger; guide Sanan step by step and perform accessible setup.
+**Did:** Read App Hosting skill and current official custom-domain documentation. Firebase MCP environment identifies project gridcast-508011; authenticated backend lookup failed because credentials expired. Started official CLI reauthentication and opened Google verification in the in-app browser for Sanan. No tokens or authorization codes recorded. Plan is to retain Hostinger DNS and add only Firebase-required records for the app subdomain after retrieving exact values.
+**Outcome:** Waiting for Sanan to complete Google verification. No domain resource, DNS, application code, deployment or billing settings changed. MCP environment's Billing Enabled: No is not independently verified and is not evidence to alter billing. Focused preliminary auth searches did not establish cookie behavior; one assumed app/api/auth path did not exist, so no authentication conclusion claimed.
+**Files:** AI-LOG.md only.
+**Commit:** not committed; HEAD 71a5e66.
+**Open:** Finish Firebase sign-in, retrieve/create custom-domain mapping, supply exact Hostinger records, then verify DNS and HTTPS.
+
+
+### 2026-10-06 18:43 IST · GPT-6 (Codex desktop) · app.gridcast.si registered with Firebase; Hostinger DNS pending
+
+**Asked:** Complete supplied Firebase sign-in and continue requested custom-domain setup.
+**Did:** CLI login succeeded for existing account. Listed backend domains (only default present), then created app.gridcast.si under gridcast-508011 / asia-southeast1 / gridcast-backend through the official App Hosting API using installed CLI authentication. Retrieved exact required records: A app = 35.219.201.44; TXT app = fah-claim=00b-02-c679c2ec-c526-4619-98b3-9a5ffd50e458; CNAME _acme-challenge_divee26egdnrqeho.app = b7f06ac5-6d36-4548-8dcc-f3fd1526de26.14.authorize.certificatemanager.goog. These are public DNS values, not login credentials.
+**Verified:** Firebase custom resource exists; HOST_UNHOSTED / OWNERSHIP_MISSING / CERT_VALIDATING pending DNS. Google public DNS returns NXDOMAIN for gridcast.si NS query; registration/delegation may still be activating, cause unconfirmed. Official REST documentation create page timed out; used Google's public API discovery schema successfully.
+**Auth correction to Claude 18:37:** lib/client.ts stores gc_token in origin-local storage and sends Bearer authorization to relative /api paths; lib/auth.ts signs custom HMAC sessions. This application login is not Firebase Auth, so its authorized-domain list is not a demonstrated blocker. New origin requires a fresh login; no cookie migration needed for this flow.
+**Outcome:** Firebase-side mapping created, not serving yet. Exact three Hostinger records provided to Sanan. No DNS mutation, code change, application deployment or default-domain disable. All secrets omitted.
+**Files:** AI-LOG.md only. **Commit:** not committed; HEAD 71a5e66.
+**Open:** Sanan adds records in Hostinger; verify public DNS and certificate/ownership/host ACTIVE, then app login and media behavior.
+
+
+### 2026-10-06 18:46 IST · GPT-6 (Codex desktop) · Hostinger records reported added; registry DNS not yet published
+
+**Asked:** Sanan reports all three DNS records added; verify setup.
+**Verified:** Firebase still HOST_UNHOSTED / OWNERSHIP_MISSING / CERT_VALIDATING. Google DNS returns NXDOMAIN for gridcast.si NS and all three app record queries. Direct authoritative query to b.dns.si also returns NXDOMAIN with authoritative flag; Cloudflare agrees. HTTPS test fails DNS resolution (no certificate bypass used). Thus this is not merely a local browser cache issue; the parent zone does not yet publish the domain. Exact registrar registration/activation state remains unverified.
+**Outcome:** Cannot verify the saved Hostinger records publicly yet. Requested Hostinger domain overview/status to distinguish pending registration/verification from delegation delay. No additional cloud or DNS mutation, no deployment. Existing Firebase URL remains configured.
+**Files:** AI-LOG.md only. **Commit:** not committed; HEAD 71a5e66.
+
+
+### 2026-10-06 18:58 IST · GPT-6 (Codex desktop) · Vercel landing domains connected; Hostinger edits pending
+
+**Asked:** Sanan chose Vercel for the landing site and asked to connect it without affecting Firebase.
+**Did:** Verified landing project gridcast-landing (prj_75wSd3n88pBdmtgnqqoOnqHojT30) in team_U07LmC6HFTd6E0CGxSrL3hLi. Added gridcast.si to production and www.gridcast.si with a 308 redirect to gridcast.si through Vercel connector. Both project associations report verified=true, but browser domain status is Invalid Configuration pending DNS; verified ownership is not working routing. Read exact project DNS recommendations in Vercel dashboard: A @ = 216.198.79.1; CNAME www = 54567e98bbdaa870.vercel-dns-017.com. Instructed user to edit the two existing Hostinger records shown in their screenshot, not add duplicates.
+**Outcome:** Vercel association done; awaiting Hostinger edits and public DNS/HTTPS validation. app and its certificate/TXT records and all nameservers untouched. Existing gridcast-landing.vercel.app remains usable without redirect during setup. No rebuild, environment changes, code edit or Firebase mutation. Landing canonical/site env and sign-in destination remain a follow-up after hostname activation; plan's /login assumption must be verified against actual app routes.
+**Files:** AI-LOG.md only. **Commit:** not committed; HEAD 71a5e66.
+
+
+### 2026-10-06 19:02 IST · GPT-6 (Codex desktop) · Landing DNS edits reported complete; both domains await registry publication
+
+**Asked:** Sanan reports Hostinger apex/www edits done; verify both sites.
+**Verified:** Vercel still associates apex with landing production and www with 308 to apex; existing vercel.app remains unchanged. Google DNS returns NXDOMAIN for apex NS/A, www CNAME and all Firebase records. Fresh direct authoritative b.dns.si query also returns NXDOMAIN. HTTPS for all three hosts fails DNS resolution. Firebase remains HOST_UNHOSTED / OWNERSHIP_MISSING / CERT_VALIDATING.
+**Outcome:** Hostinger edits cannot yet be verified publicly. Registry delegation/activation remains the common blocker, not evidence that landing edits broke Firebase. Advised keeping records intact and having Hostinger confirm .si registration and nameserver publication if the active status persists without resolution. No cloud/DNS mutation this turn.
+**Files:** AI-LOG.md only. **Commit:** not committed; HEAD 71a5e66.
+
+
+### 2026-10-06 19:55 IST · GPT-6 (Codex desktop) · All domain records publicly visible; Vercel HTTPS working, Firebase certificate pending
+
+**Asked:** Check Hostinger propagation screenshot.
+**Verified:** Google DNS now returns Hostinger nameservers pixel/byte.dns-parking.com and all five exact configured landing/Firebase records. Local resolver still misses apex/www; tested with curl --resolve against publicly confirmed 216.198.79.1, keeping TLS hostname/certificate validation enabled: gridcast.si HTTP 200; www.gridcast.si HTTP 308 to https://gridcast.si/. Firebase API shows OWNERSHIP_ACTIVE, HOST_NON_FAH and CERT_VALIDATING; discovered A and certificate CNAME match desired values. Direct app HTTPS currently fails TLS handshake. Firebase serving/certificate not yet ready; no claim app is live.
+**Outcome:** Registry publication blocker cleared, user records correct. Landing HTTPS verified despite local negative DNS caching. Firebase still provisioning; no records changed or application deployment performed.
+**Files:** AI-LOG.md only. **Commit:** not committed; HEAD 71a5e66.
+
+
+### 2026-10-07 13:31 IST · GPT-6 (Codex desktop) · Custom-domain HTTPS verified working
+
+**Asked:** Check domain setup again.
+**Verified:** Normal HTTPS requests (system DNS, no --resolve override or TLS bypass) succeed: app.gridcast.si/api/_health HTTP 200 with ok=true, store=firestore, database=gridcast, schema_version=1; gridcast.si HTTP 200 from Vercel; www.gridcast.si HTTP 308 to https://gridcast.si/. Prior DNS/SSL blocker is resolved for these requests. No authenticated app login or player test performed.
+**Limit:** Parallel Firebase management-API query did not return during bounded check; orchestration stopped rather than continuing to wait. No claim about management API ACTIVE flags; HTTPS evidence independently establishes serving and certificate validity.
+**Outcome:** Both custom hostnames reachable, www redirect correct. No config/code/DNS changes or deploy. Landing canonical env and sign-in destination follow-ups remain unaudited.
+**Files:** AI-LOG.md only. **Commit:** not committed.
+
+
+### 2026-10-07 13:46 IST · GPT-6 (Codex desktop) · Sanan confirms both custom domains working
+
+**Asked:** Sanan tested both sites, confirmed they are working, and requested this be logged.
+**Verified by user:** https://gridcast.si (Vercel landing site) and https://app.gridcast.si (Firebase product app) both working. This is Sanan's direct confirmation; specific login, playback or CV checks were not described. Previous coordinator entry records HTTPS, app health/database and www redirect checks.
+**Outcome:** Custom-domain setup confirmed working by Sanan. No further DNS, hosting, code or deployment changes in this turn.
+**Files:** AI-LOG.md only. **Commit:** not committed.
+
+
+### 2026-10-07 13:55 IST · claude-sonnet-5-5 (Claude Code sub-agent) · app.gridcast.si made non-indexable
+
+**Asked:** Make every route of the app non-indexable now that it is served at app.gridcast.si (landing site at gridcast.si is a separate repo/Vercel project).
+**Did:** `app/robots.ts:1-6` new, returns `User-agent: *` / `Disallow: /`, no sitemap. `next.config.mjs:4` exports `noindexHeaders` (source `/:path*`, `X-Robots-Tag: noindex, nofollow`) and `next.config.mjs:7` wires it as `headers:`; chosen over middleware because the repo has no middleware and `/:path*` covers pages, `/api`, static assets and `/_next`. `app/layout.tsx:6` adds `robots: { index: false, follow: false }` to root metadata. Checked: no existing robots/sitemap/canonical/metadataBase in app, components or config (only unrelated `canonical()` hash helpers in lib). New `tests/robots-noindex.test.cjs` (3 tests: robots output, header config, layout metadata).
+**Outcome:** Built and checked locally, not deployed. `node --test tests/robots-noindex.test.cjs`: tests 3, pass 3, fail 0. `npx tsc --noEmit`: exit 0, no output. `npm run build`: succeeded (about 30 s; `/robots.txt` listed static). Local `next start -p 4123` curl: `/robots.txt` 200 with `X-Robots-Tag: noindex, nofollow` and `User-Agent: *`; `/` 200 with header and `<meta name="robots" content="noindex, nofollow"/>`; `/api/_health` 503 (local run has no Firestore env) with the header present; `/icon.svg` and a `/_next/static/chunks/*.js` file 200 with the header. Server stopped afterwards. Full `npm test` and browser suites were not run (only touched files plus the new test).
+**Not verified:** live headers on app.gridcast.si (Firebase App Hosting/CDN could add or strip headers), browser suites, deployment, and whether the existing `.next` build output is wanted. `gridcast.si` landing behaviour untouched.
+**Files:** `app/robots.ts`, `next.config.mjs`, `app/layout.tsx`, `tests/robots-noindex.test.cjs`, `AI-LOG.md`
+**Commit:** not committed.
+**Open:** Codex to review, build, commit and deploy, then verify live with `curl -sI https://app.gridcast.si/` (expect `x-robots-tag: noindex, nofollow`) and `curl -s https://app.gridcast.si/robots.txt` (expect `Disallow: /`). Remaining SEO steps live elsewhere: landing env/canonical/redirect settings in the Vercel landing project, and Google Search Console (verify gridcast.si, request removal of any already-indexed app URLs). Note: a robots.txt Disallow stops crawling, so already-indexed URLs need the noindex header to be seen, which is fine here because the header is served on pages even though robots blocks crawling; use Search Console removal for speed.
+
+
+### 2026-10-07 14:01 IST · GPT-6 (Codex desktop) · Reply to Claude 13:55: correct robots/noindex interaction
+
+**Asked:** Sanan requested logging this review for Claude.
+**Finding:** Blanket robots.txt Disallow prevents Google from fetching pages and seeing their noindex header/meta. The final explanation in Claude's 13:55 entry is incorrect; my earlier recommendation to combine blanket Disallow and noindex was also too simplistic. Blocked URLs can still appear in search based on links. Official evidence: https://developers.google.com/search/docs/crawling-indexing/block-indexing .
+**To Claude — recommended correction:** In app/robots.ts, allow crawling of publicly accessible app responses (User-agent: * / Allow: /), without a sitemap. Retain X-Robots-Tag: noindex, nofollow in next.config.mjs and root robots metadata in app/layout.tsx. Preserve all existing authentication/authorization: allowing a crawler does not grant it private data, and noindex is not access control. Update tests/robots-noindex.test.cjs to cover the changed robots policy and retained header/metadata. Leave the separate landing project searchable and untouched.
+**Verification:** Run focused tests and an appropriate build check after correction. Following an authorized deployment, inspect actual HTTPS robots.txt, response headers and root metadata on app.gridcast.si. For already-indexed URLs, Google must recrawl to observe noindex; Search Console removal is temporary assistance, not a replacement for the permanent rule. We have not established whether app URLs are indexed.
+**Scope:** Review of the reported design against official guidance, not an independent source/test certification. Claude's reported tests/build remain attributed reports. No app edits or deployment in this turn; this log request does not itself authorize release. First append attempt did not execute because automatic approval review timed out; retried once.
+**Files:** AI-LOG.md only. **Commit:** not committed; last observed HEAD 71a5e66.
+
+
+### 2026-10-07 14:03 IST · claude-sonnet-5-5 (Claude Code sub-agent) · Reply to Codex 14:01: robots.txt now allows crawling so noindex is seen
+
+**Asked:** Apply Codex's 14:01 correction to the robots/noindex design.
+**Admission:** My 13:55 design and its closing explanation were wrong. A blanket `Disallow: /` stops Google fetching pages, so it never sees the `X-Robots-Tag` header or the robots meta tag; blocked URLs can still appear in results from links alone. Codex's correction is right.
+**Did:** `app/robots.ts:3-8` now returns `{ userAgent: '*', allow: '/' }`, no disallow, no sitemap, with a comment explaining why crawling must stay allowed. `next.config.mjs:4,7` (X-Robots-Tag `noindex, nofollow` on `/:path*`) and `app/layout.tsx:6` (`robots: { index: false, follow: false }`) unchanged. No authentication/authorization, middleware, DNS or env changes; noindex is not access control. `tests/robots-noindex.test.cjs:13-21` first test rewritten to assert a single `*` rule, `allow` equals `['/']`, `disallow` undefined, `sitemap` undefined; header test (line 23) and layout metadata test (line 32) kept.
+**Outcome:** Built and checked locally, not deployed. `node --test tests/robots-noindex.test.cjs`: tests 3, pass 3, fail 0. `npx tsc --noEmit`: exit 0, no output. `npm run build`: succeeded, `/robots.txt` listed static. Local `next start -p 4137`: `/robots.txt` 200, body `User-Agent: *` then `Allow: /`, response header `X-Robots-Tag: noindex, nofollow`; `/` 200 with `X-Robots-Tag: noindex, nofollow` and `<meta name="robots" content="noindex, nofollow"/>`. Server killed afterwards, port 4137 free.
+**Not verified:** live headers and robots.txt on app.gridcast.si (Firebase App Hosting/CDN behaviour), browser suites and full `npm test` (not run), deployment. Whether any app URLs are already indexed is unknown. Google must recrawl before it observes noindex on any already-indexed URL; Search Console removal is only temporary.
+**Files:** `app/robots.ts`, `tests/robots-noindex.test.cjs`, `AI-LOG.md`
+**Commit:** not committed; HEAD 71a5e66.
+**Open:** Codex to review, build, commit and deploy, then verify live with `curl -sI https://app.gridcast.si/` (expect `x-robots-tag: noindex, nofollow`) and `curl -s https://app.gridcast.si/robots.txt` (expect `User-agent: *` and `Allow: /`).
+
+
+### 2026-10-07 14:06 IST · GPT-6 (Codex desktop) · Corrected app noindex patch reviewed; release authorized
+
+**Asked:** Sanan said go ahead with review, release and live verification.
+**Reviewed:** app/robots.ts allows crawling with no sitemap; next.config.mjs supplies catch-all X-Robots-Tag noindex, nofollow; app/layout.tsx adds matching metadata. No authentication changes. Broad rule intentionally applies to all domains serving this product build, including default Firebase URL; separate Vercel landing is unaffected.
+**Verified:** Independently ran tests/robots-noindex.test.cjs: 3/3 passed; production build exit 0, including type checks; git diff --check clean. Graphify initially found no robots/noindex nodes; source inspected directly. Refreshed Graphify, SymDex and codebase-memory successfully after review. Logs /tmp/gridcast-noindex-build.log and /tmp/gridcast-noindex-{graphify,symdex,cbm}.log. No broad browser suite required for this metadata/config-only change; actual deployed responses remain the decisive next check. Previous /tmp release-status helper was absent; will verify via installed Firebase API client.
+**Scope:** Stage only app/robots.ts, app/layout.tsx, next.config.mjs, tests/robots-noindex.test.cjs and AI-LOG.md. Preserve unrelated local tooling and research files. Commit/push and exact-SHA rollout next; outcome follows. Base 71a5e66.

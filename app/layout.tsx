@@ -3,6 +3,7 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: 'Gridcast',
+  robots: { index: false, follow: false },
   description: 'The AdEngine for the physical world — verified playback and measured presence on every screen.',
 };
 
