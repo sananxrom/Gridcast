@@ -6054,3 +6054,22 @@ Sanan ran `graphify query "attemptActivation" --graph /Users/sanan/Downloads/gc/
 **Verification:** Both production builds passed; landing diff check clean. Firebase deployment-access check failed; deployment outcome pending. Android source/APK unchanged. Company source edits are scoped separately from uncommitted Android work.
 **Files:** components/ui/auth-page.tsx, AI-LOG.md; landing components/landing/footer.tsx, lib/site.ts, lib/seo/pages.ts, lib/seo/schema.ts and Ai-log.md.
 **Commit:** Pending scoped commits; application baseline16e0ea1, landing baseline df7c568.
+
+### 2026-10-13 02:05 IST · GPT-6 (Codex desktop coordinator) · Company update release status
+
+**Outcome:** Landing commit 221388258a1e5bebd510d64bdfdab195a36bbbdf pushed; Vercel deployment dpl_9kzscgNvGkxpNYidifTySGrwptYf READY for production. Verified live gridcast.si root and /about contain Gridcast Technologies Pvt. Ltd. and Sector 35B, Chandigarh, India; full street address absent. App copyright commit 9308211 pushed, build passed, but Firebase credentials expired (authentication explicitly requests reauth); app deployment not attempted with invalid credentials and live app remains unchanged. Fresh Firebase sign-in is the only remaining publication step. All three local project indexes refreshed. Full address remains in private workspace note. Android APK unchanged.
+**Files:** AI-LOG.md follow-up only; landing Ai-log.md also updated. **Commit:** This follow-up not committed.
+
+### 2026-10-13 02:21 IST · GPT-6 (Codex desktop coordinator) · Firebase reauthentication started
+
+**Asked:** Sanan requested fresh Firebase login.
+**Did:** Started official CLI reauthentication and opened its sign-in page. Awaiting user completion; no codes or session URLs recorded here.
+**Open:** Complete login, then deploy reviewed copyright commit 9308211 and verify live app. No deployment performed yet.
+**Files:** AI-LOG.md only. **Commit:** Follow-up not committed.
+
+### 2026-10-13 02:28 IST · GPT-6 (Codex desktop coordinator) · Firebase company copyright deployed
+
+**Asked:** Complete user-provided Firebase login and publish prepared update.
+**Did:** Reauthentication succeeded; no credentials logged. Deployed exact commit 9308211a52892882e425e83ae111b3f770c599f5. Rollout build-2026-10-12-001 verified SUCCEEDED, build READY, 100 percent traffic.
+**Live verification:** app.gridcast.si root HTTP200 contains Gridcast Technologies Pvt. Ltd. and retains X-Robots-Tag noindex,nofollow. /api/_health HTTP200, ok=true, Firestore database gridcast. Landing company update was already verified live at2213882. Both website publication tasks complete. Full address remains private. Android APK untouched. No player/UI regression suite rerun for this one-line copyright change; production build passed before release.
+**Files:** AI-LOG.md follow-up. **Commit:** Application9308211; log-only follow-up to be committed, no redeploy required.
