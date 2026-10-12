@@ -44,6 +44,7 @@ export function AuthLayout({ children, quote, by }: {
         <div className="relative z-10 mx-auto w-full space-y-4 sm:w-[24rem]">
           <BrandLogo className="lg:hidden" />
           {children}
+          <p className="pt-4 text-xs text-muted-foreground">© {new Date().getFullYear()} Gridcast Technologies Pvt. Ltd.</p>
         </div>
       </div>
     </main>
