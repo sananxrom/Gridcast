@@ -6073,3 +6073,24 @@ Sanan ran `graphify query "attemptActivation" --graph /Users/sanan/Downloads/gc/
 **Did:** Reauthentication succeeded; no credentials logged. Deployed exact commit 9308211a52892882e425e83ae111b3f770c599f5. Rollout build-2026-10-12-001 verified SUCCEEDED, build READY, 100 percent traffic.
 **Live verification:** app.gridcast.si root HTTP200 contains Gridcast Technologies Pvt. Ltd. and retains X-Robots-Tag noindex,nofollow. /api/_health HTTP200, ok=true, Firestore database gridcast. Landing company update was already verified live at2213882. Both website publication tasks complete. Full address remains private. Android APK untouched. No player/UI regression suite rerun for this one-line copyright change; production build passed before release.
 **Files:** AI-LOG.md follow-up. **Commit:** Application9308211; log-only follow-up to be committed, no redeploy required.
+
+### 2026-10-13 02:32 IST · GPT-6 (Codex desktop coordinator) · Landing publication rechecked
+
+**Asked:** Apply company details to Vercel landing and push; contact landing chat if access unavailable.
+**Did:** Direct repository access works. Reverified gridcast.si root and /about HTTP200 contain supplied company name and short location; full street address absent. Code2213882 was already live. Pushing landing release-log follow-up; no duplicate source edit or cross-chat request required. Firebase counterpart already live at9308211.
+**Files:** Landing Ai-log.md and this AI-LOG.md. **Commit:** Landing code2213882; this follow-up uncommitted.
+
+### 2026-10-27 13:35 IST · GPT-6 (Codex desktop) · App codebase location confirmed
+
+**Asked:** Where the app.gridcast codebase lives.
+**Verified:** Local source /Users/sanan/Downloads/gc; Git origin https://github.com/sananxrom/Gridcast.git; current branch codex/gridcast-trust-layer-wp5. Desktop project folder is a wrapper, not the application source. No deployment state rechecked.
+**Files:** AI-LOG.md only. **Commit:** Not committed.
+
+### 2026-10-27 13:43 IST · GPT-6 (Codex desktop) · Human developer handover
+
+**Asked:** Create and push a comprehensive developer handover with architecture, setup and everything needed for takeover.
+**Did:** Replaced obsolete September handover.md with a current source-grounded guide: repositories and release evidence, architecture/source map, domain data and tenancy, custom auth, CV/body-face contracts, offline receipts/media, campaigns/reporting, local tests, cloud operations/rollback, separate landing site, Android build and limitations, troubleshooting and takeover checklist. Explicitly identified Android and other local-only files absent from Git; did not silently publish them. Company street address and credentials excluded.
+**Verification:** Inspected current package/config/source and recent release log; baseline a435de91250afbb950ba2032ff608751dc51984f. Graphify query failed because its Python3.14 interpreter is missing; used source inspection and recorded tooling limitation. No product source edits, build, tests or cloud deployment needed/performed for documentation. Scoped diff/whitespace checks before commit.
+**Files:** handover.md, AI-LOG.md.
+**Commit:** This entry accompanies the handover commit; push outcome reported in the task response.
+**Open:** Android source transfer requires a separate reviewed commit/secure transfer; physical-device qualification and native measurement ingestion remain unfinished. Live state is dated evidence, not reverified today.

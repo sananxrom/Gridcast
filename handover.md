@@ -1,409 +1,382 @@
-# Gridcast — Codex chat handover
-
-Prepared 25 September 2026 by GPT-6 (Codex desktop). This is a working handover, not a verbatim transcript. It preserves decisions, evidence, unresolved disagreements, operating instructions and the paths needed to recover detail. Secrets and expired sign-in codes are deliberately excluded.
-
-The user requested the handover skill. No installed chat-handover skill was found in the Codex, Agents, Claude or project skill locations searched. This document was written directly; it must not be represented as generated using that skill.
-
-## 1. Read this first
-
-**Release B is already deployed and verified. Do not rebuild or redeploy B merely to resume this conversation.** The last user task is to create this handover for a new Codex chat. There is no deployment waiting to finish.
-
-- Real repository: **`/Users/sanan/Downloads/gc`**.
-- Codex desktop project wrapper: `/Users/sanan/Documents/Claude/Projects/Gridcast`. An `implementation/` directory also exists there; it is not the checkout used for the verified release. Do not switch to it or assume it is synchronized.
-- Git remote: `https://github.com/sananxrom/Gridcast.git`.
-- Working branch: **`codex/gridcast-trust-layer-wp5`**. The name is historical; substantial later work lives here.
-- Repository HEAD before this handover: **`049b9d8a6e315dc5a40c9f0d2ad91d50ffd32d10`** (deployment documentation).
-- **Deployed application:** `34bf8782cf45b7d6af4af27a6f96ed637aa39031`, player `gridcast-web/0.6.0`.
-- Firebase rollout/build: **`build-2026-09-25-005`**, SUCCEEDED / READY / 100% traffic, verified **2026-09-25 22:23 IST**.
-- Production: <https://gridcast-backend--gridcast-508011.asia-southeast1.hosted.app>.
-- Player: `/player`; authorized recovery tools: `/player/maintenance`.
-- Latest Claude review: **AI-LOG.md, 2026-09-25 22:28 IST**, “Post-deploy review of Release B (34bf878): no blocker, one minor finding.” It is included in the shared log and summarized below.
-
-Start by reading `AGENTS.md`, the AI-LOG rules/Standing Context and latest entries, then this file and `gridcast-research/23-player-surface-cleanup.md`. Recheck `git status`, branch and new log entries before editing. The shared log can change while you work.
-
-**Important stale-memory warning:** parts of AI-LOG's Standing Context still say WP0–WP5 are undeployed and Vercel remains live. Those are historical and superseded by later deployment entries. Read dates, actual source and cloud state. Do not mistake an old warning for the current production state.
-
-## 2. User, product and working preferences
-
-The user is Sanan. Real platform-admin/Firebase email: `sanan@consultsgx.com`. He wants agents to do the technical work, not repeatedly ask him to choose implementation details he cannot assess. Ask only when information, a material product decision or required authorization is genuinely missing. Do already-authorized work autonomously and report verified outcomes.
-
-Gridcast is a multi-tenant digital-out-of-home advertising network, initially Chandigarh/Tricity: screens in venues, operators/resellers, network advertisers, campaigns/creatives and a browser-based player on computers or Android boxes. On-device camera inference estimates average people present while a creative plays. It is not an Android-only detector and must work in web browsers.
-
-User expectations accumulated in this conversation:
-
-- Platform admin must manage advertisers, organizations, screens, campaigns and creatives across authorized levels; operators must remain isolated horizontally.
-- Admin needs practical onboarding and testing workflows, not dead-end pages requiring entities that cannot be created.
-- Creatives must be editable. Branding uses the supplied Gridcast SVG, solid ochre/gold, readable wordmark proportions and compact Gridcast/Platform spacing.
-- Slot duration belongs to the creative. Images have a manually adjustable duration, default 20 seconds. Screens can constrain acceptable duration.
-- No deliberate blank gap between ads or after a rotation. Repeat eligible campaigns continuously while their authorization/budget permits. Prepare/cache uploaded media ahead of playback. Eventually use fillers when paid campaigns are exhausted; do not fabricate paid delivery.
-- Uploaded media and YouTube are different: do not promise offline YouTube playback.
-- The venue display should be clean: no always-visible camera, measurement panels, public export/clear buttons or casual access to maintenance.
-- Sound should default on as a setting, with honest browser-policy fallback. This remains upcoming work, not shipped in B.
-- YouTube controls/title/share/play chrome appears when the mouse moves and when videos change. User dislikes this. Cause and feasible remedy require actual reproduction; restrictions are detailed below.
-- Firebase is the production destination. User explicitly selected **Firestore in India** and asked to review hosting location. Hosting remains Singapore; database/media are Mumbai. Do not drift back to testing old Vercel as production.
-- User repeatedly asks “check log”; that means reread the latest shared entries, verify Claude's claims against source, and respond with the current conclusion.
-- User requested multi-agent analysis/review earlier. B used bounded backend, dashboard and independent-review agents. Respect the new chat's actual delegation rules and available tools; old agent IDs are not resumable workers.
-
-Style: concise, ordinary language to Sanan. The Caveman skill was requested earlier, but Sanan explicitly rejected extreme compression for build plans and discussion with Claude. Use **proper, detailed analytical prose** for architecture, disagreement, evidence and review handoffs. Do not bury risks or pending work behind terse “done” claims.
-
-## 3. Hard product rules
-
-Read the exact Standing Context in `AI-LOG.md`. At minimum preserve:
-
-1. **Presence, never impressions.** The per-play number is the average sampled people count. Do not relabel it reach, unique audience, de-duplicated viewers or impressions.
-2. **Unmeasured is null, never zero.** Failed camera/inference means unmeasured. Keep measured and unmeasured totals separate.
-3. **Provenance on numbers.** Distinguish measured, self-reported and derived values; retain model/config/time/economic provenance for each play.
-4. **Transparent vertically, isolated horizontally.** Authorized parties in a transaction can see decomposed economics; unrelated organizations cannot see each other's data.
-5. **Locked measurement/privacy/transport keys are platform-only**, enforced server-side, not merely hidden in UI.
-6. Camera frames are processed locally, never uploaded. No recognition, tracking, demographics or re-identification.
-7. No bank-account numbers stored; only the agreed payout labels/UPI representation.
-8. Browser records retain original device/org/screen identity. No re-labeling old receipts under a replacement device. No destructive cleanup disguised as recovery.
-9. Never represent unrecorded paid playback as verified/delivered/billable. “Keep screen alive” is not permission to invent financial evidence.
-10. Continuous rotation has no fixed expected-play contract. Do not invent a delivery percentage or pacing denominator from an old loop/slot model.
-
-## 4. Collaboration with Claude
-
-### Roles and communication channel
-
-The **2026-09-25 19:56 IST** log entry records Sanan's role reset: **Codex builds; Claude reviews and argues.** Claude should not concurrently rewrite the specification/source unless Sanan asks. Earlier “Claude builds, Codex reviews” arrangements are superseded.
-
-Claude has appeared both as Claude Code desktop on this Mac and Claude Cowork in a VM. They are different environments, may see different snapshots and cannot be assumed to share tool registrations. Local Claude's latest entries are labeled `claude-opus-5.5 (Claude Code desktop, Mac)`; Cowork entries use different labels. Treat model labels as their recorded self-identification.
-
-Use **`AI-LOG.md` plus the relevant numbered research document** for shared handoff. Sanan commonly relays “check log” between chats. Do not assume a live direct messaging connection to Claude. No unsolicited Slack/email or extra Codex chat is needed. This handover request does not require starting or archiving another chat automatically.
-
-### How to argue constructively
-
-For each proposed change or finding, write:
-
-- The concrete current behavior and consequence.
-- The source file/symbol and commit you inspected; distinguish source inference from reproduced behavior.
-- Whether you accept, partly accept or reject the proposal, and why.
-- Alternatives and tradeoffs, especially data loss, tenant isolation, billing truth and device lifecycle races.
-- The implementation boundary and invariants it must preserve.
-- Acceptance tests, actual results and remaining validation limits.
-- An explicit next owner/action. Stop circular debate once a decision is settled or the user directs a scope.
-
-Do not accept Claude's log as proof: verify the current tree. Do not reject a finding merely because tests passed. Record corrections without editing prior entries. Recheck the log before finalizing a commit/deployment, because Claude may append during your work.
-
-### Shared file discipline
-
-- `AI-LOG.md` is append-only (Standing Context is the documented exception). Preserve all prior bytes; append one entry per changing user prompt, actual IST timestamp, honest model/surface, paths, SHAs, results and failures. No secrets.
-- Keep Claude's concurrent additions intact. The 22:28 review was uncommitted when this handover started; it must not be lost.
-- Do not overwrite another agent's working changes. Agree file ownership before parallel editing. Prefer bounded independent review to two agents modifying the same player component.
-- List `gridcast-research/` before choosing a number. Doc 19 was once allocated twice.
-- Spec correction and implementation must agree. Rewrite the current spec where appropriate; log the change and keep historical log entries.
-- Explicitly distinguish local-built, committed, pushed, deployed and production-verified. Include the exact app SHA and rollout ID; a later log-only commit is not the running app.
-- Review does not create a new approval gate by itself. Follow Sanan's already-given authorization; do not ask him again for routine steps he has approved.
-
-## 5. Architecture and source map
-
-Stack: Next.js 15.5.26 App Router, React 18.3.1, TypeScript, Tailwind, Radix/shadcn-style components, lucide-react. Node/npm dependencies already installed in the real repo. `package.json` says app package 0.2.0; player release version is separately `gridcast-web/0.6.0`.
-
-| Area | Start here |
-|---|---|
-| API routing / dispatch | `lib/api.ts`, `app/api/` |
-| Tenant filtering, authorization, response redaction | `lib/access.ts`, `lib/roles.ts`, `lib/auth.ts` |
-| Persistent storage / bounded queries / transactions | `lib/firestore-store.ts`, `lib/store.ts`, `firestore.indexes.json` |
-| Inventory, availability, bookings | `lib/inventory.ts` |
-| Device identity / pairing / receipt authentication | `lib/devices.ts` |
-| Budget authorization and settlement | `lib/budgets.ts`, `lib/settlement.ts` |
-| Continuous scheduling | `lib/rotation.ts` |
-| Hierarchical configuration | `lib/config.ts` |
-| Reporting read model / metric definitions | `lib/reporting.ts`, `lib/metrics.ts`, `components/views/delivery-report.tsx` |
-| Player orchestration | `app/player/page.tsx` |
-| Camera / web inference | `lib/player-vision.ts` |
-| Commercial durable queue | `lib/player-queue.ts` |
-| Media caching and offline authorization | `lib/player-media-cache.ts`, `public/player-sw.js` |
-| Screen diagnostics / retained local evidence | `lib/diagnostics.ts`, `lib/player-diagnostics.ts`, `lib/readiness.ts` |
-| B server maintenance capability | `lib/maintenance.ts`, API/access/store integration |
-| B browser maintenance and cross-tab pause | `lib/player-maintenance.ts`, `lib/player-evidence-lock.ts` |
-| Maintenance UI | `app/player/maintenance/page.tsx`, `components/views/screen-maintenance.tsx`, `components/views/screen-detail.tsx` |
-| Portals and navigation | `app/admin/page.tsx`, `app/operator/page.tsx`, `app/advertiser/page.tsx`, `lib/nav.ts`, `components/ui/app-shell.tsx` |
-| Brand mark | `components/ui/brand-mark.tsx`, `public/brand/`, `app/favicon.ico` |
-| Demo-network source | `lib/demo-network.ts`, `lib/demo-videos.json` |
-
-Detector is pinned TF.js **4.22.0** + COCO-SSD **2.2.3**, `lite_mobilenet_v2`, self-hosted model assets. Old yolox-tiny declarations were a provenance defect addressed earlier; do not restore that mismatch. Desktop camera/inference had user-reported failures; real model loading/inference now has synthetic-camera browser coverage, but that does not establish real venue counting accuracy.
-
-Configuration layers: platform → org → group → screen. Roles include owner, manager, sales, installer, platform_admin, advertiser_viewer. Platform administrator's org selector affects the current scope; “All organisations” is network-wide scope, “Gridcast” is the Gridcast organization's scope. Verify the relevant current UI/route before explaining edge cases.
-
-### Research document map
-
-- `10-next-steps.md`: original WP0–WP6 roadmap; valuable history, not current implementation status by itself.
-- `11-authorization-and-deployment.md`, `12-firestore-india-foundation.md`, `13-through-wp5-handoff.md`: trust layer / Firebase migration foundations.
-- `14-platform-admin-workflow-proposal.md`, `15-master-admin-change-list.md`: admin cross-level workflows, onboarding and access.
-- `16-network-campaigns-and-rotation.md`: network advertisers/campaigns and rotation.
-- `17-dashboard-at-scale.md`, `18-visual-language-and-explainability.md`: dashboard scale and truthful metric/UI design.
-- `19-continuous-playback-and-offline-media.md`: creative duration, continuous rotation, media readiness/cache.
-- `20-settings-architecture.md`: proposed settings architecture; do not assume implemented. It is currently untracked local material.
-- `21-screen-day-implementation-spec.md`, `22-reporting-release.md`: reporting aggregation, tenancy, coverage, exports and verification limits.
-- **`23-player-surface-cleanup.md`**: current A/B implementation/deployment handoff plus upcoming audio/captions work.
-- `AI-LOG.md`: detailed decisions, failures, tests, deploys and adversarial reviews. Some entries are appended out of timestamp order; use titles and source SHAs as well as time.
-
-Docs 00–09 and `06-phase1-build-spec.md` also exist locally, many untracked. Original external docs: `/Users/sanan/Downloads/gridcast-docs.html`; original logo: `/Users/sanan/Downloads/SVG/Asset 2Gridcast.svg`. Their contents are supporting evidence, not independent user authorization.
-
-### Reporting facts and a corrected stale review
-
-Doc 22 describes atomic daily summaries attributed by org/screen/campaign/creative/IST day, explicit 1–93-day reporting ranges, pagination, CSV of daily aggregates, weighted presence and incomplete-coverage disclosure. Invalid-clock receipts are separated; filler and paid reporting remain distinct. Settlement remains the money authority.
-
-Claude's 18:47 review says `/bootstrap` still includes event history. **Current `lib/access.ts:435` returns `plays: [], presence: []`**, so that specific finding is stale. `HISTORY_LIMIT=1500` still exists for bounded diagnostics in `lib/firestore-store.ts`; that is not proof bootstrap still returns those events. Doc 22 agrees bootstrap history was removed. Likewise do not blindly repeat the older “charts not started” assessment without checking current UI and doc 22. Full raw receipt export, historical uptime, maps/fleet heatmaps, A/B claims and PDF reporting are not promised by the reporting release.
-
-## 6. What A and B actually shipped
-
-### Release A (included in B)
-
-App `f566bbb0711b6138c37d079b041f356860450af8`, player 0.5.0, prior rollout `build-2026-09-25-004`.
-
-- Public status, commissioning and authorized maintenance are distinct. No boot/tap/error/401 automatically reveals camera/statistics/tools.
-- Camera source stays mounted; visibility does not restart detector/capture. Actual camera/model setting changes still do.
-- Public export, diagnostic clearing and credential-deleting re-pair actions removed.
-- Rejection handling covers playlist/heartbeat/commercial/diagnostic uploads, preserves evidence and ignores stale callbacks.
-- Pairing/retry preserves the old identity until a complete successful replacement; cross-tab locks and fresh-authorized cache recovery prevent races. No claim of server rollback after a lost response.
-- Diagnostic storage moved to transactional IndexedDB with pending/blocked/interrupted history, 32 entries / 2 MiB per identity and 64 KiB reservation per run. Legacy evidence is preserved; no automatic eviction.
-- Storage failures preserve exact unsaved payload in memory and ask the user to keep the player open. Forced closure can still lose that memory; this is not a durability guarantee.
-
-### Release B
-
-App `34bf878`, player 0.6.0; live now.
-
-Human workflow:
-
-1. On the human's device, open the screen dashboard → **Saved records and player maintenance**.
-2. Select the exact current or historical device identity and issue a one-time maintenance code.
-3. In the browser that actually holds the saved records, open **`/player/maintenance` in a new tab**. Keep player tabs open, reload older versions if prompted, do not clear storage.
-4. Redeem the code. Export only that identity's commercial/diagnostic evidence. Download requested does not prove the file was saved durably.
-5. For planned replacement of the current identity: prepare replacement, pause cooperating tabs, attempt bounded original-token retries, review/export/acknowledge retained evidence, then enter a separate destination pairing code.
-
-Server guarantees:
-
-- 16 random code characters (80 bits) displayed in groups, stored only as hashes; session token hashes too.
-- Exactly one org/screen/device, at most ten minutes from issuance, one-time transactional redemption across instances.
-- Rechecks issuer active status, role, org, capability and auth_version on redemption and sensitive operations.
-- Historical/revoked device recovery allowed under human authorization without pretending the old playback token is valid.
-- Maintenance tokens do not authenticate dashboard, paid reporting or playback routes.
-- `/screens/:screenId/maintenance` GET/POST, `/screens/:screenId/maintenance/:grantId/revoke` POST.
-- `/maintenance/redeem`, `/maintenance/check`, `/maintenance/export`, `/maintenance/replace`, `/maintenance/close` POST; sensitive operations have explicit org/screen/device scope.
-- Sensitive endpoints authorize local operations; saved records are read from kiosk IndexedDB, not leaked by the server response.
-- Audits omit codes/tokens/payloads and do not claim an anonymous code holder is the identified issuing human.
-- Current limiter: 120 attempts globally/minute; ten per hashed client bucket/minute; 4,096 fixed buckets plus global. Denied calls persist only expected limiter changes, not other staged domain writes.
-
-Client/cross-tab guarantees:
-
-- Capability stays in memory. Expiry uses server remaining time plus monotonic deadline. Reload, hiding the tab, offline/auth failure closes tools and invalidates late responses.
-- Player shared evidence locks, maintenance exclusive lock; finalize playback and pending writes before pause. Planned replacement holds pause through review/export/acknowledgement.
-- Service worker probes every open player tab for the new coordination protocol. Old tabs must reload; missing protocol is not evidence of safe quiescence.
-- Requires Web Locks, BroadcastChannel and service workers; fails closed if unavailable.
-- Export/replacement preserves original records, identities and payloads; changed evidence requires fresh review. No public all-identity export, record deletion, relabeling or billing/import reconciliation.
-- Replaced old tab stays stopped after lease release; it cannot resume the old offline schedule.
-- **Export does not free queue/archive capacity.** Commercial capacity defect is not solved by B.
-
-### Verification already completed
-
-For unchanged B source:
-
-- **93 browser cases passed**: 46 existing player/diagnostic/cache; two new full-player pause/resume and stale-identity-stop; 27 maintenance/client/UI/dashboard/readiness; 18 existing admin/demo/device-queue/reporting against a production-build server.
-- Unit/API: **234 passed, five emulator-dependent skipped, zero failed** (239 total).
-- Emulator-enabled database regressions: **24 passed, zero skipped/failed**. Includes cross-process one-time redemption, durable failed-guess counters, rollback of unrelated staged writes, 2,001 expired grants not blocking current listing.
-- TypeScript, production build and owned-file whitespace checks passed.
-- Actual pinned model ran with a synthetic camera. No physical venue, Android/WebView, Safari/Brave-specific accuracy or OS-download-durability claim.
-- Live B: health 200, correct Firestore database; player 200 with 0.6.0 bundle; maintenance 200 with code gate and no pre-auth export; no page errors/HTTP 5xx in isolated Chrome checks.
-- Live checks did **not** issue production grants, export real evidence, replace a real paired device or change user tabs.
-
-Key B tests: `tests/maintenance.test.cjs`, `tests/maintenance-emulator.test.cjs`, `tests/player-maintenance.browser.cjs`, `tests/player-maintenance-ui.browser.cjs`, `tests/screen-maintenance.browser.cjs`, plus existing player/readiness suites. Exact prior failure/fix history is in the 22:11 log entry.
-
-## 7. Remaining work, with decisions and disagreements preserved
-
-### Priority 1 — commercial blocked-evidence capacity
-
-This is a source-confirmed defect, still live. `queueCapacity` **and** `enqueuePlay` count all rows for the device. `flushPlays` skips blocked rows, preserves expired/rejected evidence, and deletes only acknowledged successful rows. Retained blocked records therefore eventually consume the capacity needed for new playback. The player's capacity check currently runs before choosing a new item. Reconnecting or exporting does not free those records.
-
-Claude proposed separating retryable backlog and blocked archive, sending scoped pending/blocked counts in heartbeat, and preserving old rows. Codex agrees. **The unresolved tradeoff:** Claude initially preferred continuing paid playback with visible record loss when storage is truly exhausted. Codex rejected silently adopting that: an alert cannot recover missing billing evidence; storage estimates are not transactional reservations. Claude's 21:51 handoff then adopted reservation-before-paid-playback and no falsely recorded delivery.
-
-Recommended next implementation/review boundary:
-
-- Reproduce blocked-row saturation without pretending Claude's exact long-offline narrative was proven. Offline authorization/budget allowances also bound play count.
-- Separate retryable capacity and retained evidence consistently in both admission and enqueue paths.
-- Reserve capacity transactionally **before** a paid play starts; handle crash/abandonment, completion, multiple tabs and migrations without erasing rows.
-- Preserve old device IDs, immutable payloads and every retained row on failure; bound archive growth explicitly.
-- Add per-device scoped pending/blocked/storage-status telemetry and dashboard visibility without exposing other tenants.
-- Define the real-full-storage behavior explicitly. Filler or explicitly non-billable fallback may be appropriate, but do not introduce an unapproved billing/receipt policy or silently count unrecorded paid play.
-- B export is available, but a download event does not justify automatically deleting evidence. Any archive clearance/import/reconciliation workflow is additional design work.
-- Test retries, expiry, rejection, reservation races, capacity recovery, multi-tab maintenance pauses and failure durability together.
-
-### Priority 2 — audio (doc 23 §4)
-
-Not implemented in B. Add `audio_enabled`, default true, normal configuration inheritance and server scope enforcement. Keep requested audio, browser-blocked audio and active surface separate. Audio-on does not prove actual audible sound.
-
-Mute immediately when a newly received setting says off, including mid-creative; do not wait for frozen slot config/boundary. Keep standby and camera muted. Mute old active media before enabling next surface. Handle native play rejection and YouTube `onAutoplayBlocked` separately; retry same creative muted without a new play UID or duplicate receipt. Avoid repeated sound retries each creative. Actual sound recovery must occur in the relevant gesture path. Preserve truthful failures if muted playback also fails.
-
-Config delivery currently depends on polling (30–300 seconds, default five minutes, plus faster special paths). Do not promise instant remote changes before the device receives config. Heartbeat-returned config-version-triggered pulls are a later follow-up; compare against newest received config, not frozen per-play provenance.
-
-Prefer managed kiosk autoplay allowlisting; developer autoplay switches are optional dedicated-device fallback, not a setting to recommend for a person's normal browser. Check current official browser docs when implementing. Physical Android/WebView is separate from desktop Chrome.
-
-### Priority 3 — captions, YouTube chrome and interaction (doc 23 §5)
-
-User clarified chrome appears on mouse movement **and creative changes**. Claude's hypotheses: pass-through `pointer-events-none` overlay lets hover through; no hidden cursor; one reused YouTube player passes through buffering/ended states. Native video has prepared dual surfaces; YouTube has no equivalent standby currently. These are source-based hypotheses, not a reproduced diagnosis.
-
-- Reproduce on the actual media/browser before changing timing or masking surfaces.
-- Hiding cursor or an interaction shield may reduce hover, but preserve intentional sound-recovery gestures.
-- Two YouTube players/standby would need memory, timing, API/policy and real-device validation. Do not present it as the settled solution.
-- Do not crop/enlarge the advertiser's video to hide branding. Check current official YouTube policy before obscuring player UI/branding; Claude explicitly left this question unverified.
-- Native exposed text tracks can be disabled; burned-in text cannot.
-- `cc_load_policy=0` is not a documented universal captions-off guarantee; `iv_load_policy=3` is annotation-related. Do not revive `unloadModule('captions')` / `unloadModule('cc')` as a documented API or promise.
-- Strict chrome/caption-controlled output requires controlled uploaded assets. Do not promise arbitrary YouTube embeds can be made permanently clean.
-- Preserve PLAYING-only delivery timing, measurement and receipt identity if changing surfaces/transitions.
-
-### Smaller follow-up — Claude's 22:28 limiter finding
-
-Claude found no B blocker after reading the server path. He correctly notes global 120-attempt/minute redemption throttling lets one attacker delay maintenance across all tenants with junk requests. It affects maintenance availability, not playback. He proposes dropping or substantially raising the global budget and retaining the per-client one.
-
-This is **unresolved, not already fixed**. Evaluate the availability/resource-cost tradeoff, distributed abuse and proxy/client-bucket identity before changing it. Preserve bounded storage and durable denial counters; removing the global bound without considering request/transaction cost is not a complete analysis. Avoid weakening scope or creating unbounded limiter documents. Add appropriate regression tests for the chosen behavior.
-
-### Broader follow-ups, not all immediate scope
-
-- Real paired-device maintenance trial, real camera ground truth and physical Android/WebView validation; desktop synthetic tests are not enough.
-- Venue LOIs/ground-truth clicker work is a human/business task; do not claim delivered.
-- Reporting detail export, further scale/explanation UI and optional charts per current source and doc 22; no invented delivery percentage.
-- Doc 20 advertiser settings and network-advertiser user/org ownership model need fresh source review before declaring status.
-- Historical plans list WP6 money, but budget/settlement modules and tests have since changed. Audit current implementation before claiming WP6 wholly absent or complete.
-- Vercel Git connection may still create preview builds; see hosting notes below. Do not resume it.
-
-## 8. Firebase/Git release operations
-
-### Existing resources
-
-| Item | Value / status |
-|---|---|
-| Firebase project | `gridcast-508011` |
-| Project number | `995906107784` |
-| App Hosting backend | `gridcast-backend` |
-| Hosting location | `asia-southeast1` (Singapore) |
-| Firestore named DB | `gridcast`, **not** `(default)` |
-| Database location | `asia-south1` (Mumbai) |
-| Database edition | ENTERPRISE, FIRESTORE_NATIVE, Mongo compatibility disabled; delete protection enabled |
-| Media storage | Private Mumbai bucket; resolve current name from project config, do not invent/recreate it |
-| Runtime sign-in secret | Secret Manager reference `gcAuthSecret`; values must never be printed |
-| B index | `maintenance_grants`: `screen_id ASC`, `expires_at ASC`, COLLECTION / DENSE |
-| B index resource | `projects/gridcast-508011/databases/gridcast/collectionGroups/maintenance_grants/indexes/CICAgPi9lIEK` |
-| B index status | READY before B rollout; same-filter read-only production query succeeded |
-
-Existing Firebase CLI access worked at last deployment. It has expired before. If reauthentication is needed, initiate a fresh flow and let Sanan sign in; never reuse expired authorization codes from the old chat, copy tokens into logs, or request his password.
-
-Sanan has repeatedly authorized building/pushing and explicitly authorized B index creation/deployment. That authorization was completed. It is not carte blanche for unrelated resource deletion, main merges, data migrations or arbitrary new production features. Follow the new user's request and actual scope. The old “send me a patch, never commit/push” workflow was superseded for authorized review-branch work. No main merge occurred for B.
-
-### Established deployment command
-
-Use only when a new reviewed release is actually authorized:
-
-```sh
-cd /Users/sanan/Downloads/gc
-firebase apphosting:rollouts:create gridcast-backend \
-  --project gridcast-508011 \
-  --git-commit <EXACT_REVIEWED_PUSHED_APPLICATION_SHA> \
-  --force --non-interactive
+# Gridcast — developer handover
+
+Prepared 27 October 2026. Audience: the human developer taking over from Sanan and the AI-assisted build team.
+
+This replaces the September chat handover. It describes the inspected source and dated release evidence, not a new production certification. No passwords, tokens, auth codes, private company address or camera data belong in this document. The prior handover remains recoverable through Git history.
+
+## 1. Start here
+
+Gridcast is a multi-tenant digital-out-of-home advertising platform: organizations operate venue screens, advertisers supply creatives, campaigns select inventory, and paired receivers play media while optionally measuring people and attention locally. The dashboard handles administration, configuration, review, reporting and commercial records. The browser receiver already exists; a native Android receiver is an experimental companion, not a completed replacement.
+
+| Item | Location / state |
+| --- | --- |
+| Application source | `https://github.com/sananxrom/Gridcast` |
+| Working branch | `codex/gridcast-trust-layer-wp5` — historical name, contains later features |
+| Local source on Sanan's Mac | `/Users/sanan/Downloads/gc` |
+| Desktop chat workspace | `/Users/sanan/Documents/Claude/Projects/Gridcast` — NOT the app source |
+| Product | https://app.gridcast.si |
+| Browser receiver | https://app.gridcast.si/player |
+| Firebase fallback hostname | https://gridcast-backend--gridcast-508011.asia-southeast1.hosted.app |
+| Public landing site | https://gridcast.si — separate Vercel project/repository |
+| Source HEAD before this document | `a435de91250afbb950ba2032ff608751dc51984f` |
+| Last verified product release | `9308211a52892882e425e83ae111b3f770c599f5`, verified 13 October 2026 |
+| Last verified Firebase rollout | `build-2026-10-12-001`, READY / SUCCEEDED / 100% traffic |
+
+**Release evidence is historical:** live cloud state was not rechecked for this documentation task. The latest log-only commit is not necessarily the deployed code commit. Do not assume `main` is the current product branch or deploy an old Vercel application URL.
+
+### First-hour checklist
+
+1. Get repository access from Sanan and clone the working branch shown above.
+2. Read this document, then the recent `AI-LOG.md` entries. Inspect `git status`, branch and HEAD before any change.
+3. Start the app with an isolated local file database; do not use cloud data for tests.
+4. Trace one campaign from draft to review/activation, playlist authorization, playback receipt and report.
+5. Get separately authorized Firebase/GCP, Vercel and Hostinger access if your role includes operations. A Git clone does not grant cloud access.
+6. Resolve the local-only Android/source transfer described below before assuming you have the entire project.
+7. Agree the next deliverable with Sanan. Old research plans are context, not an instruction to implement every proposed feature.
+
+## 2. Critical transfer gap: not everything is in Git
+
+At inspection, the web application is tracked but **`android-player/` is untracked**, as is `gridcast-research/32-native-android-receiver.md`. The Android APK and sources therefore do not arrive in a normal clone. This handover commit does not silently publish those unrelated files.
+
+Arrange an explicit reviewed Android source commit or a secure source transfer from Sanan's Mac. Include the Gradle wrapper, Kotlin sources, manifest/resources, tests and README. Exclude local SDK paths, build caches, generated outputs, credentials and signing keys. A debug APK alone is not a source handover. Establish release signing separately before distributing a production fleet APK.
+
+Other pre-existing local changes at handover: modified `.gitignore`, `AGENTS.md`, `CLAUDE.md`, `TEAM.md`; untracked agent-tool directories, `.graphifyignore`, `skills-lock.json`, `Claude outputs/`, `06-phase1-build-spec.md`, research documents 00–09 and 20. `AI-LOG.md` also has later entries being included with this handover. Review ownership/content before transferring any of these. Never use `git add .` to bundle them accidentally.
+
+## 3. Product decisions that must survive takeover
+
+- Platform admin needs access across organizations; ordinary operators remain isolated from unrelated tenants. “All organizations” is the administrator's aggregate scope; “Gridcast” selects Gridcast's own tenant.
+- Advertiser accounts are scoped to a particular advertiser. The advertiser workspace is not the operator's entire account.
+- Creatives support uploaded media and online YouTube. Editing must show the saved preview and allow changing source/replacing media. Changed content needs approval again; approval is per creative and reused across campaigns.
+- Campaign drafts can be incomplete and resumed. Submission, creative approval, activation, scheduling and actual delivery are different states. Do not label something “live” simply because it was saved or approved.
+- Creative duration determines playback length. Images have a manually editable duration, default 20 seconds. Screens can impose minimum/maximum creative duration.
+- There must be no deliberate three-second padding or long blank tail after the rotation. Repeat eligible content continuously; preload/cache uploaded media. Filler is separate noncommercial content when paid content is unavailable.
+- “Keep playing offline” is a product goal, not permission to bypass paid authorization, erase evidence or invent billable plays. Expired paid authorization and exhausted storage require explicit behavior; see the known Android gap.
+- Full body AND face CV is the default replacement. Do not restore the retired COCO-only production path or require per-screen opt-in to get the new pipeline.
+- Camera/model sessions persist across ads. Per-ad metrics reset; the camera and model initialization should not.
+- Calibration is optional. Default offsets are valid operation. Failure of calibration or CV must not block ads.
+- On-screen diagnostics are optional. When enabled, retain camera preview, body/face boxes and useful live metrics, not just a vague setup message. Normal playback should be clean.
+- Feed relevant aggregate measurements into existing dashboards and downloadable reports. Do not create a separate reporting product merely because measurements came from the new pipeline.
+- User initially described all screens as controlled development/test devices; a café field test subsequently occurred. Reconfirm current venue/customer exposure before destructive changes. Re-pairing was acceptable during development, but revocation still strands old receipts under their original device identity.
+- Branding: supplied Gridcast symbol, solid gold/ochre rather than excessive gradient, readable wordmark and compact Platform label.
+
+## 4. Architecture and why it is structured this way
+
+```mermaid
+flowchart TD
+  UI[Admin / operator / advertiser browser] --> API[Next.js server API]
+  WEB[Paired web player] --> API
+  AND[Experimental Android receiver] --> API
+  API --> AUTH[Auth / capabilities / tenant ownership]
+  AUTH --> STORE[Transactional repository]
+  STORE --> DB[(Named Firestore: gridcast)]
+  API --> MEDIA[Private Cloud Storage / signed media grants]
+  WEB --> CACHE[Local media cache + durable receipt queue]
+  WEB --> CV[Local body and face workers]
+  CV --> AGG[Aggregate metrics with provenance]
+  AGG --> API
+  DB --> REPORT[Daily rollups and scoped reporting]
+  REPORT --> UI
 ```
 
-Firebase CLI installed at `/opt/homebrew/bin/firebase` (15.26.0 at last check). Installed CLI does **not** provide `apphosting:rollouts:list`, despite one skill reference saying so. Verify completion with the Firebase App Hosting API, not just command acceptance. Expected: exact commit, build READY, rollout SUCCEEDED and traffic 100%. Builds took several minutes; keep user informed without excessive polling.
+The web app is a Next.js monolith with browser UI, server handlers and shared domain libraries. It is not a collection of separately deployed microservices. Most JSON API routing is centralized in `lib/api.ts`; the catch-all route passes method/path/query/body/token into it. Upload/media handlers are separate because they have binary and streaming requirements.
 
-Reusable temporary helper `/tmp/gridcast-release-a-status.cjs` works for latest rollout including B despite its name. If absent, it used the installed firebase-tools modules, existing private auth and `gcp/apphosting` methods `listRollouts`, `getTraffic`, `getBuild`. This is an internal CLI API, so verify signatures if the installed CLI changes. Do not dump the account/auth objects.
+Production persistence uses server-side Firebase Admin access, not client Firestore queries. `lib/firestore-store.ts` adapts the domain operations into scoped Firestore reads and per-document transactional writes. Authentication/ownership decisions must remain within the transaction where relevant; callbacks can retry, so avoid irreversible external side effects inside them.
 
-Read-only live helpers/artifacts (temporary, may disappear):
+This evolved from a pilot JSON store. `lib/store.ts` still supports file/Redis/memory compatibility modes. These are not production-equivalent guarantees. Do not “simplify” cloud operation by switching to whole-blob writes or ephemeral memory.
 
-- `/tmp/gridcast-release-b-live-smoke.cjs`
-- `/tmp/gridcast-release-b-index-query.cjs`
-- `/tmp/gridcast-release-b-live-player.png`
-- `/tmp/gridcast-release-b-live-maintenance.png`
-- `/tmp/gridcast-release-b-maintenance-built.png`
-- `/tmp/gridcast-release-b-deploy-graph.log`, `/tmp/gridcast-release-b-deploy-symdex.log`
+Offline media availability, permission to play, evidence of playback and measurement availability are four separate concerns. Downloading a video does not authorize indefinite paid playback. Successful playback does not prove a person watched. A camera failure does not mean zero people.
 
-Index tool quirks: `firestore_list_indexes` rejected pageSize 100, supported omission/0, and returned all collection groups despite scoped parent; filter by resource name before claiming absence. `firestore_query_collection` added Explain options rejected by Enterprise RunQuery. A plain authenticated REST RunQuery without Explain succeeded. These tool failures did not indicate an app failure. Do not create the B index again.
+### Stack
 
-Rollback candidate is previous app `f566bbb` / `build-2026-09-25-004`, but rollback is a deliberate operation, not routine verification. Consider active maintenance sessions/new-client behavior before acting.
+- Next.js 15.5.26, React 18.3.1, TypeScript; App Router.
+- Tailwind CSS 3, Radix primitives, Lucide icons, Framer Motion.
+- Firebase Admin 14.x; Firestore and private Cloud Storage.
+- Browser IndexedDB/cache machinery for queue, assignments and media.
+- Playwright-driven browser tests wrapped in Node's test runner; Node `.test.cjs` domain tests.
+- Native prototype: Kotlin, Media3, MediaPipe, SQLite; details below.
 
-### Vercel history
+Use `package-lock.json` and `npm ci` for exact JavaScript dependency resolution. Versions in prose are a snapshot, not an instruction to upgrade.
 
-Old `gridcast-silk.vercel.app` was an in-memory demo, not the Firebase production database. Claude could not pause it via connector (403). **Sanan paused the `gridcast` project manually, verified by Claude at 18:50 IST**: domain/health returned 503 DEPLOYMENT_PAUSED and project live=false. It was not deleted. Git remains connected and may generate protected previews. `gridcast-invite` was left untouched; purpose unverified. Do not present an ambient old Vercel browser tab as the current production target. No Vercel state was rechecked during this handover.
+## 5. Source map
 
-## 9. Local tests and safe tooling
+| Area | Primary files |
+| --- | --- |
+| Route entry points | `app/page.tsx`, `app/admin/page.tsx`, `app/operator/page.tsx`, `app/advertiser/page.tsx`, `app/control/page.tsx` |
+| Shared shell/navigation | `components/ui/app-shell.tsx`, `sidebar-nav.tsx`, `command-palette.tsx`, `lib/nav.ts`, `lib/client.ts` |
+| API entry / domain dispatch | `app/api/[...path]/route.ts`, `lib/api.ts` |
+| Authentication / permissions | `lib/auth.ts`, `lib/access.ts`, `lib/roles.ts`, `lib/audit.ts` |
+| Repository | `lib/store.ts`, `lib/firestore-store.ts`, `lib/seed.ts` |
+| Campaign lifecycle | `lib/campaign-status.ts`, `lib/campaign-drafts.ts`, `components/views/campaign-flow.tsx`, `campaign-list.tsx`, `campaign-detail.tsx`, `campaign-dashboard.tsx` |
+| Advertiser UI | `components/views/advertiser-workspace.tsx` |
+| Creative editor/media | `components/views/creative-upload.tsx`, `lib/media.ts`, `app/api/assets/upload/route.ts`, `app/api/media/route.ts` |
+| Inventory and rotation | `lib/inventory.ts`, `lib/rotation.ts`, `lib/readiness.ts`, `components/views/groups.tsx`, `screen-detail.tsx` |
+| Device authorization / receipts | `lib/devices.ts`, `lib/budgets.ts` |
+| Player lifecycle | `app/player/page.tsx` |
+| Offline evidence / media | `lib/player-queue.ts`, `lib/player-media-cache.ts`, `lib/player-evidence-lock.ts` |
+| Config layering | `lib/config.ts`, `components/views/config-views.tsx` |
+| Full CV | `lib/vision/production-v2.ts`, `presence-v2-profile.ts`, `measurement-binding-v2.ts`, `attention-v2-contracts.ts`, `metrics.ts`, `engine.ts`, `a2-scheduler.ts` |
+| CV display/performance/calibration | `lib/vision/local-diagnostics-v2.ts`, `performance-telemetry.ts`, `calibration.ts`, `camera-calibration.ts`, `lib/player-vision.ts` |
+| CV browser assets | `public/vision-lab/`, especially profile manifest and separate body/face workers |
+| Reporting/economics | `lib/reporting.ts`, `lib/metrics.ts`, `lib/settlement.ts`, `components/views/delivery-report.tsx`, `report-*`, `settlement.tsx` |
+| Maintenance/diagnostics | `lib/maintenance.ts`, `lib/player-maintenance.ts`, `lib/diagnostics.ts`, `lib/player-diagnostics.ts`, `app/player/maintenance/page.tsx`, screen maintenance/diagnostic views |
+| Deployment/security metadata | `apphosting.yaml`, `firebase.json`, `.firebaserc`, `firestore.rules`, `firestore.indexes.json`, `app/robots.ts`, `next.config.*` |
+| History and design reasoning | `AI-LOG.md`, `gridcast-research/` |
 
-Work from `/Users/sanan/Downloads/gc`. In the prior desktop sandbox this path was outside writable roots, so writes/Git/network required scoped elevated execution. Do not evade the new session's actual filesystem policy or assume the wrapper directory is the real repo.
+Some files retain historical or evaluation names. A filename containing “production” or “lab” alone is not proof of its active use; trace imports from the current player/profile.
 
-Basic validation for application edits:
+## 6. Data model, tenancy and reporting
 
-```sh
-npx tsc --noEmit
-npm test
+The principal domain collections are `orgs`, `users`, `screens`, `advertisers`, `creatives`, `campaigns`, `groups`, `devices`, `configs`, `assets`.
+
+Evidence and operational collections include `plays`, `presence`, `device_assignments`, `measurement_bindings`, `audit`, `diagnostic_results`, `attention_calibrations`, `maintenance_grants`, `maintenance_limits`, `diagnostic_assignments`, `settlement_buckets`, `campaign_budgets`, `screen_day`, `attention_day`, `campaign_drafts`. Auxiliary uniqueness/sequence documents enforce identity and deduplication. Inspect `lib/firestore-store.ts` for exact key generation and lookup scopes before altering schema.
+
+Organizations own inventory and commercial entities. Users belong to an organization, with advertiser viewers further restricted by advertiser identity. Campaigns link advertisers, creatives and selected screens. Groups assist inventory selection; do not silently expand a saved campaign because group membership changes. Devices represent a particular pairing lifetime. Assignments authorize finite delivery and bind configuration/measurement provenance. Plays are idempotent receipts, not mutable dashboard counters.
+
+Roles: `platform_admin`, owner (including legacy `org_admin`), manager, sales, installer, `advertiser_viewer`. Capabilities are `screens`, `sales`, `money`, `team`, `org`, `platform`; inspect `lib/roles.ts` and `lib/access.ts`. UI hiding is not authorization. Advertiser receipt responses intentionally redact internal fields.
+
+Config resolves platform → organization → group → screen, with most specific allowed overrides. Measurement/privacy/transport keys marked locked are platform-only and enforced server-side. Some schema settings are explicitly `soon`; their presence is not evidence that the runtime implements them.
+
+Reporting uses bounded raw history and daily rollups. The repository retains a 2,000 domain read limit and 1,500 raw history limit; paginated reporting is not the same as unlimited raw-event access. Preserve coverage/truncation notices. Do not calculate “all time” by summing a limited bootstrap response. Test pagination, time boundaries, tenant filters and CSV consistency when changing reports.
+
+Commercial records, reserved budgets, settlement calculations and payout displays are not a finished external accounting/payment integration. Preserve original booking rates and economic provenance. Do not infer certified billing, bank transfer completion or automated invoicing from UI totals.
+
+## 7. Authentication and security model
+
+Authentication is custom application auth, **not Firebase Authentication**. Passwords use salted PBKDF2-SHA256; signed session tokens use HMAC. Current source uses 60,000 PBKDF2 iterations and a seven-day session duration; review these as part of a deliberate security assessment rather than assuming compliance certification. Authentication versioning/revocation and current user state matter, not just a client role string.
+
+Production requires `GC_AUTH_SECRET` of at least 32 characters, supplied through Secret Manager. No production source-visible fallback is permitted. Local process-random signing is possible, but a configured local secret makes sessions stable across restarts.
+
+Direct browser Firestore reads/writes are denied by `firestore.rules`. Server IAM access bypasses those client rules, so API authorization is indispensable. Never expose admin credentials to frontend code. Private media uses authorized signed transfers; uploaded file type, dimensions, duration, size and asset hashes are validated in the media path.
+
+Pairing issues device-specific credentials. A bare `screen_id` is not authorization. One-time maintenance authority is distinct from ordinary player authority and protects privileged diagnostic/export/recovery functions. Do not replace it with a shared hard-coded PIN.
+
+Do not restore unauthenticated reset, shared seed passwords, arbitrary object assignment into protected fields, client-supplied impersonation or cross-tenant bootstrap leaks. Existing tests are regression protection, not a claim that the application has passed an independent penetration test.
+
+## 8. Receiver lifecycle and offline contracts
+
+1. Generate a one-use eight-character pairing code from a screen's dashboard; enter on `/player` within its ten-minute lifetime.
+2. Pairing authenticates the receiver and replaces/revokes the previous device credential for that screen.
+3. Fetch `/api/playlist/:screenId` using the device token (current player protocol 3). The response includes assigned content, config/version, server time, validity, readiness and diagnostics offers.
+4. Select eligible rotation content, acquire/verify uploaded assets and reserve local evidence capacity/allowance before a play.
+5. Render with real media progress; collect eligible CV observations independently.
+6. Finalize a receipt with stable `play_uid`, monotonic device sequence, original assignment/device/config/binding and timestamps; enqueue durably.
+7. Retry the identical receipt through `/api/play`. Heartbeats and diagnostic/calibration/maintenance endpoints are separate operational paths; see `lib/devices.ts` and `lib/api.ts` for their exact request contracts.
+
+Uploaded-only assignments can last up to 24 hours, shortened by campaign/schedule constraints; mixed/online media uses a shorter window. `valid_until`, `accept_until` and `max_plays` mean different things. The 72-hour backlog acceptance window does not authorize 72 hours of new offline plays.
+
+`lib/player-media-cache.ts` verifies asset hash and byte count and stores ready schedules with authorization state. YouTube is online-only and is never promised offline. Browser storage is evictable; caching is not an unconditional persistence guarantee.
+
+`lib/player-queue.ts` reserves evidence space, bounds retained records at 5,000 and preserves blocked/stranded entries. Retry/recovery must keep original identity. Do not clear IndexedDB or re-pair as the first response to a blocked queue without understanding evidence loss. Queue exhaustion is an integrity constraint; explain it rather than silently dropping receipts to keep billing.
+
+Browser proof of play is authenticated software evidence, not hardware attestation that the physical panel was visible or that a person watched it.
+
+## 9. CV: the full current system
+
+The current profile in `lib/vision/presence-v2-profile.ts` is:
+
+| Parameter | Value |
+| --- | --- |
+| Profile | `presence-v2/efficientdet-lite0-mediapipe-face/1` |
+| Body | `efficientdet-lite0-int8/1` |
+| Face | `face-landmarker-float16/1` |
+| Web runtime | `mediapipe-tasks-vision@1.0.1` |
+| Metric schema | `attention-v2/1` |
+| Body input / scheduling interval | 320 px / 333 ms |
+| Face input / scheduling interval | 640 px / 125 ms |
+| Body / face limits | 20 / 5 |
+| Default confidence | 0.4 |
+| Default calibration | zero offset |
+
+These are configured intervals, not promised achieved FPS. Exact model, manifest, worker and pipeline hashes live in the profile/manifest and measurement binding code. Treat them as a versioned contract: changing workers/model/preprocessing without updating provenance can cause receipts to be rejected or mislabeled.
+
+The body and face stages run independently with freshness/recovery handling. Body-led observations and temporary association feed attention metrics; a face alone must not create a counted person. Worker WebGL 2 is a known compatibility boundary. Old iMac Safari reported it unavailable; Chrome on that machine was reported working. Do not assume all Safari versions fail or that the Chrome result proves long-duration reliability.
+
+The old COCO/V1 execution and user-facing opt-in were removed. Historical legacy receipt validation remains for old data. README text still claiming active COCO is stale; do not reintroduce it from that text.
+
+### Measurement semantics and privacy
+
+- Historical `avg_persons` is average sampled presence, not unique reach or impressions.
+- New estimated impressions/attention/visible-smile metrics have separate definitions in the metric contracts. They are estimates, not certified audience delivery or a new billing basis.
+- No valid observation = unavailable/null. A valid observation of an empty scene can be measured zero. These must not collapse together.
+- Temporary visit tracking, face landmarks and visible smiles were explicitly accepted by Sanan after the initial no-tracking policy. Older blanket prohibitions are superseded; identity recognition, re-identification and demographics are not part of this scope.
+- Face direction estimates looking toward a screen, not precise eye tracking. Visible smile is not happiness, preference or ad effectiveness.
+- Frames, face geometry, boxes and temporary track identities stay local. Aggregate reports retain provenance and availability.
+- Optional calibration changes offsets, not permission to start ads. If calibration fails, retain the prior/default settings and continue.
+- On-screen diagnostics should show current counts, body/face boxes, per-ad metrics and stage performance when enabled. Dashboard cards/reports receive relevant aggregate data; remote camera streaming is not implemented.
+
+## 10. Local development and verification
+
+```bash
+git clone --branch codex/gridcast-trust-layer-wp5 https://github.com/sananxrom/Gridcast.git
+cd Gridcast
+npm ci
+cp .env.example .env.local
+```
+
+Set locally generated private values for `GC_DEMO_PASSWORD` (12+ characters) and `GC_AUTH_SECRET` (32+). Leave `GC_STORE` unset for local file storage and remove inherited Redis/Upstash credentials and `VERCEL` environment flags. The local database is `data/db.json`; existing data is not reset automatically. Do not copy real user data into a public fixture.
+
+```bash
+npm run dev                  # http://localhost:4000
+npm test                     # Node domain tests; some emulator tests can skip
+npx tsc --noEmit --incremental false
 npm run build
-# Then exercise the actual changed browser/API flow with relevant tests.
 ```
 
-`npm test` runs `node --test tests/*.test.cjs`; browser files are separate `*.browser.cjs` suites. Do not claim browser coverage from npm test alone. Some browser suites start their own fixture server; others expect a local production server via `GC_UI_TEST_URL` (often port 4012). Read the relevant harness first. Never point mutation/seed browser fixtures at production. `package.json` still has `next lint`; do not assume it works with this Next version or claim lint passed without running it.
+Use a supported Node installation appropriate to the lockfile/Next release. This handover does not assert a tested cross-platform Node version matrix. `npm run lint` currently invokes `next lint`; check compatibility before relying on it as a quality gate.
 
-Firestore emulator tests require **`FIRESTORE_EMULATOR_HOST=127.0.0.1:8185`**, fake project **`demo-gridcast-storage`**, and isolated test database IDs. They intentionally fail closed for unexpected emulator configuration; do not bypass that guard or use production to get a test green. Read `tests/firestore-emulator.test.cjs` and `tests/maintenance-emulator.test.cjs` for startup requirements.
+`.env.example` contains variable names, not credentials. Production values are declared in `apphosting.yaml`: `GC_STORE=firestore`, `GC_FIREBASE_PROJECT=gridcast-508011`, `GC_FIRESTORE_DATABASE=gridcast`, `GC_MEDIA_BUCKET=gridcast-508011-media-india`, secret reference `gcAuthSecret`. Optional `GC_FFPROBE_PATH` points at a working local ffprobe if the bundled binary is incompatible. Cloud uploads require bucket access; a disposable file-only demo does not prove cloud upload correctness.
 
-Bundled Playwright Chromium/headless shell was unavailable in an ad-hoc launch. Installed Chrome worked:
-`/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`. Test harnesses also accept `GC_TEST_BROWSER_PATH`; some use `GC_TEST_FFMPEG_PATH`. Do not install browsers unnecessarily. Use fresh isolated browser contexts for smoke checks, preserving the user's real paired Brave/Chrome tabs, IndexedDB and service workers.
+### Browser tests
 
-Meaningful tests should target failures/invariants, not merely mirror implementation. Freeze source while running final checks. Stop temporary test servers/emulators you started. Do not terminate unknown processes. Do not claim camera ground truth, actual speakers or durable OS download completion from synthetic automation.
+Tests are `.browser.cjs` files run with `node --test`, not necessarily a standard Playwright config project. Read each harness: defaults/fixtures differ. For admin/reporting tests, start an isolated dev server and point the harness at it:
 
-## 10. Shared code indexes
-
-Sanan requested both **codebase-memory-mcp** and **SymDex**, and sharing the graph with Claude.
-
-- Repository/index ID for both: **`gridcast`**.
-- Mac executables: `/Users/sanan/.local/bin/codebase-memory-mcp`, `/Users/sanan/.local/bin/symdex`.
-- SymDex skill: `/Users/sanan/.agents/skills/symdex-code-search/SKILL.md`.
-- Prefer SymDex scoped symbol/text search and small context packs before broad source reads. Check freshness and verify source for decisions.
-- Shared graph snapshot: `.codebase-memory/graph.db.zst`, intentionally Git-ignored; shared through the connected folder, not a clone alone.
-- Each host owns its writable SQLite cache. Never share a writable SQLite cache.
-
-**Refresh only through the helper for codebase-memory:**
-
-```sh
-cd /Users/sanan/Downloads/gc
-CBM_BIN=/Users/sanan/.local/bin/codebase-memory-mcp bash tools/publish-code-index.sh
-/Users/sanan/.local/bin/symdex index /Users/sanan/Downloads/gc --repo gridcast --no-embed
+```bash
+npx next dev -p 4012
+# In a separate terminal:
+GC_UI_TEST_URL=http://127.0.0.1:4012 node --test tests/admin.browser.cjs tests/reporting.browser.cjs
 ```
 
-The helper serializes shared artifact publication with a lock. Inspect a stale lock's owner/process and coordinate before removing it. Do not call raw `index_repository` or run background watchers on the shared repo: codebase-memory 0.11.0 can rewrite an existing snapshot even with `persistence=false`. Read-only graph queries are safe. Do not follow generic tool hints to commit the graph.
+Install a Playwright Chromium browser if needed, or supply `GC_TEST_BROWSER_PATH`. Many browser tests intercept APIs and inject synthetic media/CV results. They validate UI behavior, not actual camera accuracy or production data persistence. Do not run competing dev/build processes into the same `.next` directory.
 
-Known partial parser coverage: `components/ui/app-shell.tsx:99`. A missing graph result is not absence of code. SymDex is structural/text only here; semantic embeddings were not configured. New log edits can make freshness false even when app source is unchanged; do not blindly trust stale offsets. Refresh both after final source/log edits.
+Useful focused suites: authorization, devices, budgets, network authorization, campaign drafts/status/review, media uploads/images, reporting, queue/cache, maintenance, attention contracts/engine/metrics/calibration/production/runtime, diagnostics and noindex. Choose affected tests rather than repeating the entire suite for a text change.
 
-Example lookups:
+Firestore emulator tests require `FIRESTORE_EMULATOR_HOST=127.0.0.1:8185` and use a demo project such as `demo-gridcast-storage`; inspect each test guard. They skip without an emulator. Do not interpret skips as a tested transaction path or point these tests at production. No full test/build run was performed for this docs-only handover.
 
-```sh
-/Users/sanan/.local/bin/symdex find queueCapacity --repo gridcast
-/Users/sanan/.local/bin/symdex pack 'player maintenance' --repo gridcast --budget 3000
-/Users/sanan/.local/bin/codebase-memory-mcp cli --quiet search_graph '{"project":"gridcast","query":"accrueSettlement"}'
+## 11. Cloud operations, deployment and rollback
+
+| Resource | Known configuration |
+| --- | --- |
+| Firebase/GCP project | `gridcast-508011` |
+| App Hosting backend | `gridcast-backend`, `asia-southeast1` (Singapore) |
+| Firestore | Named `gridcast`, `asia-south1` (Mumbai), Enterprise/native configuration |
+| Media bucket | `gridcast-508011-media-india`, Mumbai, private |
+| App runtime | `apphosting.yaml`: min 0 / max 20 instances, 1 CPU, 1024 MiB |
+| App domain | `app.gridcast.si` |
+| Domain registrar/DNS management | Hostinger |
+
+Storage in India does not make the hosting runtime India-resident. Moving runtime is a separate architecture/operations decision. Cloud IAM, billing owner, Secret Manager access, backup/PITR policy, retention and alerting must be reviewed with Sanan; this document does not certify that a complete production operations program is configured.
+
+An authorized app release should identify an exact reviewed SHA, run relevant checks, push that branch, then create an App Hosting rollout:
+
+```bash
+firebase apphosting:rollouts:create gridcast-backend \
+  --project gridcast-508011 --git-commit FULL_COMMIT_SHA --force
 ```
 
-Claude Cowork VM cannot use a Mac executable/registration. `CLAUDE.md` describes installing a checksum-verified Linux executable outside the shared folder and importing/reconciling through the same helper. Respect that environment's permissions; prior Cowork SymDex indexing was blocked, and graph sharing is not permission to bypass it.
+Use an authenticated CLI account with appropriate access. Login expires frequently; `firebase login --reauth --no-localhost` was used on Sanan's machine. Complete Google's flow privately; never put authorization codes into Git/logs. Installed CLI behavior can vary; follow its current prompt.
 
-## 11. Working tree and preservation requirements
+After rollout, verify build READY, rollout SUCCEEDED, intended source SHA and traffic allocation. Check HTTPS root, `/api/_health`, sign-in, affected UI/player behavior. The last verified health returned `ok:true`, `store:"firestore"`, `database:"gridcast"`, `schema_version:1`. Health alone does not prove playback/CV or absence of regressions.
 
-At handover start, source was unchanged from B, HEAD was `049b9d8`, and Claude's 22:28 AI-LOG append was uncommitted. Existing unrelated local material:
+Rollback means deliberately restoring a known compatible release, not resetting Firestore. Check schema, active grants, queue compatibility and metric bindings before rolling code backward. Keep historical binding validation for queued receipts. No rollback or migration was executed for this handover.
 
-- Modified `CLAUDE.md` (shared-index/Cowork instructions); leave it alone unless asked.
-- Untracked `.agents/`, `.claude/`, `06-phase1-build-spec.md`, `Claude outputs/`, `skills-lock.json`.
-- Untracked research docs `00` through `09`, plus `20-settings-architecture.md`.
+The app intentionally returns `noindex,nofollow`. `robots.txt` allows crawling so search engines can see noindex; changing it to Disallow everywhere can prevent that discovery. Landing pages remain indexable. This is SEO behavior, not access control.
 
-Do not `git add .`, discard these files or clean the tree indiscriminately. Stage owned paths only. Shared AI-LOG commits may include preserved concurrent review entries; say so. No co-author/generated-by commit trailers.
+## 12. Separate marketing website
 
-The handover/log should be committed locally per repo rules. This documentation-only request does not itself call for another app rollout. Recheck local and remote heads before any subsequent push; do not assume this handover commit was deployed or pushed.
+- Repository: `https://github.com/sananxrom/gridcast-landing`, branch `main`.
+- Local: `/Users/sanan/Documents/Work/Gridcast/Ai builds/Gridcast front website`.
+- Vercel project `gridcast-landing`, team `sananxroms-projects`.
+- Public domain `gridcast.si`; `www` redirects to the canonical domain.
+- Last verified company change: source `221388258a1e5bebd510d64bdfdab195a36bbbdf`, later log-only `0bcdc15`.
+- Separate `Ai-log.md` and project instructions. An app commit does not update the landing site.
+- Company: **Gridcast Technologies Pvt. Ltd.** Public location: **Sector 35B, Chandigarh, India**. Keep the full street address private unless required for approved legal content; it was saved outside both website repositories.
+- Do not repoint `app` DNS to Vercel. Existing Firebase and landing DNS are deliberately separate.
+- Future promotional live-data integration is not permission to publish tenant/customer/financial data. Design a deliberately public aggregate endpoint if that feature is commissioned.
 
-## 12. Historical user-supplied assets and credentials
+## 13. Android receiver prototype
 
-Sanan supplied brand demo YouTube links (also check current `lib/demo-videos.json` for actual integration): Coke `gQ1b0uaFRjM`, `69ddBOrCwok`; Oreo `-ImKuGmNG2I`; Mercedes `JbPBHtLstGw`; McDonald's `79phlhutGLg`; Lay's `ouLVXfte2f4`, `fix3tKIIBjk`; Cadbury `mRdEnhWrptQ`; Aashirvaad `G2sjEAL3EwA`. These are source choices, not evidence all campaigns are currently active or authorized on every screen.
+**State:** built locally 12 October; not tracked in Git and no physical-device success report available in the handover evidence. It is an experiment for manual installation, not a production fleet release.
 
-Old demo operator/advertiser logins and a shared password were supplied at the beginning of the project. They are not the current production credential source and are deliberately not copied here. No current operator password is known from this handover. Do not invent one, reuse the old shared seed password, or print stored secrets. Use authorized account/reset workflows if requested. OAuth authorization codes in the historical chat are expired sensitive material and must not be carried forward.
+| Item | Value |
+| --- | --- |
+| Source | `/Users/sanan/Downloads/gc/android-player/` |
+| User APK | `/Users/sanan/Downloads/Gridcast-Player-0.1.0-test.apk` |
+| Build output | `android-player/app/build/outputs/apk/debug/app-debug.apk` |
+| Package/version | `si.gridcast.player`, `0.1.0-test`, code 1 |
+| SDKs | min 24 (Android 7), target 35, compile 36 |
+| Toolchain | JDK 17, Gradle 8.13, AGP 8.13.2, Kotlin 2.2.10 |
+| Playback/CV | Media3 1.11.1, MediaPipe 0.10.35 |
+| APK SHA-256 | `5f1b89b1eeec465b633f86cc7298c187e8604c625d48e1035e6c89eafa5c1e2e` |
 
-## 13. Suggested first response and next action in the new chat
+Native architecture uses `MainActivity`, `GridcastApi`, `CredentialVault`, `MediaRepository`, `LocalStore`, `CvEngine`, `CvMetrics` and device-admin/home hooks. App-private verified media, SQLite durable receipts, separate maintenance authority, low-volume playback and remote/mouse navigation are implemented for the prototype.
 
-A useful opening is: “I’ve read the handover and latest log. Release B is already live. The next source-confirmed issue is blocked delivery records consuming playback capacity; Claude also flagged the maintenance global limiter. I’ll inspect any newer review before proposing the next bounded change.”
+On the original Mac, JDK is `/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home`; SDK is `/opt/homebrew/share/android-commandlinetools`. Set your own `JAVA_HOME`/`ANDROID_HOME`, install required SDK/build-tools, then from `android-player/`:
 
-Then:
+```bash
+./gradlew :app:assembleDebug
+./gradlew :app:testDebugUnitTest
+```
 
-1. Read new log entries and inspect working tree; do not rely on this snapshot alone.
-2. If asked to continue remaining implementation, start with the commercial capacity design above, preserving receipt/tenant/durability guarantees. Give Claude a detailed bounded proposal for review in the log.
-3. Keep audio and YouTube/caption work separate. Do not bundle unrelated player changes into a queue fix.
-4. Build, test, document exact evidence and limits, then push/deploy only within the user's current authorization.
-5. Keep this handover as orientation; `AI-LOG.md`, current source and verified cloud state are the evidence.
+Recorded verification: successful build, APK v2 signature/package inspection and four JVM metric tests (unavailable vs empty, face-only not people, independent freshness, per-play reset/thresholds). No emulator or hardware qualification. Models download/verify on first use, requiring internet initially.
+
+### Known Android gaps
+
+1. YouTube entries are skipped; only uploaded videos/images play.
+2. Full body/face code and local diagnostic metrics exist, but **server receipts remain `measured:false`**. Native CV cannot claim a browser worker hash. Add a separately versioned native provenance/binding contract before accepting its metrics remotely.
+3. Cached paid authorization expires. Valid cached filler can continue; otherwise a waiting screen appears. This is a known gap against the desired indefinite offline continuity; agree explicit non-billable fallback semantics before changing it.
+4. Camera orientation, USB support, camera unplug/reconnect, calibration and sustained inference need physical testing on the actual box.
+5. About 2 GB RAM is a target assumption, not a measured memory/performance guarantee. Measure thermal throttling, video/CV contention and long sessions.
+6. APK installation alone does not enable full kiosk or guaranteed startup. Default HOME/device-owner provisioning is separate and can require a clean/reset device. Do not factory-reset customer hardware casually.
+7. No fleet MDM, automatic APK updates or production release-signing process is completed.
+8. Same model files do not establish native/web behavioral parity: preprocessing, rotation, association, gaze, clocks and metric accumulation need comparison.
+
+## 14. Troubleshooting guide
+
+| Symptom | First checks |
+| --- | --- |
+| Ads play, CV unavailable | Camera permission/device selection; both stage status/freshness; worker WebGL 2; model downloads; browser/OS version. Do not turn failure into zero. |
+| Counts reset every video | Distinguish expected per-creative accumulator reset from camera/model teardown. Inspect session lifetime. |
+| Blank after a rotation | Eligibility, budget reservation, assignment expiry, filler availability, cache readiness, queue capacity; do not reintroduce slot padding. |
+| Camera enabled but no boxes | On-screen diagnostics toggle, local preview controls and fresh stage observations; no remote frames expected. |
+| Paired receiver rejected | Token/device status and re-pairing history; preserve old queued identity rather than relabeling it. |
+| Receipts blocked | Exact server error, sequence/play UID, assignment windows, binding, timestamps and retained queue. Export through authorized maintenance before destructive recovery. |
+| Screen/org missing | Admin all-org vs selected-org scope, account role, list pagination and tenant filters; don't solve with an authorization bypass. |
+| Creative unavailable after edit | Reapproval status, source/asset validity, campaign lifecycle and eligibility. Preview is not approval. |
+| Dashboard number seems incomplete | Date/scope filters, raw-history limits, rollup coverage, pagination, measured/unmeasured distinction and advertiser redaction. |
+| Deploy failed | Firebase login/IAM, build logs, exact source SHA, Secret Manager bindings; pushing Git is not deployment success. |
+| Old URL behaves differently | Verify `app.gridcast.si` and actual rollout, not historical Vercel deployments. |
+
+## 15. Known debt and recommended takeover order
+
+This is a recommendation, not a claim all items are bugs or an instruction to begin them immediately.
+
+1. **Complete source/access transfer:** Android and local-only documents, cloud IAM, repository permissions, secure credential delivery, release ownership.
+2. **Establish a reproducible baseline:** isolated local run, focused domain/browser tests, one real paired receiver, note exact deployed/source versions.
+3. **Qualify Android on hardware:** uploaded media, both models, USB/rotation, video transitions, offline reboot, interrupted receipts, storage pressure and kiosk startup. Keep browser fallback.
+4. **Design native measurement acceptance:** immutable native runtime provenance, golden metric fixtures and tolerant detector comparisons, aggregate reporting compatibility; never impersonate the browser binding.
+5. **Resolve offline fallback policy:** paid expiry, filler priority, non-billable continuation and queue exhaustion without fabricated evidence.
+6. **Operations before customer scale:** backups/restore, monitoring and cost alerts, audit retention, incident access, secret/signing rotation, staged release/rollback and fleet update strategy.
+7. **Scale deliberately:** bounded Firestore domain reads, event/rollup volumes, concurrent budget reservations, pagination, database costs and multi-screen reporting consistency.
+8. **Consolidate technical debt:** oversized API/player modules, schema typing, tests with realistic boundaries, stale README/config comments. Refactor around verified contracts rather than rewriting the system in one pass.
+9. **Evaluate measurement accuracy:** controlled ground-truth comparison and realistic lighting/distance/multiple-person tests. Unit tests and a cafe run are not accuracy validation.
+
+## 16. Documentation, AI history and collaboration
+
+Read `AI-LOG.md` chronologically near the relevant change. It is an append-only shared record, not a task queue. New user decisions and source evidence override old plans. Record IST time, actual work, files, SHA, tests, failures and remaining gaps. Sanan subsequently requested logging even discussions; follow that preference. Never log secrets or camera/customer data.
+
+`TEAM.md` describes Coordinator, Builder, QC and Tester chats, but its reconciled checkpoint is old. Human takeover does not depend on those chats or model accounts. Claude has provided architecture reviews and implementation through the shared log; claims must be assessed against source, and mutable file ownership agreed before parallel work. Do not automatically implement a reviewer's suggestion as user authorization.
+
+Useful reading by subject:
+
+- Trust/storage foundation: research 11–13.
+- Admin, inventory and rotation: 14–16.
+- Dashboard/reporting/player behavior: 17–23.
+- CV evaluation, contracts, replacement and cleanup: 24–29.
+- Portal lifecycle/drafts/review/advertiser workspace: 30–31 plus October log entries; these phases were subsequently implemented, not simply a pending plan.
+- Native Android: local-only 32 and 12 October log entries.
+
+**Stale docs warning:** README still contains contradictory COCO text, old blank-loop behavior, ten-minute-only offline assumptions and “outside this build” items subsequently implemented. The prior September handover had obsolete no-face/no-tracking constraints. `TEAM.md` release checkpoint and some config comments are historical. This document intentionally calls out those conflicts rather than propagating them.
+
+### Optional code indexes
+
+Graphify, SymDex and codebase-memory were installed locally to assist navigation; they are not build dependencies. Generated graph databases stay out of Git and can include uncommitted source, so they are not proof of shipped behavior. Verify source after a graph query.
+
+At this handover, the Graphify CLI failed because its Python 3.14 interpreter path no longer exists. Source inspection was used instead. Repair/reinstall tooling if desired; it is not a product runtime failure. The shared codebase-memory helper is `tools/publish-code-index.sh`; use one writer and respect its lock. Documentation-only changes need no code-index refresh.
+
+## 17. Handover acceptance with Sanan
+
+Before calling the transfer complete, confirm the coder can clone the correct branch, run the local app, access the separate landing repo if needed, obtain the Android source, build the APK, and use assigned cloud permissions. Share credentials through a private channel or provider invitations, not this file. Agree who owns deployment, billing, domain renewal and device signing keys.
+
+The full company street address is intentionally excluded. The existing local private company-details note can be transferred privately if legal work requires it. No current account passwords are provided here; historical demo credentials in conversation are not a supported access mechanism.
+
+This handover documents inspected architecture and known evidence. It does not certify security, audience accuracy, Android hardware compatibility, uninterrupted offline playback or the current live cloud state beyond the dated verifications above.
